@@ -1,0 +1,21 @@
+# KAS build artifacts
+kas/build/
+kas/sources/
+kas/tmp/
+kas/downloads/
+kas/cache/
+kas/workdir/
+
+# Developer-specific local config
+kas/site.conf
+
+# Yocto outputs (in case someone builds elsewhere)
+tmp/
+sstate-cache/
+downloads/
+
+# Editor/system junk
+*.swp
+*.bak
+*.tmp
+.DS_Store

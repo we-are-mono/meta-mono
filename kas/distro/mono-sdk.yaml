@@ -1,0 +1,9 @@
+header:
+  version: 11
+  includes:
+    - common.yaml
+
+distro: mono-sdk
+
+target:
+  - mono-sdk-image

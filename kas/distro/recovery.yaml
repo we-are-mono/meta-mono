@@ -1,0 +1,9 @@
+header:
+  version: 11
+  includes:
+    - common.yaml
+
+distro: recovery
+
+target:
+  - recovery-image

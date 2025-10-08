@@ -1,0 +1,7 @@
+# Local OpenEmbedded package repository
+# To enable, set up your build host package server and update baseurl
+[oe-local]
+name=OpenEmbedded Local Packages
+baseurl=http://BUILD_HOST_IP:8000/
+enabled=0
+gpgcheck=0

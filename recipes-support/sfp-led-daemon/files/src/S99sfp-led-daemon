@@ -1,0 +1,37 @@
+#!/bin/sh
+
+DAEMON=/usr/sbin/sfp-led-daemon
+
+case "$1" in
+    start)
+        echo "Starting sfp-led-daemon..."
+        
+        # Mount debugfs if not already mounted
+        if ! grep -q debugfs /proc/mounts; then
+            echo "Mounting debugfs..."
+            mount -t debugfs none /sys/kernel/debug
+        fi
+        
+        if [ -x "$DAEMON" ]; then
+            $DAEMON
+        else
+            echo "Error: $DAEMON not found or not executable"
+            exit 1
+        fi
+        ;;
+    stop)
+        echo "Stopping sfp-led-daemon..."
+        killall sfp-led-daemon 2>/dev/null || true
+        ;;
+    restart)
+        $0 stop
+        sleep 1
+        $0 start
+        ;;
+    *)
+        echo "Usage: $0 {start|stop|restart}"
+        exit 1
+        ;;
+esac
+
+exit 0

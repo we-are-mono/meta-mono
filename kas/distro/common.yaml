@@ -1,0 +1,64 @@
+header:
+  version: 11
+
+machine: gateway
+
+repos:
+  bitbake:
+    url: https://git.openembedded.org/bitbake
+    branch: "2.12"
+    path: sources/bitbake
+    layers:
+      .: "excluded"
+
+  openembedded-core:
+    url: https://git.openembedded.org/openembedded-core
+    branch: walnascar
+    path: sources/openembedded-core
+    layers:
+      meta:
+
+  meta-openembedded:
+    url: https://git.openembedded.org/meta-openembedded
+    branch: walnascar
+    path: sources/meta-openembedded
+    layers:
+      meta-oe:
+      meta-filesystems:
+      meta-networking:
+      meta-python:
+
+  meta-arm:
+    url: https://git.yoctoproject.org/meta-arm
+    branch: walnascar
+    path: sources/meta-arm
+    layers:
+      meta-arm:
+      meta-arm-toolchain:
+
+  meta-qoriq:
+    url: https://github.com/nxp-qoriq/meta-qoriq
+    branch: walnascar
+    path: sources/meta-qoriq
+    layers:
+      meta-qoriq-bsp:
+      meta-qoriq-sdk:
+
+  meta-freescale:
+    url: https://github.com/Freescale/meta-freescale
+    branch: walnascar
+    path: sources/meta-freescale
+    layers:
+      .:
+
+  meta-mono:
+    path: ../..
+    layers:
+      meta-mono:
+
+local_conf_header:
+  site-config: |
+    require ${TOPDIR}/../site.conf
+    BBMASK += "meta-qoriq-sdk/recipes-fsl/images/fsl-image-multimedia-full.bbappend"
+    BBMASK += "meta-qoriq-sdk/recipes-fsl/packagegroups/packagegroup-fsl-gstreamer1.0.bbappend"
+    BBMASK += "meta-qoriq-bsp/recipes-containers/lxc/lxc_%.bbappend"

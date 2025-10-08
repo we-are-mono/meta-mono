@@ -1,0 +1,14 @@
+[Unit]
+Description=watchdog daemon
+After=local-fs.target
+Before=multi-user.target
+
+[Service]
+Type=forking
+EnvironmentFile=/etc/default/watchdog
+ExecStartPre=/bin/sh -c '[ -z "${watchdog_module}" ] || [ "${watchdog_module}" = "none" ] || /sbin/modprobe $watchdog_module'
+ExecStart=/bin/sh -c '[ x$run_watchdog != x1 ] || exec /usr/sbin/watchdog $watchdog_options'
+PIDFile=/run/watchdog.pid
+
+[Install]
+WantedBy=multi-user.target

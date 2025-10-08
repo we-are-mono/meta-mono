@@ -1,0 +1,13 @@
+[Unit]
+Description=SFP LED Control Daemon
+After=network.target sys-kernel-debug.mount
+Requires=sys-kernel-debug.mount
+
+[Service]
+Type=forking
+ExecStart=/usr/sbin/sfp-led-daemon
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
