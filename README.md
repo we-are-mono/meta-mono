@@ -6,11 +6,25 @@ This layer includes everything you need to build a firmware image for Gateway. O
 
 The recommended way to building images for Gateway (development kit) is by using [kas](https://github.com/siemens/kas).
 
+Before you start, install the dependencies:
+
+```
+$ sudo apt-get install build-essential chrpath cpio debianutils diffstat file gawk gcc git iputils-ping libacl1 liblz4-tool locales python3 python3-git python3-jinja2 python3-pexpect python3-pip python3-subunit socat texinfo unzip wget xz-utils zstd pipx
+
+$ pipx install kas
+$ pipx ensurepath
+$ source ~/.bashrc
+```
+
 First, clone the repository, then:
 ```
+
 $ git clone https://github.com/we-are-mono/meta-mono.git
 $ cd meta-mono/kas
-$ cp site.example.conf site.conf # Don't forget to configure it
+
+# Make new site.conf from example and edit/configure it
+# Note that the DL_DIR and SSTATE_DIR need to exist and have proper permissions for your current user
+$ cp site.example.conf site.conf 
 
 # if you want SDK: 
 $ kas shell distro/mono-sdk.yaml
