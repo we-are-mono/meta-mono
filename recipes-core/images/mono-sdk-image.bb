@@ -71,6 +71,7 @@ IMAGE_INSTALL:append = " \
 # System services
 IMAGE_INSTALL:append = " \
     systemd-serialgetty \
+    openssh \
     "
 
 # Hardware monitoring and control

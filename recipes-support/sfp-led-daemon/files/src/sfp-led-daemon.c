@@ -13,17 +13,40 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/stat.h>
+#include <sys/inotify.h>
+#include <sys/select.h>
 #include <syslog.h>
 #include <signal.h>
 #include <errno.h>
 #include <stdbool.h>
 #include <dirent.h>
 #include <limits.h>
-#include <stdint.h>
+#include <sys/resource.h>
 
 #define MAX_PORTS 2
-#define POLL_INTERVAL_MS 100
 #define MAX_NETDEV_NAME 32
+#define LED_OFF 0
+#define LED_MAX 255
+#define INOTIFY_BUF_LEN (10 * (sizeof(struct inotify_event) + NAME_MAX + 1))
+
+/* Buffer sizes */
+#define DEBUGFS_STATE_BUF_SIZE 512
+#define BRIGHTNESS_BUF_SIZE 4
+#define CARRIER_BUF_SIZE 4
+
+/* Timing values */
+#define POLL_INTERVAL_SEC 1
+#define POLL_INTERVAL_USEC 0
+
+/* String prefixes and their lengths */
+#define MODDEF0_PREFIX "moddef0:"
+#define MODDEF0_PREFIX_LEN 8
+#define RX_LOS_PREFIX "rx_los:"
+#define RX_LOS_PREFIX_LEN 7
+#define FMAN_PREFIX "fman@"
+#define FMAN_PREFIX_LEN 5
+#define ETHERNET_PREFIX "ethernet@"
+#define ETHERNET_PREFIX_LEN 9
 
 struct sfp_port {
 	char netdev[MAX_NETDEV_NAME];  /* Dynamically discovered */
@@ -33,7 +56,8 @@ struct sfp_port {
 	int carrier_fd;
 	int link_led_fd;
 	int activity_led_fd;
-	int mod_present_fd;  /* GPIO for module presence detection */
+	int mod_present_fd;  /* Debugfs state file for module presence detection */
+	int inotify_wd;      /* inotify watch descriptor for carrier file */
 	bool last_carrier_state;
 	bool last_module_present;
 };
@@ -48,6 +72,7 @@ static struct sfp_port ports[MAX_PORTS] = {
 		.link_led_fd = -1,
 		.activity_led_fd = -1,
 		.mod_present_fd = -1,
+		.inotify_wd = -1,
 		.last_carrier_state = false,
 		.last_module_present = false,
 	},
@@ -60,15 +85,18 @@ static struct sfp_port ports[MAX_PORTS] = {
 		.link_led_fd = -1,
 		.activity_led_fd = -1,
 		.mod_present_fd = -1,
+		.inotify_wd = -1,
 		.last_carrier_state = false,
 		.last_module_present = false,
 	},
 };
 
 static volatile sig_atomic_t running = 1;
+static int inotify_fd = -1;
 
-/* Forward declarations */
 static void setup_netdev_trigger(struct sfp_port *port);
+static void disable_netdev_trigger(struct sfp_port *port);
+static void cleanup_port(struct sfp_port *port);
 static int find_netdev_for_sfp(const char *sfp_name, char *netdev_out, size_t out_size);
 
 static void signal_handler(int sig)
@@ -78,7 +106,7 @@ static void signal_handler(int sig)
 
 static int set_led_brightness(int fd, int brightness)
 {
-	char buf[4];
+	char buf[BRIGHTNESS_BUF_SIZE];
 	int len;
 	
 	if (fd < 0)
@@ -96,7 +124,7 @@ static int set_led_brightness(int fd, int brightness)
 
 static int read_carrier_state(int fd)
 {
-	char buf[4];
+	char buf[CARRIER_BUF_SIZE];
 	int ret;
 	
 	if (fd < 0)
@@ -115,9 +143,9 @@ static int read_carrier_state(int fd)
 
 static int read_module_present(int fd)
 {
-	char buf[512];
+	char buf[DEBUGFS_STATE_BUF_SIZE];
 	int ret;
-	char *line, *saveptr;
+	char *pos, *line_end;
 	
 	if (fd < 0)
 		return 0; /* Assume NOT present if we can't read */
@@ -131,20 +159,65 @@ static int read_module_present(int fd)
 	
 	buf[ret] = '\0';
 	
-	/* Parse the state file looking for "moddef0: X" */
-	line = strtok_r(buf, "\n", &saveptr);
-	while (line != NULL) {
-		if (strncmp(line, "moddef0:", 8) == 0) {
-			/* Extract the value after "moddef0: " */
-			char *value = line + 8;
+	pos = buf;
+	while (pos && *pos) {
+		line_end = strchr(pos, '\n');
+		if (line_end)
+			*line_end = '\0';
+		
+		/* Check if this line contains our prefix */
+		if (strncmp(pos, MODDEF0_PREFIX, MODDEF0_PREFIX_LEN) == 0) {
+			char *value = pos + MODDEF0_PREFIX_LEN;
 			while (*value == ' ') value++;
-			/* In debugfs: 1 = present, 0 = absent */
 			return (*value == '1');
 		}
-		line = strtok_r(NULL, "\n", &saveptr);
+		
+		if (line_end)
+			pos = line_end + 1;
+		else
+			break;
 	}
 	
-	return 0; /* Default to NOT present if we can't parse */
+	return 0;
+}
+
+static int read_rx_los(int fd)
+{
+	char buf[DEBUGFS_STATE_BUF_SIZE];
+	int ret;
+	char *pos, *line_end;
+	
+	if (fd < 0)
+		return 1; /* Assume signal loss if we can't read */
+	
+	if (lseek(fd, 0, SEEK_SET) < 0)
+		return 1;
+	
+	ret = read(fd, buf, sizeof(buf) - 1);
+	if (ret <= 0)
+		return 1;
+	
+	buf[ret] = '\0';
+	
+	pos = buf;
+	while (pos && *pos) {
+		line_end = strchr(pos, '\n');
+		if (line_end)
+			*line_end = '\0';
+		
+		if (strncmp(pos, RX_LOS_PREFIX, RX_LOS_PREFIX_LEN) == 0) {
+			char *value = pos + RX_LOS_PREFIX_LEN;
+			while (*value == ' ') value++;
+			return (*value == '1');
+		}
+		
+		if (line_end)
+			pos = line_end + 1;
+		else
+			break;
+	}
+	
+	return 1;
 }
 
 static int open_file_ro(const char *path)
@@ -165,24 +238,45 @@ static int open_file_wo(const char *path)
 	return fd;
 }
 
-/*
- * Read a 32-bit big-endian value from a device tree property file
- */
+static int write_sysfs_string(const char *path, const char *value)
+{
+	int fd, ret, len;
+	
+	fd = open(path, O_WRONLY);
+	if (fd < 0) {
+		syslog(LOG_WARNING, "Failed to open %s: %s", path, strerror(errno));
+		return -1;
+	}
+	
+	len = strlen(value);
+	ret = write(fd, value, len);
+	close(fd);
+	
+	if (ret != len) {
+		syslog(LOG_WARNING, "Failed to write to %s: %s", path, strerror(errno));
+		return -1;
+	}
+	
+	return 0;
+}
+
 static uint32_t read_dt_u32(const char *path)
 {
 	int fd;
 	uint32_t val;
+	ssize_t bytes_read;
 	
 	fd = open(path, O_RDONLY);
 	if (fd < 0)
 		return 0;
 	
-	if (read(fd, &val, sizeof(val)) != sizeof(val)) {
-		close(fd);
+	bytes_read = read(fd, &val, sizeof(val));
+	close(fd);
+	
+	if (bytes_read != sizeof(val)) {
 		return 0;
 	}
 	
-	close(fd);
 	return __builtin_bswap32(val);  /* Convert from big-endian */
 }
 
@@ -220,7 +314,7 @@ static int find_netdev_for_sfp(const char *sfp_name, char *netdev_out, size_t ou
 	}
 	
 	while ((entry = readdir(dir)) != NULL) {
-		if (strncmp(entry->d_name, "fman@", 5) != 0)
+		if (strncmp(entry->d_name, FMAN_PREFIX, FMAN_PREFIX_LEN) != 0)
 			continue;
 		
 		/* Found an fman node, search its ethernet children */
@@ -234,7 +328,7 @@ static int find_netdev_for_sfp(const char *sfp_name, char *netdev_out, size_t ou
 			continue;
 		
 		while ((eth_entry = readdir(fman_dir)) != NULL) {
-			if (strncmp(eth_entry->d_name, "ethernet@", 9) != 0)
+			if (strncmp(eth_entry->d_name, ETHERNET_PREFIX, ETHERNET_PREFIX_LEN) != 0)
 				continue;
 			
 			/* Check if this ethernet node has an sfp property */
@@ -248,7 +342,13 @@ static int find_netdev_for_sfp(const char *sfp_name, char *netdev_out, size_t ou
 				snprintf(path, sizeof(path), "%s/%s/cell-index", fman_path, eth_entry->d_name);
 				cell_index = read_dt_u32(path);
 				
-				/* The netdev name is fm1-mac<cell-index+1> */
+				/* Validate cell_index to prevent overflow and ensure reasonable value */
+				if (cell_index > 1000) {
+					syslog(LOG_WARNING, "Invalid cell-index %u for SFP '%s', skipping", 
+					       cell_index, sfp_name);
+					continue;
+				}
+				
 				snprintf(netdev_out, out_size, "fm1-mac%u", cell_index + 1);
 				
 				closedir(fman_dir);
@@ -270,7 +370,8 @@ static int find_netdev_for_sfp(const char *sfp_name, char *netdev_out, size_t ou
 
 static int setup_port(struct sfp_port *port)
 {
-	char path[256];
+	char path[PATH_MAX];
+	int ret;
 	
 	/* Discover the network device name for this SFP from device tree */
 	if (find_netdev_for_sfp(port->sfp_name, port->netdev, sizeof(port->netdev)) < 0) {
@@ -279,54 +380,99 @@ static int setup_port(struct sfp_port *port)
 	}
 	
 	/* Open carrier file */
-	snprintf(path, sizeof(path), "/sys/class/net/%s/carrier", port->netdev);
+	ret = snprintf(path, sizeof(path), "/sys/class/net/%s/carrier", port->netdev);
+	if (ret >= sizeof(path)) {
+		syslog(LOG_ERR, "Path too long for carrier file: %s", port->netdev);
+		return -1;
+	}
 	port->carrier_fd = open_file_ro(path);
 	
-	/* Open SFP debugfs state file for module presence detection */
-	snprintf(path, sizeof(path), "/sys/kernel/debug/%s/state", port->sfp_name);
+	/* Setup inotify watch on carrier file */
+	if (inotify_fd >= 0 && port->carrier_fd >= 0) {
+		/* Watch the parent directory since carrier file gets replaced */
+		ret = snprintf(path, sizeof(path), "/sys/class/net/%s", port->netdev);
+		if (ret >= sizeof(path)) {
+			syslog(LOG_ERR, "Path too long for netdev: %s", port->netdev);
+			goto cleanup;
+		}
+		port->inotify_wd = inotify_add_watch(inotify_fd, path, IN_MODIFY | IN_ATTRIB);
+		if (port->inotify_wd < 0) {
+			syslog(LOG_WARNING, "Failed to add inotify watch for %s: %s", 
+			       path, strerror(errno));
+		}
+	}
+	
+	ret = snprintf(path, sizeof(path), "/sys/kernel/debug/%s/state", port->sfp_name);
+	if (ret >= sizeof(path)) {
+		syslog(LOG_ERR, "Path too long for debugfs: %s", port->sfp_name);
+		goto cleanup;
+	}
 	port->mod_present_fd = open_file_ro(path);
 	if (port->mod_present_fd < 0) {
 		syslog(LOG_WARNING, "Cannot open %s debugfs, module detection disabled", port->sfp_name);
 	}
 	
 	/* Open link LED brightness file */
-	snprintf(path, sizeof(path), "/sys/class/leds/%s/brightness", port->link_led);
+	ret = snprintf(path, sizeof(path), "/sys/class/leds/%s/brightness", port->link_led);
+	if (ret >= sizeof(path)) {
+		syslog(LOG_ERR, "Path too long for link LED: %s", port->link_led);
+		goto cleanup;
+	}
 	port->link_led_fd = open_file_wo(path);
 	
 	/* Open activity LED brightness file */
-	snprintf(path, sizeof(path), "/sys/class/leds/%s/brightness", port->activity_led);
+	ret = snprintf(path, sizeof(path), "/sys/class/leds/%s/brightness", port->activity_led);
+	if (ret >= sizeof(path)) {
+		syslog(LOG_ERR, "Path too long for activity LED: %s", port->activity_led);
+		goto cleanup;
+	}
 	port->activity_led_fd = open_file_wo(path);
 	
 	if (port->carrier_fd < 0 || port->link_led_fd < 0 || port->activity_led_fd < 0) {
 		syslog(LOG_ERR, "Failed to setup port %s", port->netdev);
-		return -1;
+		goto cleanup;
 	}
 	
 	/* Read initial module presence state */
 	port->last_module_present = read_module_present(port->mod_present_fd);
 	port->last_carrier_state = false;
 	
-	/* Turn off LEDs initially */
-	set_led_brightness(port->link_led_fd, 0);
-	set_led_brightness(port->activity_led_fd, 0);
+	set_led_brightness(port->link_led_fd, LED_OFF);
+	set_led_brightness(port->activity_led_fd, LED_OFF);
 	
 	syslog(LOG_INFO, "Setup port %s (link=%s, activity=%s, sfp=%s, module_present=%d)", 
 	       port->netdev, port->link_led, port->activity_led, port->sfp_name,
 	       port->last_module_present);
 	
-	/* Only setup netdev trigger if module is present */
+	/* Setup appropriate LED state based on module presence and carrier */
 	if (port->last_module_present) {
-		setup_netdev_trigger(port);
+		bool rx_los = read_rx_los(port->mod_present_fd);
+		if (!rx_los) {
+			/* Module present with optical signal - setup netdev trigger for activity LED */
+			setup_netdev_trigger(port);
+			set_led_brightness(port->link_led_fd, LED_MAX);
+		} else {
+			/* Module present but no optical signal - activity LED solid ON */
+			set_led_brightness(port->activity_led_fd, LED_MAX);
+		}
 	}
 	
 	return 0;
+
+cleanup:
+	cleanup_port(port);
+	return -1;
 }
 
 static void cleanup_port(struct sfp_port *port)
 {
-	/* Turn off LEDs */
-	set_led_brightness(port->link_led_fd, 0);
-	set_led_brightness(port->activity_led_fd, 0);
+	if (inotify_fd >= 0 && port->inotify_wd >= 0) {
+		inotify_rm_watch(inotify_fd, port->inotify_wd);
+		port->inotify_wd = -1;
+	}
+	
+	set_led_brightness(port->link_led_fd, LED_OFF);
+	set_led_brightness(port->activity_led_fd, LED_OFF);
 	
 	if (port->carrier_fd >= 0) {
 		close(port->carrier_fd);
@@ -348,184 +494,253 @@ static void cleanup_port(struct sfp_port *port)
 
 static void setup_netdev_trigger(struct sfp_port *port)
 {
-	char path[256];
-	int fd;
-	char trigger_config[256];
-	int len;
+	char path[PATH_MAX];
 	
-	/* Setup netdev trigger for activity LED */
 	snprintf(path, sizeof(path), "/sys/class/leds/%s/trigger", port->activity_led);
-	fd = open(path, O_WRONLY);
-	if (fd < 0) {
-		syslog(LOG_WARNING, "Failed to open %s: %s", path, strerror(errno));
+	if (write_sysfs_string(path, "netdev") < 0) {
 		return;
 	}
 	
-	write(fd, "netdev", 6);
-	close(fd);
-	
-	/* Set the device name */
 	snprintf(path, sizeof(path), "/sys/class/leds/%s/device_name", port->activity_led);
-	fd = open(path, O_WRONLY);
-	if (fd >= 0) {
-		len = strlen(port->netdev);
-		write(fd, port->netdev, len);
-		close(fd);
+	if (write_sysfs_string(path, port->netdev) < 0) {
+		syslog(LOG_WARNING, "Failed to set device_name for %s activity LED", port->netdev);
+		return;
 	}
 	
-	/* Enable tx and rx monitoring (not link, so LED is off when idle) */
 	snprintf(path, sizeof(path), "/sys/class/leds/%s/tx", port->activity_led);
-	fd = open(path, O_WRONLY);
-	if (fd >= 0) {
-		write(fd, "1", 1);
-		close(fd);
+	if (write_sysfs_string(path, "1") < 0) {
+		syslog(LOG_WARNING, "Failed to enable tx monitoring for %s activity LED", port->netdev);
 	}
 	
 	snprintf(path, sizeof(path), "/sys/class/leds/%s/rx", port->activity_led);
-	fd = open(path, O_WRONLY);
-	if (fd >= 0) {
-		write(fd, "1", 1);
-		close(fd);
+	if (write_sysfs_string(path, "1") < 0) {
+		syslog(LOG_WARNING, "Failed to enable rx monitoring for %s activity LED", port->netdev);
 	}
 	
 	syslog(LOG_INFO, "Setup netdev trigger for %s activity LED", port->netdev);
 }
 
+static void disable_netdev_trigger(struct sfp_port *port)
+{
+	char path[PATH_MAX];
+	
+	snprintf(path, sizeof(path), "/sys/class/leds/%s/trigger", port->activity_led);
+	write_sysfs_string(path, "none");
+}
+
 static void update_port(struct sfp_port *port)
 {
-	bool carrier_state = read_carrier_state(port->carrier_fd);
 	bool module_present = read_module_present(port->mod_present_fd);
+	bool rx_los = read_rx_los(port->mod_present_fd);
+	bool has_signal = module_present && !rx_los;
 	
 	/* Check for module presence change */
 	if (module_present != port->last_module_present) {
 		if (!module_present) {
 			/* Module removed - disable netdev trigger and turn off both LEDs */
-			char path[256];
-			int fd;
-			
-			/* Disable netdev trigger by setting to "none" */
-			snprintf(path, sizeof(path), "/sys/class/leds/%s/trigger", port->activity_led);
-			fd = open(path, O_WRONLY);
-			if (fd >= 0) {
-				write(fd, "none", 4);
-				close(fd);
-			}
-			
-			/* Turn off both LEDs */
-			set_led_brightness(port->link_led_fd, 0);
-			set_led_brightness(port->activity_led_fd, 0);
+			disable_netdev_trigger(port);
+			set_led_brightness(port->link_led_fd, LED_OFF);
+			set_led_brightness(port->activity_led_fd, LED_OFF);
 			syslog(LOG_INFO, "%s: SFP module removed", port->netdev);
 		} else {
-			/* Module inserted - re-setup netdev trigger for activity LED */
+			/* Module inserted */
 			syslog(LOG_INFO, "%s: SFP module inserted", port->netdev);
-			setup_netdev_trigger(port);
+			
+			if (!rx_los) {
+				setup_netdev_trigger(port);
+				set_led_brightness(port->link_led_fd, LED_MAX);
+			} else {
+				set_led_brightness(port->activity_led_fd, LED_MAX);
+			}
 		}
 		port->last_module_present = module_present;
-		port->last_carrier_state = false; /* Reset carrier state */
+		port->last_carrier_state = has_signal;
 	}
 	
-	/* Only update carrier-based LEDs if module is present */
-	if (module_present && (carrier_state != port->last_carrier_state)) {
-		set_led_brightness(port->link_led_fd, carrier_state ? 255 : 0);
+	/* Handle optical signal changes when module is present */
+	if (module_present && (has_signal != port->last_carrier_state)) {
+		if (has_signal) {
+			/* Optical signal detected - enable netdev trigger and turn on link LED */
+			set_led_brightness(port->link_led_fd, LED_MAX);
+			disable_netdev_trigger(port);
+			set_led_brightness(port->activity_led_fd, LED_OFF);
+			setup_netdev_trigger(port);
+			
+			syslog(LOG_INFO, "%s: optical link UP", port->netdev);
+		} else {
+			/* Optical signal lost - disable netdev trigger, turn off link LED, activity LED solid ON */
+			disable_netdev_trigger(port);
+			set_led_brightness(port->link_led_fd, LED_OFF);
+			set_led_brightness(port->activity_led_fd, LED_MAX);
+			syslog(LOG_INFO, "%s: optical link DOWN", port->netdev);
+		}
 		
-		syslog(LOG_INFO, "%s: carrier %s", port->netdev, 
-		       carrier_state ? "UP" : "DOWN");
-		
-		port->last_carrier_state = carrier_state;
+		port->last_carrier_state = has_signal;
 	}
 	
-	/* Keep LEDs off if module is not present */
 	if (!module_present) {
-		set_led_brightness(port->link_led_fd, 0);
-		set_led_brightness(port->activity_led_fd, 0);
+		set_led_brightness(port->link_led_fd, LED_OFF);
+		set_led_brightness(port->activity_led_fd, LED_OFF);
 	}
 }
 
 static void daemonize(void)
 {
 	pid_t pid;
-	
-	/* Fork off the parent process */
+	int fd;
+	struct rlimit rlim;
+
 	pid = fork();
 	if (pid < 0)
 		exit(EXIT_FAILURE);
 	
-	/* Exit parent process */
 	if (pid > 0)
 		exit(EXIT_SUCCESS);
 	
-	/* On success: The child process becomes session leader */
 	if (setsid() < 0)
 		exit(EXIT_FAILURE);
 	
-	/* Fork off for the second time */
 	pid = fork();
 	if (pid < 0)
 		exit(EXIT_FAILURE);
 	
-	/* Exit parent process */
 	if (pid > 0)
 		exit(EXIT_SUCCESS);
 	
-	/* Set new file permissions */
 	umask(0);
 	
-	/* Change the working directory to root */
 	chdir("/");
 	
-	/* Close all open file descriptors */
-	for (int fd = sysconf(_SC_OPEN_MAX); fd >= 0; fd--)
-		close(fd);
+	if (getrlimit(RLIMIT_NOFILE, &rlim) == 0) {
+		int max_fd = (rlim.rlim_cur != RLIM_INFINITY) ? rlim.rlim_cur : 1024;
+		for (fd = 0; fd < max_fd; fd++)
+			close(fd);
+	} else {
+		for (fd = 0; fd < 256; fd++)
+			close(fd);
+	}
+	
+	/* Redirect stdin, stdout, stderr to /dev/null */
+	fd = open("/dev/null", O_RDWR);
+	if (fd >= 0) {
+		dup2(fd, STDIN_FILENO);
+		dup2(fd, STDOUT_FILENO);
+		dup2(fd, STDERR_FILENO);
+		if (fd > STDERR_FILENO)
+			close(fd);
+	}
 }
 
 int main(int argc, char *argv[])
 {
 	int i;
 	bool daemon_mode = true;
+	fd_set readfds;
+	struct timespec timeout;
+	char inotify_buf[INOTIFY_BUF_LEN];
+	int max_fd;
+	sigset_t sigmask, orig_sigmask;
+	struct sigaction sa;
 	
 	/* Check for -f (foreground) flag */
 	if (argc > 1 && strcmp(argv[1], "-f") == 0)
 		daemon_mode = false;
 	
-	/* Setup syslog */
-	openlog("sfp-led-daemon", LOG_PID | (daemon_mode ? 0 : LOG_PERROR), LOG_DAEMON);
-	
 	if (daemon_mode) {
-		syslog(LOG_INFO, "Starting SFP LED daemon");
 		daemonize();
+		openlog("sfp-led-daemon", LOG_PID, LOG_DAEMON);
+		syslog(LOG_INFO, "Starting SFP LED daemon");
 	} else {
+		openlog("sfp-led-daemon", LOG_PID | LOG_PERROR, LOG_DAEMON);
 		syslog(LOG_INFO, "Starting SFP LED daemon in foreground mode");
 	}
 	
-	/* Setup signal handlers */
-	signal(SIGTERM, signal_handler);
-	signal(SIGINT, signal_handler);
+	memset(&sa, 0, sizeof(sa));
+	sa.sa_handler = signal_handler;
+	sigemptyset(&sa.sa_mask);
+	sa.sa_flags = 0;
+	
+	if (sigaction(SIGTERM, &sa, NULL) < 0) {
+		syslog(LOG_ERR, "Failed to setup SIGTERM handler: %s", strerror(errno));
+		exit(EXIT_FAILURE);
+	}
+	if (sigaction(SIGINT, &sa, NULL) < 0) {
+		syslog(LOG_ERR, "Failed to setup SIGINT handler: %s", strerror(errno));
+		exit(EXIT_FAILURE);
+	}
+	
+	/* Block signals during normal operation - pselect will unblock them atomically */
+	sigemptyset(&sigmask);
+	sigaddset(&sigmask, SIGTERM);
+	sigaddset(&sigmask, SIGINT);
+	if (sigprocmask(SIG_BLOCK, &sigmask, &orig_sigmask) < 0) {
+		syslog(LOG_ERR, "Failed to block signals: %s", strerror(errno));
+		exit(EXIT_FAILURE);
+	}
+	
+	inotify_fd = inotify_init1(IN_NONBLOCK);
+	if (inotify_fd < 0) {
+		syslog(LOG_ERR, "Failed to initialize inotify: %s", strerror(errno));
+	}
 	
 	/* Setup all ports */
 	for (i = 0; i < MAX_PORTS; i++) {
 		if (setup_port(&ports[i]) < 0) {
 			syslog(LOG_WARNING, "Failed to setup port %d, continuing anyway", i);
-		} else {
-			setup_netdev_trigger(&ports[i]);
 		}
 	}
 	
 	syslog(LOG_INFO, "SFP LED daemon running");
 	
-	/* Main loop */
+	/* Main event loop */
 	while (running) {
-		for (i = 0; i < MAX_PORTS; i++) {
-			update_port(&ports[i]);
+		FD_ZERO(&readfds);
+		max_fd = -1;
+		
+		/* Add inotify fd to the set if available */
+		if (inotify_fd >= 0) {
+			FD_SET(inotify_fd, &readfds);
+			max_fd = inotify_fd;
 		}
 		
-		usleep(POLL_INTERVAL_MS * 1000);
+		timeout.tv_sec = POLL_INTERVAL_SEC;
+		timeout.tv_nsec = POLL_INTERVAL_USEC * 1000;
+		
+		int ret = pselect(max_fd + 1, &readfds, NULL, NULL, &timeout, &orig_sigmask);
+		
+		if (ret < 0) {
+			if (errno == EINTR)
+				continue;
+			syslog(LOG_ERR, "pselect() failed: %s", strerror(errno));
+			break;
+		}
+		
+		/* Check if inotify has events */
+		if (ret > 0 && inotify_fd >= 0 && FD_ISSET(inotify_fd, &readfds)) {
+			int len = read(inotify_fd, inotify_buf, sizeof(inotify_buf));
+			if (len > 0) {
+				for (i = 0; i < MAX_PORTS; i++) {
+					update_port(&ports[i]);
+				}
+			}
+		}
+		
+		/* Periodic check for module presence (debugfs doesn't support inotify) */
+		if (ret == 0) {
+			for (i = 0; i < MAX_PORTS; i++) {
+				update_port(&ports[i]);
+			}
+		}
 	}
 	
 	syslog(LOG_INFO, "SFP LED daemon shutting down");
 	
-	/* Cleanup */
 	for (i = 0; i < MAX_PORTS; i++) {
 		cleanup_port(&ports[i]);
+	}
+	
+	if (inotify_fd >= 0) {
+		close(inotify_fd);
 	}
 	
 	closelog();

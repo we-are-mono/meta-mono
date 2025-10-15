@@ -4,7 +4,7 @@ require recipes-bsp/u-boot/u-boot.inc
 DEPENDS += "u-boot-tools-native"
 
 SRC_URI = "git://github.com/we-are-mono/u-boot.git;protocol=https;branch=mono-development"
-SRCREV = "25c04dfe00ec6a849721aeaf0bd3aff3f27d64c3"
+SRCREV = "d29758944bf796858f6aa9d9f76b1ac061bf5538"
 
 # U-Boot configuration
 UBOOT_MACHINE = "mono_gateway_dk_defconfig"
