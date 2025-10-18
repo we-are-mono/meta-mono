@@ -3,7 +3,9 @@ header:
   includes:
     - common.yaml
 
+machine: gateway_dk
 distro: recovery
 
 target:
   - recovery-image
+  - firmware

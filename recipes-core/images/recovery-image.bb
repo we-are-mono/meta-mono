@@ -9,7 +9,7 @@ inherit image
 IMAGE_INSTALL = "busybox base-files shadow kmod udev udev-rules-qoriq \
                 parted util-linux-fdisk util-linux-lsblk util-linux-blkid \
                 e2fsprogs mmc-utils mtd-utils i2c-tools \
-                curl tftp-hpa \
+                curl wget \
                 gzip tar \
                 sfp-led-daemon"
 

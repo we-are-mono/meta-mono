@@ -1,14 +1,10 @@
 # KAS build artifacts
-kas/build/
-kas/sources/
-kas/tmp/
-kas/downloads/
-kas/cache/
-kas/workdir/
-kas/.kas_shell_history
+build
+sources
+.kas_shell_history
 
 # Developer-specific local config
-kas/site.conf
+conf/site.conf
 
 # Yocto outputs (in case someone builds elsewhere)
 tmp/

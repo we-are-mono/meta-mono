@@ -1,0 +1,44 @@
+header:
+  version: 11
+  includes:
+    - common.yaml
+
+machine: gateway_dk
+distro: mono-sdk
+
+repos:
+  meta-openembedded:
+    url: https://git.openembedded.org/meta-openembedded
+    branch: walnascar
+    path: sources/meta-openembedded
+    layers:
+      meta-oe:
+      meta-filesystems:
+      meta-networking:
+      meta-python:
+
+  meta-arm:
+    url: https://git.yoctoproject.org/meta-arm
+    branch: walnascar
+    path: sources/meta-arm
+    layers:
+      meta-arm:
+      meta-arm-toolchain:
+
+  meta-freescale:
+    url: https://github.com/Freescale/meta-freescale
+    branch: walnascar
+    path: sources/meta-freescale
+    layers:
+      .:
+
+  meta-qoriq:
+    url: https://github.com/nxp-qoriq/meta-qoriq
+    branch: walnascar
+    path: sources/meta-qoriq
+    layers:
+      meta-qoriq-bsp:
+      meta-qoriq-sdk:
+
+target:
+  - mono-sdk-image
