@@ -16,6 +16,6 @@ repos:
     layers:
       meta:
 
-  meta-mono:
-    path: .
-
+local_conf_header:
+  site: |
+    require ${TOPDIR}/../site.conf

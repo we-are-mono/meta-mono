@@ -3,9 +3,13 @@ header:
   includes:
     - common.yaml
 
-machine: gateway_dk
+machine: gateway-dk
 distro: recovery
+
+repos:
+  meta-mono-bsp:
+    path: ./meta-mono-bsp
 
 target:
   - recovery-image
-  - firmware
+  - firmware-image

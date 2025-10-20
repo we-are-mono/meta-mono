@@ -3,7 +3,7 @@ header:
   includes:
     - common.yaml
 
-machine: gateway_dk
+machine: gateway-dk
 distro: mono-sdk
 
 repos:
@@ -40,5 +40,17 @@ repos:
       meta-qoriq-bsp:
       meta-qoriq-sdk:
 
+  meta-mono-bsp:
+    path: ./meta-mono-bsp
+    
+  meta-mono-sdk:
+    path: ./meta-mono-sdk
+
 target:
   - mono-sdk-image
+
+local_conf_header:
+  mask_recipes: |
+    BBMASK += "/meta-qoriq/meta-qoriq-bsp/recipes-containers/lxc/"
+    BBMASK += "/meta-qoriq/meta-qoriq-sdk/recipes-fsl/images/fsl-image-multimedia-full.bbappend"
+    BBMASK += "/meta-qoriq/meta-qoriq-sdk/recipes-fsl/packagegroups/packagegroup-fsl-gstreamer1.0.bbappend"

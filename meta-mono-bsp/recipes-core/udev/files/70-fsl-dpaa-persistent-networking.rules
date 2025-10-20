@@ -1,0 +1,13 @@
+# Rules for handling naming the DPAA FMan ethernet ports in a consistent way
+SUBSYSTEM=="net", DRIVERS=="fsl_dpa*", ATTR{device_addr}=="1ae2000", NAME="fm1-mac2"
+SUBSYSTEM=="net", DRIVERS=="fsl_dpa*", ATTR{device_addr}=="1ae8000", NAME="fm1-mac5"
+SUBSYSTEM=="net", DRIVERS=="fsl_dpa*", ATTR{device_addr}=="1aea000", NAME="fm1-mac6"
+SUBSYSTEM=="net", DRIVERS=="fsl_dpa*", ATTR{device_addr}=="1af0000", NAME="fm1-mac9"
+SUBSYSTEM=="net", DRIVERS=="fsl_dpa*", ATTR{device_addr}=="1af2000", NAME="fm1-mac10"
+
+# Rules for handling the Upstream DPAA ethernet ports
+SUBSYSTEM=="net", DRIVERS=="fsl_dpa*", KERNELS=="1ae2000*", NAME="fm1-mac2"
+SUBSYSTEM=="net", DRIVERS=="fsl_dpa*", KERNELS=="1ae8000*", NAME="fm1-mac5"
+SUBSYSTEM=="net", DRIVERS=="fsl_dpa*", KERNELS=="1aea000*", NAME="fm1-mac6"
+SUBSYSTEM=="net", DRIVERS=="fsl_dpa*", KERNELS=="1af0000*", NAME="fm1-mac9"
+SUBSYSTEM=="net", DRIVERS=="fsl_dpa*", KERNELS=="1af2000*", NAME="fm1-mac10"
