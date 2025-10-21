@@ -429,27 +429,60 @@
 };
 
 &{/thermal-zones/cluster-thermal/trips} {
-    fan_start: fan-start {
+    fan_level1: fan-level1 {
         temperature = <40000>;
-        hysteresis = <2000>;
+        hysteresis = <1000>;
         type = "active";
     };
 
-    fan_max: fan-max {
+    fan_level2: fan-level2 {
+        temperature = <45000>;
+        hysteresis = <1000>;
+        type = "active";
+    };
+
+    fan_level3: fan-level3 {
+        temperature = <50000>;
+        hysteresis = <1000>;
+        type = "active";
+    };
+
+    fan_level4: fan-level4 {
+        temperature = <55000>;
+        hysteresis = <1000>;
+        type = "active";
+    };
+
+    fan_level5: fan-level5 {
         temperature = <60000>;
-        hysteresis = <2000>;
+        hysteresis = <1000>;
         type = "active";
     };
 };
 
 &{/thermal-zones/cluster-thermal/cooling-maps} {
-    fan-map0 {
-        trip = <&fan_start>;
-        cooling-device = <&fan0 0 5>;
+    fan-map1 {
+        trip = <&fan_level1>;
+        cooling-device = <&fan0 1 1>;
     };
 
-    fan-map1 {
-        trip = <&fan_max>;
-        cooling-device = <&fan0 5 10>;
+    fan-map2 {
+        trip = <&fan_level2>;
+        cooling-device = <&fan0 2 2>;
+    };
+
+    fan-map3 {
+        trip = <&fan_level3>;
+        cooling-device = <&fan0 3 3>;
+    };
+
+    fan-map4 {
+        trip = <&fan_level4>;
+        cooling-device = <&fan0 4 4>;
+    };
+
+    fan-map5 {
+        trip = <&fan_level5>;
+        cooling-device = <&fan0 6 6>;
     };
 };
