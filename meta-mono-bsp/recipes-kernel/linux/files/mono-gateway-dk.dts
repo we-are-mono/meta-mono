@@ -11,6 +11,7 @@
 
 #include <dt-bindings/gpio/gpio.h>
 #include <dt-bindings/leds/common.h>
+#include <dt-bindings/pwm/pwm.h>
 #include "fsl-ls1046a.dtsi"
 
 / {
@@ -192,9 +193,26 @@
 			#size-cells = <0>;
 			reg = <3>;
 
-			fan-controller@2e {
+			fan_controller: fan-controller@2e {
 				compatible = "microchip,emc2305";
 				reg = <0x2e>;
+				#address-cells = <1>;
+				#size-cells = <0>;
+				#pwm-cells = <3>;
+
+				fan0: fan@0 {
+					reg = <0>;
+					label = "System Fan 1";
+					pwms = <&fan_controller 26000 1 1>;
+					#cooling-cells = <2>;
+				};
+
+				fan1: fan@1 {
+					reg = <1>;
+					label = "System Fan 2";
+					pwms = <&fan_controller 26000 1 1>;
+					#cooling-cells = <2>;
+				};
 			};
 		};
 	};
@@ -408,4 +426,30 @@
 			reg = <0x2>;
 		};
 	};
+};
+
+&{/thermal-zones/cluster-thermal/trips} {
+    fan_start: fan-start {
+        temperature = <40000>;
+        hysteresis = <2000>;
+        type = "active";
+    };
+
+    fan_max: fan-max {
+        temperature = <60000>;
+        hysteresis = <2000>;
+        type = "active";
+    };
+};
+
+&{/thermal-zones/cluster-thermal/cooling-maps} {
+    fan-map0 {
+        trip = <&fan_start>;
+        cooling-device = <&fan0 0 5>;
+    };
+
+    fan-map1 {
+        trip = <&fan_max>;
+        cooling-device = <&fan0 5 10>;
+    };
 };
