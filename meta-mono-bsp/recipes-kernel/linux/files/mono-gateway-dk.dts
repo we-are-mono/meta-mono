@@ -257,28 +257,28 @@
 			reg = <0>;
 
 			power_sensor@40 {
-				compatible = "ti,ina226";
+				compatible = "ti,ina234";
 				reg = <0x40>;
 				label = "USB Power Delivery";
 				#io-channel-cells = <1>;
 				shunt-resistor = <1000>;
 			};	
 			power_sensor@41 {
-				compatible = "ti,ina226";
+				compatible = "ti,ina234";
 				reg = <0x41>;
 				label = "5V PSU";
 				#io-channel-cells = <1>;
 				shunt-resistor = <1000>;
 			};
 			power_sensor@42 {
-				compatible = "ti,ina226";
+				compatible = "ti,ina234";
 				reg = <0x42>;
 				label = "1V Core PSU";
 				#io-channel-cells = <1>;
 				shunt-resistor = <1000>;
 			};						
 			power_sensor@43 {
-				compatible = "ti,ina226";
+				compatible = "ti,ina234";
 				reg = <0x43>;
 				label = "1.2V DDR PSU";
 				#io-channel-cells = <1>;
@@ -292,28 +292,28 @@
 			reg = <1>;
 
 			power_sensor@40 {
-				compatible = "ti,ina226";
+				compatible = "ti,ina234";
 				reg = <0x40>;
 				label = "1.35V SerDes PSU";
 				#io-channel-cells = <1>;
 				shunt-resistor = <5000>;
 			};	
 			power_sensor@41 {
-				compatible = "ti,ina226";
+				compatible = "ti,ina234";
 				reg = <0x41>;
 				label = "1.8V PSU";
 				#io-channel-cells = <1>;
 				shunt-resistor = <5000>;
 			};
 			power_sensor@42 {
-				compatible = "ti,ina226";
+				compatible = "ti,ina234";
 				reg = <0x42>;
 				label = "2.5V DDR PSU";
 				#io-channel-cells = <1>;
 				shunt-resistor = <5000>;
 			};						
 			power_sensor@43 {
-				compatible = "ti,ina226";
+				compatible = "ti,ina234";
 				reg = <0x43>;
 				label = "3.3V PSU";
 				#io-channel-cells = <1>;

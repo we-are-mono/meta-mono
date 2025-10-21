@@ -19,6 +19,7 @@ SRC_URI = "${LINUX_QORIQ_SRC};branch=${LINUX_QORIQ_BRANCH} \
            file://mono-gateway-dk.dts \
            file://mono-gateway-dk-sdk.dts \
            file://mono-gateway-dk-usdpaa-xg-only.dts \
+           file://0001-hwmon-ina2xx-Add-INA234-support.patch \
           "
 SRCREV = "be78e49cb4339fd38c9a40019df49b72fbb8bcb7"
 
