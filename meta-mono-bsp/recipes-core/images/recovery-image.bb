@@ -6,11 +6,11 @@ inherit image
 
 # Keep it minimal - just BusyBox and essential packages that should be
 # sufficient for a rescue system; Basic networking, partitioning and compression.
-IMAGE_INSTALL = "busybox base-files shadow kmod udev udev-rules-mono \
+IMAGE_INSTALL = "busybox base-files bash shadow kmod udev udev-rules-mono \
                 parted util-linux-fdisk util-linux-lsblk util-linux-blkid \
                 e2fsprogs mmc-utils mtd-utils i2c-tools \                 
                 curl gzip tar \
-                fan-control sfp-led-daemon status-led-daemon kernel-module-leds-lp5812 \
+                fancontrol sfp-led-daemon status-led-daemon kernel-module-leds-lp5812 \
                 "
 
 # We don't want any root password for the rescue system
