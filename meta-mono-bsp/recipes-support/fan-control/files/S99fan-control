@@ -1,0 +1,19 @@
+#!/bin/sh
+
+case "$1" in
+    start)        
+        for pwm in /sys/class/hwmon/hwmon*/pwm1; do
+            # ~6000 RPM should be enough for any circumstance
+            # when booted into recovery system
+            [ -w "$pwm" ] && echo 128 > "$pwm"
+        done
+        ;;
+    stop)
+        ;;
+    *)
+        echo "Usage: $0 {start|stop}"
+        exit 1
+        ;;
+esac
+
+exit 0

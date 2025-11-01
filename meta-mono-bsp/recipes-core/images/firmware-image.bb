@@ -20,8 +20,14 @@ BOOTTYPE ?= "qspi emmc"
 do_compile() {
     for d in ${BOOTTYPE}; do
         dd if=/dev/zero of=${WORKDIR}/firmware-${d}.bin bs=1 count=33030144
-        
-        dd if=${DEPLOY_DIR_IMAGE}/atf/bl2_${d}.pbl of=${WORKDIR}/firmware-${d}.bin bs=1 seek=0 conv=notrunc    
+
+        if [ "$d" = "emmc" ]; then
+            BL2_OFFSET=0x0
+        else
+            BL2_OFFSET=0x0
+        fi
+
+        dd if=${DEPLOY_DIR_IMAGE}/atf/bl2_${d}.pbl of=${WORKDIR}/firmware-${d}.bin bs=1 seek=${BL2_OFFSET} conv=notrunc
         dd if=${DEPLOY_DIR_IMAGE}/atf/fip.bin of=${WORKDIR}/firmware-${d}.bin bs=1 seek=1048576 conv=notrunc
         dd if=${DEPLOY_DIR_IMAGE}/u-boot.env of=${WORKDIR}/firmware-${d}.bin bs=1 seek=3145728 conv=notrunc
         dd if=${DEPLOY_DIR_IMAGE}/${FMAN_UCODE} of=${WORKDIR}/firmware-${d}.bin bs=1 seek=4194304 conv=notrunc
@@ -29,6 +35,7 @@ do_compile() {
         dd if=${DEPLOY_DIR_IMAGE}/Image.gz-initramfs-${MACHINE}.bin of=${WORKDIR}/firmware-${d}.bin bs=1 seek=10485760 conv=notrunc
     done
 }
+
 
 do_deploy() {
     install -d ${DEPLOYDIR}

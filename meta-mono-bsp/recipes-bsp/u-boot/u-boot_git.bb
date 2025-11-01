@@ -26,7 +26,7 @@ do_compile() {
     unset CFLAGS
     unset CPPFLAGS
 
-    oe_runmake ${UBOOT_MACHINE}
+    oe_runmake ${UBOOT_MACHINE} 
     oe_runmake ${EXTRA_OEMAKE}    
     mkenvimage -s 0x2000 -o ${B}/u-boot.env ${UNPACKDIR}/environment.txt
 }

@@ -10,7 +10,7 @@ IMAGE_INSTALL = "busybox base-files shadow kmod udev udev-rules-mono \
                 parted util-linux-fdisk util-linux-lsblk util-linux-blkid \
                 e2fsprogs mmc-utils mtd-utils i2c-tools \                 
                 curl gzip tar \
-                sfp-led-daemon status-led-daemon kernel-module-leds-lp5812 \
+                fan-control sfp-led-daemon status-led-daemon kernel-module-leds-lp5812 \
                 "
 
 # We don't want any root password for the rescue system
