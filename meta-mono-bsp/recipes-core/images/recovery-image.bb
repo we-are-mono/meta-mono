@@ -13,9 +13,6 @@ IMAGE_INSTALL = "busybox base-files bash shadow kmod udev udev-rules-mono \
                 fancontrol sfp-led-daemon status-led-daemon kernel-module-leds-lp5812 \
                 "
 
-# We don't want any root password for the rescue system
-EXTRA_USERS_PARAMS = "usermod -p '' root;"
-
 # This line ensures no root password is needed for login
 IMAGE_FEATURES += "empty-root-password"
 
@@ -37,3 +34,10 @@ IMAGE_NAME = "${IMAGE_BASENAME}${IMAGE_NAME_SUFFIX}"
 PACKAGE_EXCLUDE += "kernel-${KERNEL_VERSION}"
 PACKAGE_EXCLUDE += "kernel-image-${KERNEL_VERSION}"
 PACKAGE_EXCLUDE += "kernel-image-image*"
+
+# We have bash in this image, might as well use it
+ROOTFS_POSTPROCESS_COMMAND += "fix_root_shell;"
+
+fix_root_shell() {
+    sed -i '1s|sh$|bash|' ${IMAGE_ROOTFS}/etc/passwd
+}

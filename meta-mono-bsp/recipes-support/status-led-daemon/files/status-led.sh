@@ -23,6 +23,6 @@ else
     echo -1 > $LED_RED/repeat
     
     echo pattern > $LED_GREEN/trigger
-    echo "8 1000 32 1000" > $LED_GREEN/pattern
+    echo "12 1000 48 1000" > $LED_GREEN/pattern
     echo -1 > $LED_GREEN/repeat
 fi
