@@ -71,13 +71,15 @@ IMAGE_INSTALL:append = " \
 # System services
 IMAGE_INSTALL:append = " \
     systemd-serialgetty \
-    openssh \
+    packagegroup-core-ssh-openssh \
     "
 
 # Hardware monitoring and control
 IMAGE_INSTALL:append = " \
-    lmsensors \
+    fancontrol \
     sfp-led-daemon \
+    status-led-daemon \
+    kernel-module-leds-lp5812 \
     "
 
 # NXP/Freescale specific packages
@@ -125,3 +127,5 @@ sdk_image_postprocess() {
 }
 
 ROOTFS_POSTPROCESS_COMMAND += "sdk_image_postprocess; "
+SYSTEMD_AUTO_ENABLE_sshd = "enable"
+hostname:pn-base-files = "sdk"

@@ -7,7 +7,7 @@ DEPENDS = "bison-native flex-native dtc-native bc-native u-boot-tools-native"
 SRC_URI = "git://github.com/we-are-mono/u-boot.git;protocol=https;branch=mt-6.12.34-2.1.0 \
            file://environment.txt \
           "
-SRCREV = "4e861ddca916227927136c469584b649329b5a99"
+SRCREV = "69b38c80c8faef0c7fcdf383736cadbbf9b034d7"
 
 FILESEXTRAPATHS:prepend := "${THISDIR}/files:"
 
