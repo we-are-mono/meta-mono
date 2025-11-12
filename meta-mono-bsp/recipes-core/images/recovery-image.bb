@@ -8,7 +8,7 @@ inherit image
 # sufficient for a rescue system; Basic networking, partitioning and compression.
 IMAGE_INSTALL = "busybox base-files bash shadow kmod udev udev-rules-mono \
                 parted util-linux-fdisk util-linux-lsblk util-linux-blkid \
-                e2fsprogs mmc-utils mtd-utils i2c-tools \                 
+                e2fsprogs e2fsprogs-resize2fs mmc-utils mtd-utils i2c-tools \                 
                 curl gzip tar \
                 fancontrol sfp-led-daemon status-led-daemon kernel-module-leds-lp5812 \
                 "

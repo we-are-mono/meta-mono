@@ -41,8 +41,10 @@ do_compile() {
         # partition is outside of the image. So we make a fake one, which is larger,
         # then just copy the first block over
         if [ "$d" = "emmc" ]; then
-            truncate -s 64M ${WORKDIR}/temp-${d}.img
+            truncate -s 31826378752 ${WORKDIR}/temp-${d}.img
             echo "start=65536, type=83, bootable" | sfdisk ${WORKDIR}/temp-${d}.img
+            
+            # Extract just the MBR
             dd if=${WORKDIR}/temp-${d}.img of=${WORKDIR}/firmware-${d}.bin bs=512 count=1 conv=notrunc
             rm ${WORKDIR}/temp-${d}.img
         fi
