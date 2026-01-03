@@ -2,7 +2,7 @@ SUMMARY = "ARM Trusted Firmware for Mono Gateway board"
 LICENSE = "BSD-3-Clause"
 LIC_FILES_CHKSUM = "file://docs/license.rst;md5=83b7626b8c7a37263c6a58af8d19bee1"
 
-DEPENDS = "u-boot-tools-native u-boot rcw"
+DEPENDS = "openssl-native u-boot-tools-native u-boot rcw"
 do_compile[depends] += "u-boot:do_deploy rcw:do_deploy"
 
 SRC_URI = "git://github.com/we-are-mono/atf;protocol=https;branch=mt-6.12.34-2.1.0"
@@ -40,7 +40,7 @@ do_compile() {
         esac
         
         make V=1 realclean
-        oe_runmake pbl fip PLAT=${PLATFORM} BOOT_MODE=${d} RCW=${DEPLOY_DIR_IMAGE}/rcw/gateway_dk/${rcwimg} BL33=${DEPLOY_DIR_IMAGE}/${UBOOT_BINARY}
+        oe_runmake pbl fip OPENSSL_DIR="${STAGING_DIR_NATIVE}/${prefix_native}" PLAT=${PLATFORM} BOOT_MODE=${d} RCW=${DEPLOY_DIR_IMAGE}/rcw/gateway_dk/${rcwimg} BL33=${DEPLOY_DIR_IMAGE}/${UBOOT_BINARY}
         cp ${S}/build/${PLATFORM}/release/bl2_${d}.pbl .
         cp ${S}/build/${PLATFORM}/release/fip.bin .
     done
