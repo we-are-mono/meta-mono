@@ -20,18 +20,18 @@ First, clone the repository, then:
 ```
 
 $ git clone https://github.com/we-are-mono/meta-mono.git
-$ cd meta-mono/kas
+$ cd meta-mono
 
 # Make new site.conf from example and edit/configure it
 # Note that the DL_DIR and SSTATE_DIR need to exist and have proper permissions for your current user
 $ cp site.example.conf site.conf 
 
 # if you want SDK: 
-$ kas shell distro/mono-sdk.yaml
+$ kas shell kas/mono-sdk.yaml
 $ bitbake mono-sdk-image
 
 # or, if you want firmware:
-$ kas shell distro/recovery.yaml
-$ bitbake firmware
+$ kas shell kas/recovery.yaml
+$ bitbake firmware-image
 ```
 
