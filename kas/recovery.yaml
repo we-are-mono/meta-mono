@@ -13,3 +13,7 @@ repos:
 target:
   - recovery-image
   - firmware-image
+
+local_conf_header:
+  recovery: |
+    TMPDIR = "${TOPDIR}/tmp-recovery"
