@@ -37,13 +37,13 @@ do_compile() {
 
         # There's probably a better way to do this, but it works, so we'll run with it.
         # We want a single partition on the eMMC, at 32MB offset, but if we just write
-        # the partition table at 0, then sfdisk will complain, because the actual 
+        # the partition table at 0, then sfdisk will complain, because the actual
         # partition is outside of the image. So we make a fake one, which is larger,
         # then just copy the first block over
         if [ "$d" = "emmc" ]; then
             truncate -s 31826378752 ${WORKDIR}/temp-${d}.img
             echo "start=65536, type=83, bootable" | sfdisk ${WORKDIR}/temp-${d}.img
-            
+
             # Extract just the MBR
             dd if=${WORKDIR}/temp-${d}.img of=${WORKDIR}/firmware-${d}.bin bs=512 count=1 conv=notrunc
             rm ${WORKDIR}/temp-${d}.img
@@ -56,7 +56,7 @@ do_deploy() {
     install -d ${DEPLOYDIR}
 
     for d in ${BOOTTYPE}; do
-        install -m 644 ${WORKDIR}/firmware-${d}.bin ${DEPLOYDIR}/firmware-${d}-${MACHINE}.bin
+        install -m 0644 ${WORKDIR}/firmware-${d}.bin ${DEPLOYDIR}/firmware-${d}-${MACHINE}.bin
         ln -sf firmware-${d}-${MACHINE}.bin ${DEPLOYDIR}/firmware-${d}.bin
     done
 }

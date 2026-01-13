@@ -22,6 +22,7 @@
 #include <dirent.h>
 #include <limits.h>
 #include <sys/resource.h>
+#include <time.h>
 
 #define MAX_PORTS 2
 #define MAX_NETDEV_NAME 32
@@ -37,6 +38,7 @@
 /* Timing values */
 #define POLL_INTERVAL_SEC 1
 #define POLL_INTERVAL_USEC 0
+#define RETRY_INTERVAL_SEC 5
 
 /* String prefixes and their lengths */
 #define MODDEF0_PREFIX "moddef0:"
@@ -60,6 +62,7 @@ struct sfp_port {
 	int inotify_wd;      /* inotify watch descriptor for carrier file */
 	bool last_carrier_state;
 	bool last_module_present;
+	bool setup_complete;
 };
 
 static struct sfp_port ports[MAX_PORTS] = {
@@ -75,6 +78,7 @@ static struct sfp_port ports[MAX_PORTS] = {
 		.inotify_wd = -1,
 		.last_carrier_state = false,
 		.last_module_present = false,
+		.setup_complete = false,
 	},
 	{
 		.netdev = "",
@@ -88,6 +92,7 @@ static struct sfp_port ports[MAX_PORTS] = {
 		.inotify_wd = -1,
 		.last_carrier_state = false,
 		.last_module_present = false,
+		.setup_complete = false,
 	},
 };
 
@@ -281,21 +286,32 @@ static uint32_t read_dt_u32(const char *path)
 }
 
 /*
- * Find the network device associated with an SFP port by reading device tree
- * 
+ * Find the network device associated with an SFP port using devicetree
+ *
+ * For SDK images with DPA driver, the network interfaces are created from
+ * fsldpaa nodes, not directly from fman ethernet nodes. The mapping is:
+ *   SFP -> fman ethernet (via sfp property) -> fsldpaa ethernet (via fsl,fman-mac) -> netdev
+ *
  * Process:
- * 1. Read the phandle of the SFP device from /sys/firmware/devicetree/base/sfp-xfiX/phandle
- * 2. Search through /sys/firmware/devicetree/base/soc/fman nodes for matching sfp property
- * 3. Read the cell-index from the matching ethernet node
- * 4. The netdev is fm1-mac with cell-index plus 1
+ * 1. Read the phandle of the SFP device
+ * 2. Find the fman ethernet node that references this SFP
+ * 3. Get the phandle of that fman ethernet node
+ * 4. Find the fsldpaa ethernet node that references this fman node
+ * 5. Match network interface by sysfs device path containing fsldpaa node name
  */
 static int find_netdev_for_sfp(const char *sfp_name, char *netdev_out, size_t out_size)
 {
 	char path[PATH_MAX];
+	char fman_eth_name[64];
 	uint32_t sfp_phandle;
-	DIR *dir;
-	struct dirent *entry;
-	
+	uint32_t fman_eth_phandle;
+	char dpaa_eth_name[64];
+	DIR *dir, *fman_dir, *dpaa_dir, *net_dir;
+	struct dirent *entry, *eth_entry, *dpaa_entry, *net_entry;
+	ssize_t len;
+	int found_fman_eth = 0;
+	int found_dpaa_eth = 0;
+
 	/* Read the phandle of our SFP device */
 	snprintf(path, sizeof(path), "/sys/firmware/devicetree/base/%s/phandle", sfp_name);
 	sfp_phandle = read_dt_u32(path);
@@ -303,68 +319,115 @@ static int find_netdev_for_sfp(const char *sfp_name, char *netdev_out, size_t ou
 		syslog(LOG_ERR, "Failed to read phandle for %s", sfp_name);
 		return -1;
 	}
-	
+
 	syslog(LOG_DEBUG, "%s phandle: 0x%x", sfp_name, sfp_phandle);
-	
-	/* Search through fman ethernet nodes */
+
+	/* Step 1: Find fman ethernet node with matching sfp property */
 	dir = opendir("/sys/firmware/devicetree/base/soc");
 	if (!dir) {
 		syslog(LOG_ERR, "Failed to open device tree soc directory");
 		return -1;
 	}
-	
-	while ((entry = readdir(dir)) != NULL) {
+
+	while (!found_fman_eth && (entry = readdir(dir)) != NULL) {
 		if (strncmp(entry->d_name, FMAN_PREFIX, FMAN_PREFIX_LEN) != 0)
 			continue;
-		
-		/* Found an fman node, search its ethernet children */
-		DIR *fman_dir;
-		struct dirent *eth_entry;
+
 		char fman_path[PATH_MAX];
-		
 		snprintf(fman_path, sizeof(fman_path), "/sys/firmware/devicetree/base/soc/%s", entry->d_name);
 		fman_dir = opendir(fman_path);
 		if (!fman_dir)
 			continue;
-		
-		while ((eth_entry = readdir(fman_dir)) != NULL) {
+
+		while (!found_fman_eth && (eth_entry = readdir(fman_dir)) != NULL) {
 			if (strncmp(eth_entry->d_name, ETHERNET_PREFIX, ETHERNET_PREFIX_LEN) != 0)
 				continue;
-			
-			/* Check if this ethernet node has an sfp property */
+
 			snprintf(path, sizeof(path), "%s/%s/sfp", fman_path, eth_entry->d_name);
 			uint32_t eth_sfp_phandle = read_dt_u32(path);
-			
+
 			if (eth_sfp_phandle == sfp_phandle) {
-				/* Found matching ethernet node! Read its cell-index */
-				uint32_t cell_index;
-				
-				snprintf(path, sizeof(path), "%s/%s/cell-index", fman_path, eth_entry->d_name);
-				cell_index = read_dt_u32(path);
-				
-				/* Validate cell_index to prevent overflow and ensure reasonable value */
-				if (cell_index > 1000) {
-					syslog(LOG_WARNING, "Invalid cell-index %u for SFP '%s', skipping", 
-					       cell_index, sfp_name);
-					continue;
-				}
-				
-				snprintf(netdev_out, out_size, "fm1-mac%u", cell_index + 1);
-				
-				closedir(fman_dir);
-				closedir(dir);
-				
-				syslog(LOG_INFO, "Found netdev '%s' for SFP '%s' (cell-index=%u)", 
-				       netdev_out, sfp_name, cell_index);
-				return 0;
+				/* Found the fman ethernet node - get its phandle */
+				snprintf(path, sizeof(path), "%s/%s/phandle", fman_path, eth_entry->d_name);
+				fman_eth_phandle = read_dt_u32(path);
+				snprintf(fman_eth_name, sizeof(fman_eth_name), "%s", eth_entry->d_name);
+				found_fman_eth = 1;
+				syslog(LOG_DEBUG, "Found fman %s (phandle 0x%x) for SFP %s",
+				       fman_eth_name, fman_eth_phandle, sfp_name);
 			}
 		}
-		
+
 		closedir(fman_dir);
 	}
-	
+
 	closedir(dir);
-	syslog(LOG_ERR, "Could not find ethernet node for SFP '%s' (phandle 0x%x)", sfp_name, sfp_phandle);
+
+	if (!found_fman_eth || fman_eth_phandle == 0) {
+		syslog(LOG_ERR, "Could not find fman ethernet node for SFP '%s'", sfp_name);
+		return -1;
+	}
+
+	/* Step 2: Find fsldpaa ethernet node that references this fman ethernet */
+	dpaa_dir = opendir("/sys/firmware/devicetree/base/soc/fsl,dpaa");
+	if (!dpaa_dir) {
+		syslog(LOG_ERR, "Failed to open fsldpaa directory");
+		return -1;
+	}
+
+	while (!found_dpaa_eth && (dpaa_entry = readdir(dpaa_dir)) != NULL) {
+		if (strncmp(dpaa_entry->d_name, ETHERNET_PREFIX, ETHERNET_PREFIX_LEN) != 0)
+			continue;
+
+		snprintf(path, sizeof(path), "/sys/firmware/devicetree/base/soc/fsl,dpaa/%s/fsl,fman-mac",
+		         dpaa_entry->d_name);
+		uint32_t fman_mac_phandle = read_dt_u32(path);
+
+		if (fman_mac_phandle == fman_eth_phandle) {
+			snprintf(dpaa_eth_name, sizeof(dpaa_eth_name), "%s", dpaa_entry->d_name);
+			found_dpaa_eth = 1;
+			syslog(LOG_DEBUG, "Found fsldpaa %s for fman %s", dpaa_eth_name, fman_eth_name);
+		}
+	}
+
+	closedir(dpaa_dir);
+
+	if (!found_dpaa_eth) {
+		syslog(LOG_ERR, "Could not find fsldpaa ethernet node for fman %s", fman_eth_name);
+		return -1;
+	}
+
+	/* Step 3: Find network interface whose device path contains the dpaa node name */
+	net_dir = opendir("/sys/class/net");
+	if (!net_dir) {
+		syslog(LOG_ERR, "Failed to open /sys/class/net");
+		return -1;
+	}
+
+	while ((net_entry = readdir(net_dir)) != NULL) {
+		if (net_entry->d_name[0] == '.')
+			continue;
+
+		char device_link[PATH_MAX];
+
+		snprintf(path, sizeof(path), "/sys/class/net/%s", net_entry->d_name);
+		len = readlink(path, device_link, sizeof(device_link) - 1);
+		if (len < 0)
+			continue;
+
+		device_link[len] = '\0';
+
+		/* Check if the device path contains the dpaa ethernet node name */
+		if (strstr(device_link, dpaa_eth_name) != NULL) {
+			snprintf(netdev_out, out_size, "%s", net_entry->d_name);
+			closedir(net_dir);
+			syslog(LOG_INFO, "Found netdev '%s' for SFP '%s' (via %s)",
+			       netdev_out, sfp_name, dpaa_eth_name);
+			return 0;
+		}
+	}
+
+	closedir(net_dir);
+	syslog(LOG_ERR, "Could not find network interface for fsldpaa %s", dpaa_eth_name);
 	return -1;
 }
 
@@ -456,7 +519,8 @@ static int setup_port(struct sfp_port *port)
 			set_led_brightness(port->activity_led_fd, LED_MAX);
 		}
 	}
-	
+
+	port->setup_complete = true;
 	return 0;
 
 cleanup:
@@ -727,6 +791,19 @@ int main(int argc, char *argv[])
 		
 		/* Periodic check for module presence (debugfs doesn't support inotify) */
 		if (ret == 0) {
+			/* Retry setup for incomplete ports */
+			static time_t last_retry = 0;
+			time_t now = time(NULL);
+			if (now - last_retry >= RETRY_INTERVAL_SEC) {
+				for (i = 0; i < MAX_PORTS; i++) {
+					if (!ports[i].setup_complete) {
+						syslog(LOG_INFO, "Retrying setup for port %d (%s)", i, ports[i].sfp_name);
+						setup_port(&ports[i]);
+					}
+				}
+				last_retry = now;
+			}
+
 			for (i = 0; i < MAX_PORTS; i++) {
 				update_port(&ports[i]);
 			}

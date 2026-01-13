@@ -1,0 +1,1744 @@
+From: Tomaz Zaman <tomaz@mono.si>
+Date: Tue, 13 Jan 2026 11:52:25 +0100
+Subject: [PATCH] CDX: Port to kernel 6.12 and suppress verbose boot messages
+
+Kernel 6.12 compatibility:
+- Update Makefile to use KERNEL_SRC for finding sdk_fman driver paths
+- Fix include paths and kernel version detection
+- Document ceetm_exit() cleanup requirements for module unload
+- Fix various compiler warnings and unused variable warnings
+
+Suppress verbose boot messages:
+- Make DPAIPSEC_INFO and DPAWIFI_INFO macros conditional on CDX_DPA_DEBUG
+- Change dpa_cfg.c printk() calls to use DPA_INFO under CDX_DPA_DEBUG
+- Add misc.h include to dpa_wifi.c for CDX_DPA_DEBUG definition
+- Wrap procfs.c, devman.c, vsp_cfg.c verbose prints in CDX_DPA_DEBUG
+
+To re-enable verbose logging, uncomment CDX_DPA_DEBUG in misc.h or
+add -DCDX_DPA_DEBUG to CFG_FLAGS in the recipe.
+
+Upstream-Status: Inappropriate [kernel compatibility fix]
+Signed-off-by: Tomaz Zaman <tomaz@mono.si>
+
+diff --git a/cdx-5.03.1/.gitignore b/cdx-5.03.1/.gitignore
+index 5e311f2..2afa0b0 100644
+--- a/cdx-5.03.1/.gitignore
++++ b/cdx-5.03.1/.gitignore
+@@ -1,5 +1,9 @@
+ *.o
+ *.ko
+ *.cmd
++*.mod
+ *.mod.c
+ *.d
++Module.symvers
++modules.order
++version.h
+diff --git a/cdx-5.03.1/Makefile b/cdx-5.03.1/Makefile
+index f24cb0c..3c00586 100755
+--- a/cdx-5.03.1/Makefile
++++ b/cdx-5.03.1/Makefile
+@@ -9,13 +9,21 @@
+ #
+ PLATFORM?=LS1043A
+ 
++# Support both KERNELDIR (build dir) and KERNEL_SRC (source dir) for Yocto
++# If KERNEL_SRC not set, try $(KERNELDIR)/source symlink (Yocto pattern)
++KERNEL_SRC ?= $(KERNELDIR)/source
++ifeq ($(wildcard $(KERNEL_SRC)/drivers/net/ethernet/freescale/sdk_fman),)
++# Fallback to KERNELDIR if source symlink doesn't exist
++KERNEL_SRC := $(KERNELDIR)
++endif
++
+ # Include netcomm SW specific definitions
+-KERNELVERSION?=3.19.3
++KERNELVERSION?=6.12
+ ifeq ($(KERNELVERSION),3.19.3)
+-include $(KERNELDIR)/drivers/net/ethernet/freescale/fman/ncsw_config.mk
++include $(KERNEL_SRC)/drivers/net/ethernet/freescale/fman/ncsw_config.mk
+ else
+-#### This KERNELDIR is for kernel version 4.1.8 and 4.1.30
+-include $(KERNELDIR)/drivers/net/ethernet/freescale/sdk_fman/ncsw_config.mk
++#### This path is for kernel version 4.1.8+ and 6.12
++include $(KERNEL_SRC)/drivers/net/ethernet/freescale/sdk_fman/ncsw_config.mk
+ endif
+ 
+ 
+@@ -31,12 +39,12 @@ modules clean:
+ ####included for dpa offload
+ 
+ ifeq ($(KERNELVERSION),3.19.3)
+-FMAN_DRIVER_PATH = $(KERNELDIR)/drivers/net/ethernet/freescale/fman
+-DPAA_DRIVER_PATH = $(KERNELDIR)/drivers/net/ethernet/freescale/dpa
++FMAN_DRIVER_PATH = $(KERNEL_SRC)/drivers/net/ethernet/freescale/fman
++DPAA_DRIVER_PATH = $(KERNEL_SRC)/drivers/net/ethernet/freescale/dpa
+ else
+-#### This driver path is for kernel version 4.1.8 and 4.1.30
+-FMAN_DRIVER_PATH = $(KERNELDIR)/drivers/net/ethernet/freescale/sdk_fman
+-DPAA_DRIVER_PATH = $(KERNELDIR)/drivers/net/ethernet/freescale/sdk_dpaa
++#### This driver path is for kernel version 4.1.8+ and 6.12
++FMAN_DRIVER_PATH = $(KERNEL_SRC)/drivers/net/ethernet/freescale/sdk_fman
++DPAA_DRIVER_PATH = $(KERNEL_SRC)/drivers/net/ethernet/freescale/sdk_dpaa
+ endif
+ 
+ EXTRA_CFLAGS += -I$(FMAN_DRIVER_PATH)/inc
+@@ -49,7 +57,7 @@ EXTRA_CFLAGS += -I$(FMAN_DRIVER_PATH)/src/inc
+ EXTRA_CFLAGS += -I$(FMAN_DRIVER_PATH)/src/inc/wrapper
+ EXTRA_CFLAGS += -I$(FMAN_DRIVER_PATH)/src/inc/system
+ EXTRA_CFLAGS += -I$(FMAN_DRIVER_PATH)/src/wrapper
+-EXTRA_CFLAGS += -I$(KERNELDIR)/drivers/crypto/caam
++EXTRA_CFLAGS += -I$(KERNEL_SRC)/drivers/crypto/caam
+ EXTRA_CFLAGS += -I$(DPAA_DRIVER_PATH)
+ EXTRA_CFLAGS += $(CFG_FLAGS)
+ 
+diff --git a/cdx-5.03.1/cdx_ceetm_app.c b/cdx-5.03.1/cdx_ceetm_app.c
+index f282987..256a97f 100644
+--- a/cdx-5.03.1/cdx_ceetm_app.c
++++ b/cdx-5.03.1/cdx_ceetm_app.c
+@@ -16,6 +16,7 @@
+ #include "portdefs.h"
+ #include "module_qm.h"
+ #include "cdx_ceetm_app.h"
++#include "cdx_ceetm_gdef.h"
+ #include "cdx_common.h"
+ 
+ static struct ceetm_chnl_info qm_chnl_info[CDX_CEETM_MAX_CHANNELS];
+@@ -64,9 +65,9 @@ static struct qman_fq *ceetm_get_egressfq(void *ctx, uint32_t channel, uint32_t
+ struct qman_fq *cdx_get_txfq(struct eth_iface_info *eth_info, void *info)
+ {
+ 	union ctentry_qosmark *qosmark = (union ctentry_qosmark *)info;
+-	uint32_t quenum,ff = 1;
+-
++	uint32_t quenum;
+ #ifdef ENABLE_EGRESS_QOS
++	uint32_t ff = 1;
+ 	struct dpa_priv_s *priv;
+ 	struct qman_fq *egress_fq;
+ 
+@@ -500,7 +501,7 @@ static void egress_ern_handler(struct qman_portal *portal, struct qman_fq *fq, c
+ 
+ /* configure any of the prio or wbfq class queue of a channel */
+ /* queues 0-7 are strict prio and queues 8-15 are in single WBFQ group */
+-int ceetm_create_cq(struct ceetm_chnl_info *chnl_ctx, uint32_t classque) 
++static int ceetm_create_cq(struct ceetm_chnl_info *chnl_ctx, uint32_t classque) 
+ {
+ 	struct qm_ceetm_channel *channel;
+ 	struct qm_ceetm_ccg *ccg;
+@@ -699,7 +700,7 @@ static int ceetm_create_cq_policer_profiles(t_Handle h_FmPcd, struct classque_in
+ 	return CEETM_SUCCESS;
+ }
+ 
+-int ceetm_configure_cq_policer_profiles(struct classque_info *cq_info,void *pcd_handle,uint32_t enable,uint32_t shaper_rate)
++static int ceetm_configure_cq_policer_profiles(struct classque_info *cq_info,void *pcd_handle,uint32_t enable,uint32_t shaper_rate)
+ {
+ 	void *handle;
+ 	t_FmPcdPlcrProfileParams Params;
+@@ -912,7 +913,7 @@ static void ceetm_cscn_handler(struct qm_ceetm_ccg *p, void *cb_ctx, int congest
+ }
+ #endif
+ 
+-int ceetm_set_default_cq_policer_profile(void *pcd_handle, struct classque_info *cqinfo)
++static int ceetm_set_default_cq_policer_profile(void *pcd_handle, struct classque_info *cqinfo)
+ {
+ 	void *handle;
+ 	t_FmPcdPlcrProfileParams Params;
+@@ -1169,8 +1170,9 @@ static void display_shaper_config(PQosShaperConfigCommand cfg)
+ 	if (cfg->enable == SHAPER_ON)
+ 		ceetm_dbg("shaper enabled\n");
+ 	else {
+-		if (cfg->enable == SHAPER_OFF)
++		if (cfg->enable == SHAPER_OFF) {
+ 			ceetm_dbg("shaper disabled\n");
++		}
+ 	}
+ 	if (cfg->cfg_flags & SHAPER_CFG_VALID) {
+ 		ceetm_dbg("rate %d, bucketsize %d\n",
+@@ -1754,11 +1756,24 @@ int ceetm_exit(void)
+ 		return CEETM_FAILURE;
+ 	}
+ 	ceetm_dbg("%s::deregistered ceetmFq functions\n", __FUNCTION__);
+-	/*TODO : ceetm cleanup */
+-	/* 1. Channels creation cleanup (memory, channel)  */
+-	/* 2. class queue (ceetm ccg release, ceetm lfq, cq release) */
+-	/*TODO : ENABLE_EGRESS_QOS compilation flag cleanup */
+-	/* ENABLE_EGRESS_QOS compilation flag proper integration. */
++
++	/* TODO: Implement proper cleanup for module unload. Currently leaks:
++	 * - 8 channel structures (kzalloc'd in ceetm_create_channel)
++	 * - 8 hardware channels (qman_alloc_ceetm0_channel)
++	 * - 128 class queues (qman_ceetm_cq_claim)
++	 * - 128 logical FQIDs (qman_ceetm_lfq_claim)
++	 * - 128 CCGs (qman_ceetm_ccg_claim)
++	 * - 128 policer profiles (FM_PCD_PlcrProfileSet)
++	 *
++	 * Release order must be: LFQ -> CQ -> CCG -> channel (per kernel API).
++	 * For each channel in qm_chnl_info[0..7]:
++	 *   for each cq_info[0..15]:
++	 *     qman_ceetm_lfq_release(cqinfo->lfq)
++	 *     qman_ceetm_cq_release(cqinfo->cq)
++	 *     release CCG
++	 *   qman_release_ceetm0_channelid(channel->idx)
++	 *   kfree(channel)
++	 */
+ 
+ 	return CEETM_SUCCESS;
+ }
+diff --git a/cdx-5.03.1/cdx_cmdhandler.h b/cdx-5.03.1/cdx_cmdhandler.h
+index 3801f53..aaa9eac 100644
+--- a/cdx-5.03.1/cdx_cmdhandler.h
++++ b/cdx-5.03.1/cdx_cmdhandler.h
+@@ -339,4 +339,11 @@ void comcerto_fpp_workqueue(struct work_struct *work);
+ int cdx_cmdhandler_init(void);
+ void cdx_cmdhandler_exit(void);
+ 
++int comcerto_fpp_send_command(u16 fcode, u16 length, u16 *payload, u16 *rlen, u16 *rbuf);
++int comcerto_fpp_send_command_simple(u16 fcode, u16 length, u16 *payload);
++int comcerto_fpp_send_command_atomic(u16 fcode, u16 length, u16 *payload,
++	void (*callback)(unsigned long, int, u16, u16 *), unsigned long data);
++int cdx_ctrl_send_command_simple(u16 fcode, u16 length, u16 *payload);
++int comcerto_fpp_register_event_cb(int (*event_cb)(u16, u16, u16*));
++
+ #endif /* _CDX_CMDHANDLER_H_ */
+diff --git a/cdx-5.03.1/cdx_dev.c b/cdx-5.03.1/cdx_dev.c
+index d177e7f..633f7b9 100644
+--- a/cdx-5.03.1/cdx_dev.c
++++ b/cdx-5.03.1/cdx_dev.c
+@@ -114,7 +114,7 @@ func_ret:
+ }
+ #endif
+ 
+-int disp_muram(void)
++static int __maybe_unused disp_muram(void)
+ {
+ #ifdef DPAA_DEBUG_ENABLE
+ 	int ii;
+@@ -221,7 +221,7 @@ int cdx_driver_init(void)
+ 		return -1;
+ 	}
+ 
+-	cdx_ctrl_class = class_create(THIS_MODULE, CDX_CTRL_CLS_CDEVNAME);
++	cdx_ctrl_class = class_create(CDX_CTRL_CLS_CDEVNAME);
+ 	if (IS_ERR(cdx_ctrl_class)) {
+ 		DPA_ERROR("%s::Failed to create %s class device\n",
+ 				__FUNCTION__, CDX_CTRL_CLS_CDEVNAME);
+diff --git a/cdx-5.03.1/cdx_dpa.c b/cdx-5.03.1/cdx_dpa.c
+index dd34fb9..12b67ca 100755
+--- a/cdx-5.03.1/cdx_dpa.c
++++ b/cdx-5.03.1/cdx_dpa.c
+@@ -28,6 +28,7 @@
+ #include "control_tunnel.h"
+ #include "control_bridge.h"
+ #include "dpa_ipsec.h"
++#include "devman.h"
+ 
+ 
+ //#define CDX_DPA_DEBUG 1
+diff --git a/cdx-5.03.1/cdx_dpa_ipsec.c b/cdx-5.03.1/cdx_dpa_ipsec.c
+index 7f5190a..eb8dc8d 100644
+--- a/cdx-5.03.1/cdx_dpa_ipsec.c
++++ b/cdx-5.03.1/cdx_dpa_ipsec.c
+@@ -298,7 +298,7 @@ int cdx_ipsec_delete_fp_entry(PSAEntry pSA)
+ 	return 0;
+ }
+ 
+-void cdx_ipsec_delete_fp_hash_entry(PSAEntry pSA)
++static void cdx_ipsec_delete_fp_hash_entry(PSAEntry pSA)
+ {
+ 	struct hw_ct *hwct;
+ 
+@@ -724,7 +724,7 @@ static inline void save_stats_in_external_mem(PSAEntry sa)
+ }
+ 
+ 
+-int cdx_ipsec_build_shared_descriptor(PSAEntry sa,
++static int cdx_ipsec_build_shared_descriptor(PSAEntry sa,
+ 		dma_addr_t auth_key_dma,
+ 		dma_addr_t crypto_key_dma, u32 bytes_to_copy)
+ {
+@@ -916,7 +916,7 @@ skip_byte_copy:
+ 	return 0;
+ }
+ 
+-int built_encap_extra_material(PSAEntry sa,
++static int built_encap_extra_material(PSAEntry sa,
+ 		dma_addr_t auth_key_dma,
+ 		dma_addr_t crypto_key_dma,
+ 		unsigned int move_size)
+@@ -1123,7 +1123,7 @@ int built_encap_extra_material(PSAEntry sa,
+ }
+ 
+ /* Move size should be set to 64 bytes */
+-void built_decap_extra_material(PSAEntry sa,
++static void built_decap_extra_material(PSAEntry sa,
+ 		dma_addr_t auth_key_dma,
+ 		dma_addr_t crypto_key_dma)
+ {
+@@ -1210,7 +1210,7 @@ void built_decap_extra_material(PSAEntry sa,
+ #endif
+ }
+ 
+-int cdx_ipsec_build_extended_encap_shared_descriptor(PSAEntry sa,
++static int cdx_ipsec_build_extended_encap_shared_descriptor(PSAEntry sa,
+ 		dma_addr_t auth_key_dma,
+ 		dma_addr_t crypto_key_dma,
+ 		U32 bytes_to_copy,
+@@ -1447,7 +1447,7 @@ int cdx_ipsec_build_extended_encap_shared_descriptor(PSAEntry sa,
+ 	return 0;
+ }
+ 
+-int cdx_ipsec_build_extended_decap_shared_descriptor(PSAEntry sa,
++static int cdx_ipsec_build_extended_decap_shared_descriptor(PSAEntry sa,
+ 		dma_addr_t auth_key_dma,
+ 		dma_addr_t crypto_key_dma,
+ 		uint32_t bytes_to_copy,
+@@ -1722,7 +1722,7 @@ int cdx_ipsec_build_extended_decap_shared_descriptor(PSAEntry sa,
+ 	return 0;
+ }
+ 
+-int  cdx_ipsec_build_in_sa_pdb(PSAEntry sa)
++static int cdx_ipsec_build_in_sa_pdb(PSAEntry sa)
+ {
+ 	struct sec_descriptor *sec_desc;
+ 	PDpaSecSAContext psec_as_context;
+@@ -1844,7 +1844,7 @@ int  cdx_ipsec_build_in_sa_pdb(PSAEntry sa)
+ 	return 0;
+ }
+ 
+-int  cdx_ipsec_build_out_sa_pdb(PSAEntry sa)
++static int cdx_ipsec_build_out_sa_pdb(PSAEntry sa)
+ {
+ 	struct sec_descriptor *sec_desc;
+ 	PDpaSecSAContext psec_as_context;
+@@ -2166,7 +2166,7 @@ static void split_key_done(struct device *dev, u32 *desc, u32 err,
+ }
+ 
+ /* determine the HASH algorithm and the coresponding split key length */
+-int cdx_ipsec_get_split_key_info(struct auth_params *auth_param, u32 *hmac_alg)
++static int cdx_ipsec_get_split_key_info(struct auth_params *auth_param, u32 *hmac_alg)
+ {
+ 	/*
+ 	 * Sizes for MDHA pads (*not* keys): MD5, SHA1, 224, 256, 384, 512
+@@ -2542,7 +2542,7 @@ int  cdx_ipsec_add_classification_table_entry(PSAEntry sa)
+ 		 * May also can be used for orginal interface stats also.  
+ 		 */
+ 		info->sa_itf_id = itf_id; 
+-		dpa_get_l2l3_info_by_itf_id( itf_id, &info->l2_info, &info->l3_info,sa_dir_in );
++		dpa_get_l2l3_info_by_itf_id( itf_id, &info->l2_info, &info->l3_info, &sa_dir_in );
+ #ifdef CDX_DPA_DEBUG
+ 		/*       printk("%s:: Got the table id for portid %d and key type %d as %p \n", 
+ 					__FUNCTION__, info->port_id, key_info->type, sa->ct->td); */
+diff --git a/cdx-5.03.1/cdx_dpa_ipsec.h b/cdx-5.03.1/cdx_dpa_ipsec.h
+index 282fdb6..726018e 100644
+--- a/cdx-5.03.1/cdx_dpa_ipsec.h
++++ b/cdx-5.03.1/cdx_dpa_ipsec.h
+@@ -121,9 +121,9 @@ int  cdx_ipsec_process_udp_classification_table_entry(PSAEntry sa);
+ int  cdx_ipsec_create_shareddescriptor(PSAEntry sa, u32 bytes_to_copy);
+ int cdx_ipsec_generate_split_key(struct auth_params *auth_param);
+ void cdx_ipsec_release_sa_resources(PSAEntry pSA);
+-int dpa_get_l2l3_info_by_itf_id(uint32_t itf_id, 
++int dpa_get_l2l3_info_by_itf_id(uint32_t itf_id,
+ 				struct dpa_l2hdr_info *l2_info,
+-				struct dpa_l3hdr_info *l3_info, uint32_t dir_in);
++				struct dpa_l3hdr_info *l3_info, uint32_t *dir_in);
+ int cdx_ipsec_handle_get_inbound_sagd(U32 spi, U16 * sagd );
+ int fill_ipsec_actions(PSAEntry entry, struct ins_entry_info *info, 
+ 			uint32_t sa_dir_in);
+diff --git a/cdx-5.03.1/cdx_ehash.c b/cdx-5.03.1/cdx_ehash.c
+index b8aeab6..fd9b15b 100755
+--- a/cdx-5.03.1/cdx_ehash.c
++++ b/cdx-5.03.1/cdx_ehash.c
+@@ -2594,7 +2594,9 @@ static inline int create_enque_only_hm(struct ins_entry_info *info)
+ static int create_enque_hm(struct ins_entry_info *info)
+ {
+ 	struct en_ehash_enqueue_param *param;
++#ifdef ENABLE_EGRESS_QOS
+ 	PCtEntry entry = (PCtEntry)info->entry;
++#endif
+ 	uint32_t word = 0;
+ 
+ 	if (info->l2_info.mtu == 0) {
+@@ -3138,12 +3140,12 @@ int cdx_init_frag_module(void)
+ }
+ 
+ #define PROC_FRAG_DIR "ucode_frag"
+-struct file_operations frag_stats_fp;
+-struct file_operations buf_alloc_test_fp;
++static struct proc_ops frag_stats_fp;
++static struct proc_ops buf_alloc_test_fp;
+ 
+ static struct proc_dir_entry *frag_proc_dir, *stats_file, *alloc_free_test_file;
+ 
+-ssize_t stats_read(struct file *file, char __user *buf, size_t size, loff_t *ppos)
++static ssize_t stats_read(struct file *file, char __user *buf, size_t size, loff_t *ppos)
+ {
+ 	int  tot_len = 0;
+ 	cdx_ucode_frag_info_t  *ucode_frag_args;
+@@ -3166,7 +3168,7 @@ ssize_t stats_read(struct file *file, char __user *buf, size_t size, loff_t *ppo
+ }
+ 
+ 
+-ssize_t buff_alloc_test(struct file *file, char __user *buf, size_t size, loff_t *ppos)
++static ssize_t buff_alloc_test(struct file *file, char __user *buf, size_t size, loff_t *ppos)
+ {
+ 	int ii;
+ 	struct bm_buffer bmb[128];
+@@ -3209,7 +3211,7 @@ int cdx_init_frag_procfs(void)
+ 	}
+ 	memset (&frag_stats_fp, 0, sizeof(frag_stats_fp));
+ 	memset (&buf_alloc_test_fp, 0, sizeof(buf_alloc_test_fp));
+-	frag_stats_fp.read = stats_read;
++	frag_stats_fp.proc_read = stats_read;
+ 
+ 	stats_file = proc_create("stats", 0444, frag_proc_dir, &frag_stats_fp);
+ 	if (!stats_file)
+@@ -3218,7 +3220,7 @@ int cdx_init_frag_procfs(void)
+ 		return -1;
+ 	}
+ 
+-	buf_alloc_test_fp.read = buff_alloc_test;
++	buf_alloc_test_fp.proc_read = buff_alloc_test;
+ 	alloc_free_test_file = proc_create("test_alloc_buf_n_free", 0444, frag_proc_dir, &buf_alloc_test_fp);
+ 	if (!alloc_free_test_file)
+ 	{
+diff --git a/cdx-5.03.1/cdx_qos.c b/cdx-5.03.1/cdx_qos.c
+index 3895af8..24e5c7c 100644
+--- a/cdx-5.03.1/cdx_qos.c
++++ b/cdx-5.03.1/cdx_qos.c
+@@ -24,6 +24,7 @@
+ #include <uapi/linux/in6.h> 
+ #include <linux/spinlock.h>
+ #include <linux/if_arp.h>
++#include <linux/io.h>
+ #include "lnxwrp_fm.h"
+ #include <linux/fsl_oh_port.h>
+ #include "dpaa_eth.h"
+@@ -529,14 +530,16 @@ void *create_ddr_and_copy_from_muram(void *muramptr, void **ddrptr, U32 size)
+ 		DPA_ERROR("%s(%d) Memory allocation failure:\n", __FUNCTION__, __LINE__);
+ 		return NULL;
+ 	}
+-	memcpy(*ddrptr, muramptr, size);
++	/* Use memcpy_fromio for MURAM - it's device memory on ARM64 */
++	memcpy_fromio(*ddrptr, muramptr, size);
+ 
+ 	return *ddrptr;
+ }
+ 
+ void copy_ddr_to_muram_and_free_ddr(void *muramptr, void **ddrptr, U32 size)
+ {
+-	memcpy(muramptr, *ddrptr, size);
++	/* Use memcpy_toio for MURAM - it's device memory on ARM64 */
++	memcpy_toio(muramptr, *ddrptr, size);
+ 	kfree(*ddrptr);
+ 	*ddrptr = NULL;
+ }
+@@ -857,21 +860,6 @@ int cdxdrv_sec_policer_reset(struct cdx_fman_info *finfo)
+ }
+ #endif /* endif for SEC_PROFILE_SUPPORT */
+ 
+-int cdxdrv_ingress_policer_query(struct cdx_fman_info *finfo,uint32_t queue_no,void *cfg)
+-{
+-	PIngressQosCfgCommand plcr_cfg = (PIngressQosCfgCommand)cfg;
+-
+-	plcr_cfg->status = finfo->ingress_policer_info[queue_no].policer_on;
+-	plcr_cfg->cir = finfo->ingress_policer_info[queue_no].cir_value;
+-	plcr_cfg->pir = finfo->ingress_policer_info[queue_no].pir_value;
+-
+-#ifdef QOS_DEBUG
+-	printk("%s::queue %d,status %d cir %d pir %d \n",
+-			__FUNCTION__, queue_no,plcr_cfg->status,plcr_cfg->cir,plcr_cfg->pir);
+-#endif
+-	return SUCCESS;
+-}
+-
+ int cdxdrv_ingress_policer_stats(struct cdx_fman_info *finfo,uint32_t queue_no,void *stats,uint32_t clear)
+ {
+ 
+diff --git a/cdx-5.03.1/cdx_reassm.c b/cdx-5.03.1/cdx_reassm.c
+index c838a5b..c028188 100755
+--- a/cdx-5.03.1/cdx_reassm.c
++++ b/cdx-5.03.1/cdx_reassm.c
+@@ -97,7 +97,7 @@ static inline struct dpa_bp *ipr_bpid2pool(uint32_t bpid)
+ 	return NULL;
+ } 
+ 
+-enum qman_cb_dqrr_result __hot ipr_buff_release_dqrr(
++static enum qman_cb_dqrr_result __hot ipr_buff_release_dqrr(
+ 		struct qman_portal         *portal,
+ 		struct qman_fq                  *fq,
+ 		const struct qm_dqrr_entry      *dq)
+@@ -191,7 +191,7 @@ enum qman_cb_dqrr_result __hot ipr_buff_release_dqrr(
+ }
+ 
+ 
+-int cdx_create_ipr_fq(uint32_t *base_fqid)
++static int cdx_create_ipr_fq(uint32_t *base_fqid)
+ {
+ 	uint32_t ii;
+ 	struct dpa_fq *dpa_fq;
+@@ -363,7 +363,7 @@ static int replenish_ipr_frag_pool(struct net_device *net_dev, u32 bpid)
+ 	return 0;
+ }
+ 
+-int ipr_timer(void *data)
++static int ipr_timer(void *data)
+ {
+ 	while (!kthread_should_stop())
+ 	{
+diff --git a/cdx-5.03.1/control_bridge.c b/cdx-5.03.1/control_bridge.c
+index 6cb56eb..0a6a97d 100644
+--- a/cdx-5.03.1/control_bridge.c
++++ b/cdx-5.03.1/control_bridge.c
+@@ -136,7 +136,7 @@ cdx_timer_t br_get_time_remaining(struct L2Flow_entry *pEntry)
+ 	return elapsed_time >= timer->timerdata ? 0 : timer->timerdata - elapsed_time;
+ }
+ 
+-void br_timer_update(struct L2Flow_entry *pEntry)
++static void br_timer_update(struct L2Flow_entry *pEntry)
+ {
+ 	TIMER_ENTRY *timer = &pEntry->timer;
+ 	cdx_timer_t oldtimer = timer->timerdata;
+@@ -157,7 +157,7 @@ void br_timer_update(struct L2Flow_entry *pEntry)
+ 
+ 
+ 
+-int L2Bridge_timer(TIMER_ENTRY *timer)
++static int L2Bridge_timer(TIMER_ENTRY *timer)
+ {
+ 	int rc;
+ 	struct L2Flow_entry *entry = container_of(timer, typeof(struct L2Flow_entry), timer);
+@@ -411,7 +411,7 @@ skip_fill:
+ 
+ 		case ACTION_QUERY:
+ 			reset_action = 1;
+-			/* fallthrough */
++			fallthrough;
+ 		case ACTION_QUERY_CONT:
+ 			ackstatus = rx_Get_Next_Hash_L2FlowEntry(pcmd, reset_action);
+ 			return ackstatus;
+@@ -475,7 +475,7 @@ static int M_bridged_itf_update(U16 code, U16 *p, U16 Length)
+ 	return CMD_OK;
+ }
+ 
+-U16 M_bridge_cmdproc(U16 cmd_code, U16 cmd_len, U16 *p)
++static U16 M_bridge_cmdproc(U16 cmd_code, U16 cmd_len, U16 *p)
+ {
+ 	U16 acklen;
+ 	U16 ackstatus;
+diff --git a/cdx-5.03.1/control_bridge.h b/cdx-5.03.1/control_bridge.h
+index fff7f81..3f7de7f 100644
+--- a/cdx-5.03.1/control_bridge.h
++++ b/cdx-5.03.1/control_bridge.h
+@@ -143,4 +143,6 @@ int delete_l2br_entry_classif_table(struct L2Flow_entry *entry);
+ int rx_Get_Next_Hash_L2FlowEntry(PL2BridgeL2FlowEntryCommand pL2FlowCmd, int reset_action);
+ int add_l2flow_to_hw(struct L2Flow_entry *entry);
+ cdx_timer_t br_get_time_remaining(struct L2Flow_entry *pEntry);
++int bridge_interface_register(uint8_t *name, U16 phy_port_id);
++int bridge_interface_deregister(U16 phy_port_id);
+ #endif /* _CONTROL_BRIDGE_H_ */
+diff --git a/cdx-5.03.1/control_ipsec.c b/cdx-5.03.1/control_ipsec.c
+index 6b49b1f..85b8af1 100644
+--- a/cdx-5.03.1/control_ipsec.c
++++ b/cdx-5.03.1/control_ipsec.c
+@@ -349,7 +349,7 @@ static int M_ipsec_sa_set_cipher_key(PSAEntry sa, U16 key_alg, U16 key_bits, U8*
+ 	return 0;
+ }
+ 
+-void* M_ipsec_sa_cache_create(U32 *saddr,U32 *daddr, U32 spi, U8 proto, U8 family, U16 handle, U8 replay, U8 esn, U16 mtu, U16 dev_mtu, U8 dir)
++static void *M_ipsec_sa_cache_create(U32 *saddr, U32 *daddr, U32 spi, U8 proto, U8 family, U16 handle, U8 replay, U8 esn, U16 mtu, U16 dev_mtu, U8 dir)
+ {
+ 	U32     hash_key_sa;
+ 	PSAEntry sa;
+diff --git a/cdx-5.03.1/control_ipsec.h b/cdx-5.03.1/control_ipsec.h
+index 0295e39..35098ee 100644
+--- a/cdx-5.03.1/control_ipsec.h
++++ b/cdx-5.03.1/control_ipsec.h
+@@ -231,8 +231,6 @@ typedef struct _tDMCommand {
+ 			** returns address being displayed in response */
+ } DMCommand, *PDMCommand;
+ 
+-__inline  void read_random(unsigned char *p_result, unsigned int rlen);
+-
+ /****** IPSEC related common structures *****/
+ static __inline U16 HASH_SA(U32 *Daddr, U32 spi, U16 Proto, U8 family)
+ {
+@@ -516,6 +514,9 @@ void M_ipsec_inbound_entry(void);
+ void M_ipsec_inbound_callback(void);
+ void sa_remove_from_list_fqid(PSAEntry pSA);
+ void sa_free(PSAEntry pSA);
++#ifdef UNIQUE_IPSEC_CP_FQID
++struct net_device *get_netdev_of_SA_by_fqid(uint32_t fqid, uint16_t *sagd_pkt);
++#endif
+ 
+ 
+ BOOL ipsec_init(void);
+@@ -525,4 +526,10 @@ void ipsec_standalone_init(void);
+ int IPsec_get_SEC_failure_stats(uint16_t *pcmd, uint16_t cmd_len);
+ int IPsec_reset_SEC_failure_stats(uint16_t *pcmd, uint16_t cmd_len);
+ 
++/* Query functions */
++int IPsec_Get_Next_SAEntry(PSAQueryCommand pSAQueryCmd, int reset_action);
++struct _tStatIpsecEntryResponse;
++int stat_Get_Next_SAEntry(struct _tStatIpsecEntryResponse *pSACmd, int reset_action);
++void reset_stats_of_sa(PSAEntry pEntry);
++
+ #endif
+diff --git a/cdx-5.03.1/control_ipv4.c b/cdx-5.03.1/control_ipv4.c
+index ec3f347..f9b5b2e 100644
+--- a/cdx-5.03.1/control_ipv4.c
++++ b/cdx-5.03.1/control_ipv4.c
+@@ -229,7 +229,7 @@ void ct_remove(PCtEntry pEntry_orig)
+  *
+  * @param pEntry		pointer to the software conntrack
+  */
+-void ct_update_one(PCtEntry pEntry)
++static void ct_update_one(PCtEntry pEntry)
+ {
+ 	// TODO: for now, only supporting adding new entry -- need to support changes
+ 	struct hw_ct *ct = pEntry->ct;
+@@ -535,7 +535,7 @@ PCtEntry IPv4_find_ctentry(U32 saddr, U32 daddr, U16 sport, U16 dport, U8 proto)
+ 	return NULL;
+ }
+ 
+-int IPv4_HandleIP_CONNTRACK(U16 *p, U16 Length)
++static int IPv4_HandleIP_CONNTRACK(U16 *p, U16 Length)
+ {
+ 	PCtEntry pEntry_orig = NULL, pEntry_rep = NULL;
+ 	PCT_PAIR ppair;
+@@ -951,7 +951,7 @@ int IPv4_HandleIP_CONNTRACK(U16 *p, U16 Length)
+ }
+ 
+ 
+-int IP_HandleIP_ROUTE_RESOLVE (U16 *p, U16 Length)
++static int IP_HandleIP_ROUTE_RESOLVE(U16 *p, U16 Length)
+ {
+ 	PRouteEntry pRtEntry;
+ 	RtCommand RtCmd;
+@@ -1090,8 +1090,7 @@ int IP_HandleIP_ROUTE_RESOLVE (U16 *p, U16 Length)
+ 
+ 		case ACTION_QUERY:
+ 			reset_action = 1;
+-
+-			/* fall through */
++			fallthrough;
+ 
+ 		case ACTION_QUERY_CONT:
+ 			pRtCmd = (PRtCommand)p;
+diff --git a/cdx-5.03.1/control_ipv4.h b/cdx-5.03.1/control_ipv4.h
+index 313ea53..243a601 100644
+--- a/cdx-5.03.1/control_ipv4.h
++++ b/cdx-5.03.1/control_ipv4.h
+@@ -190,7 +190,7 @@ extern U32 class_route_table_base;
+ extern U32 class_route_table_hash_mask;
+ 
+ #define CRCPOLY_BE 0x04c11db7
+-static inline U32 crc32_be(U8 *data)
++static inline U32 cdx_crc32_be(U8 *data)
+ {
+ 	int i, j;
+ 	U32 crc = 0xffffffff;
+@@ -210,7 +210,7 @@ static __inline U32 HASH_CT(U32 Saddr, U32 Daddr, U32 Sport, U32 Dport, U16 Prot
+ 	U32 sum;
+ 
+ 	sum = Saddr ^ htonl(ntohs(Sport));
+-	sum = crc32_be((u8 *)&sum);
++	sum = cdx_crc32_be((u8 *)&sum);
+ 
+ 	sum += ntohl(Daddr);
+ 	sum += Proto;
+@@ -228,7 +228,7 @@ static __inline U32 HASH_CT6(U32 *Saddr, U32 *Daddr, U32 Sport, U32 Dport, U16 P
+ 	for (i = 0; i < 4; i++)
+ 		sum += ntohl(READ_UNALIGNED_INT(Saddr[i]));
+ 	sum = htonl(sum) ^ htonl(ntohs(Sport));
+-	sum = crc32_be((u8 *)&sum);
++	sum = cdx_crc32_be((u8 *)&sum);
+ 
+ 	for (i = 0; i < 4; i++)
+ 		sum += ntohl(READ_UNALIGNED_INT(Daddr[i]));
+diff --git a/cdx-5.03.1/control_ipv6.c b/cdx-5.03.1/control_ipv6.c
+index c93c7ed..542a027 100644
+--- a/cdx-5.03.1/control_ipv6.c
++++ b/cdx-5.03.1/control_ipv6.c
+@@ -192,7 +192,7 @@ static int IPv6_HandleIP_Get_Timeout(U16 * p, U16 Length)
+  *
+  *
+  */
+-int IPv6_handle_CONNTRACK(U16 *p, U16 Length)
++static int IPv6_handle_CONNTRACK(U16 *p, U16 Length)
+ {
+ 	PCtEntry pEntry_orig = NULL, pEntry_rep = NULL;
+ 	PCT_PAIR ppair;
+@@ -525,7 +525,7 @@ int IPv6_handle_CONNTRACK(U16 *p, U16 Length)
+ 
+ 		case ACTION_QUERY:
+ 			reset_action = 1;
+-			/* fall through */
++			fallthrough;
+ 
+ 		case ACTION_QUERY_CONT:
+ 			{
+@@ -553,7 +553,7 @@ int IPv6_handle_CONNTRACK(U16 *p, U16 Length)
+  *
+  *
+  */
+-U16 M_ipv6_cmdproc(U16 cmd_code, U16 cmd_len, U16 *pcmd)
++static U16 M_ipv6_cmdproc(U16 cmd_code, U16 cmd_len, U16 *pcmd)
+ {
+ 	U16 rc;
+ 	U16 querySize = 0;
+diff --git a/cdx-5.03.1/control_natpt.c b/cdx-5.03.1/control_natpt.c
+index f08dc52..82c689a 100644
+--- a/cdx-5.03.1/control_natpt.c
++++ b/cdx-5.03.1/control_natpt.c
+@@ -13,7 +13,7 @@
+ #include "control_natpt.h"
+ 
+ 
+-int NATPT_Open(U16 *p, U16 Length)
++static int NATPT_Open(U16 *p, U16 Length)
+ {
+ 	NATPTOpenCommand OpenCmd;
+ 	PSockEntry pSocketA;
+@@ -95,7 +95,7 @@ int NATPT_Open(U16 *p, U16 Length)
+ }
+ 
+ 
+-int NATPT_Close(U16 *p, U16 Length)
++static int NATPT_Close(U16 *p, U16 Length)
+ {
+ 	NATPTCloseCommand CloseCmd;
+ 	PCtEntry pEntry_6to4, pEntry_4to6;
+@@ -128,7 +128,7 @@ int NATPT_Close(U16 *p, U16 Length)
+ }
+ 
+ 
+-int NATPT_Query(U16 *p, U16 Length)
++static int NATPT_Query(U16 *p, U16 Length)
+ {
+ 	NATPTQueryCommand QueryCmd;
+ 	PNATPTQueryResponse pResp;
+@@ -181,7 +181,7 @@ int NATPT_Query(U16 *p, U16 Length)
+ }
+ 
+ 
+-U16 M_natpt_cmdproc(U16 cmd_code, U16 cmd_len, U16 *pcmd)
++static U16 M_natpt_cmdproc(U16 cmd_code, U16 cmd_len, U16 *pcmd)
+ {
+ 	U16 cmdrc;
+ 	U16 cmdlen = 2;
+diff --git a/cdx-5.03.1/control_qm.c b/cdx-5.03.1/control_qm.c
+index ac89992..8a13936 100755
+--- a/cdx-5.03.1/control_qm.c
++++ b/cdx-5.03.1/control_qm.c
+@@ -37,7 +37,7 @@ QM_context_ctl gQMCtx[MAX_PHY_PORTS];
+ 
+ static U16 M_qm_cmdproc(U16 cmd_code, U16 cmd_len, U16 *p)
+ {
+-#ifdef ENABLE_EGRESS_QOS	
++#if defined(ENABLE_EGRESS_QOS) || defined(ENABLE_INGRESS_QOS)
+ 	struct tQM_context_ctl *qm_ctx;
+ 	struct cdx_port_info *port_info;
+ #endif
+diff --git a/cdx-5.03.1/control_rtp_relay.c b/cdx-5.03.1/control_rtp_relay.c
+index 3d72eb3..dd17cb3 100644
+--- a/cdx-5.03.1/control_rtp_relay.c
++++ b/cdx-5.03.1/control_rtp_relay.c
+@@ -111,7 +111,7 @@ struct _thw_RTPinfo * cdx_rtp_alloc_muram_rtpinfo(void)
+ 	return rtp_info;
+ }
+ 
+-void cdx_muram_rtpinfo_free(void *hw_flow)
++static void cdx_muram_rtpinfo_free(void *hw_flow)
+ {
+ 	t_Handle h_FmMuram;
+ 	uint64_t physicalMuramBase;
+@@ -399,7 +399,7 @@ static int RTP_change_flow(PRTPflow pFlow, U16 ingress_socketID, U16 egress_sock
+ }
+ 
+ 
+-int rtp_flow_reset(void)
++static int rtp_flow_reset(void)
+ {
+ 	PRTPflow pEntry;
+ 	struct slist_entry *entry;
+@@ -465,7 +465,7 @@ static void RTP_release_call(PRTPCall pCall)
+ 	}
+ }
+ 
+-int rtp_call_reset(void)
++static int rtp_call_reset(void)
+ {
+ 	PRTPCall pEntry;
+ 	struct slist_entry *entry;
+diff --git a/cdx-5.03.1/control_stat.c b/cdx-5.03.1/control_stat.c
+index d534909..f86cacf 100644
+--- a/cdx-5.03.1/control_stat.c
++++ b/cdx-5.03.1/control_stat.c
+@@ -187,7 +187,7 @@ static U16 stats_connection(U16 action, PStatConnResponse statConnRsp, U16 *ackl
+ 
+ U32 stats_bitmask_enable_g = STAT_IPSEC_BITMASK;
+ 
+-void stat_ct_flow_get(struct hw_ct *ct, U64 *pkts, U64 *bytes, int do_reset)
++static void stat_ct_flow_get(struct hw_ct *ct, U64 *pkts, U64 *bytes, int do_reset)
+ {
+ 	if (!ct)
+ 	{
+@@ -205,7 +205,7 @@ void stat_ct_flow_get(struct hw_ct *ct, U64 *pkts, U64 *bytes, int do_reset)
+ 	}
+ }
+ 
+-void stat_ct_flow_reset(struct hw_ct *ct)
++static void stat_ct_flow_reset(struct hw_ct *ct)
+ {
+ 	U64 pkts;
+ 	U64 bytes;
+diff --git a/cdx-5.03.1/control_tunnel.c b/cdx-5.03.1/control_tunnel.c
+index 15a4fe2..fd65839 100644
+--- a/cdx-5.03.1/control_tunnel.c
++++ b/cdx-5.03.1/control_tunnel.c
+@@ -533,7 +533,14 @@ static int TNL_handle_IPSEC(U16 *p, U16 Length)
+ #endif
+ 
+ 
+-void TNL_set_id_conv_seed( sam_port_info_t * sp, U8 IdConvEnable, PTnlEntry t )
++/**
++ * TNL_handle_IdConv_psid
++ *
++ *
++ */
++
++#ifdef CDX_TODO_TUNNEL
++static void TNL_set_id_conv_seed( sam_port_info_t * sp, U8 IdConvEnable, PTnlEntry t )
+ {
+ 	t->sam_id_conv_enable = (IdConvEnable) ? SAM_ID_CONV_PSID: SAM_ID_CONV_NONE;
+ 	if(!t->sam_id_conv_enable)
+@@ -554,15 +561,6 @@ void TNL_set_id_conv_seed( sam_port_info_t * sp, U8 IdConvEnable, PTnlEntry t )
+ 
+ 	return;
+ }
+-
+-
+-/**
+- * TNL_handle_IdConv_psid
+- *
+- *
+- */
+-
+-#ifdef CDX_TODO_TUNNEL
+ static int TNL_handle_IdConv_psid(U16 *p, U16 Length)
+ {
+ 	TNLCommand_IdConvPsid cmd;
+diff --git a/cdx-5.03.1/control_vlan.c b/cdx-5.03.1/control_vlan.c
+index 3c149a8..07363b2 100644
+--- a/cdx-5.03.1/control_vlan.c
++++ b/cdx-5.03.1/control_vlan.c
+@@ -184,7 +184,7 @@ found:
+ 
+ 		case ACTION_QUERY:
+ 			reset_action = 1;
+-			/* fall through */
++			fallthrough;
+ 		case ACTION_QUERY_CONT:
+ 			{
+ 				PVlanCommand pVlan = (VlanCommand*)p;
+diff --git a/cdx-5.03.1/control_wifi.c b/cdx-5.03.1/control_wifi.c
+index a52ddd4..a202704 100755
+--- a/cdx-5.03.1/control_wifi.c
++++ b/cdx-5.03.1/control_wifi.c
+@@ -172,7 +172,7 @@ static U16 M_wifi_rx_cmdproc(U16 cmd_code, U16 cmd_len, U16 *pcmd)
+ 
+ 
+ 
+-void M_wifi_init_rx(void)
++static void M_wifi_init_rx(void)
+ {
+ 	int i;
+ 	struct physical_port	*port;
+diff --git a/cdx-5.03.1/devman.c b/cdx-5.03.1/devman.c
+index d073138..9fc0f42 100755
+--- a/cdx-5.03.1/devman.c
++++ b/cdx-5.03.1/devman.c
+@@ -48,6 +48,7 @@
+ #include "dpa_wifi.h"
+ #include "cdx_ceetm_gdef.h" 
+ #include "cdx_defs.h"
++#include "devman.h"
+ #include "control_tx.h"
+ #include "procfs.h"
+ 
+@@ -2001,8 +2002,10 @@ int dpa_add_eth_if(char *name, struct _itf *itf, struct _itf *phys_itf)
+ 	priv = netdev_priv(iface_info->eth_info.net_dev);
+ 	mac_dev = priv->mac_dev;
+ 	iface_info->eth_info.hardwarePortId = fm_port_get_hwid(mac_dev->port_dev[RX]);
++#ifdef CDX_DPA_DEBUG
+ 	printk("%s::port %s hwid %d\n", __FUNCTION__,
+ 			iface_info->name, iface_info->eth_info.hardwarePortId);
++#endif
+ #ifdef INCLUDE_ETHER_IFSTATS
+ 	if (alloc_iface_stats(itf->type, iface_info) != SUCCESS) {
+ 		DPA_ERROR("%s:: alloc_iface_stats failed\n", __FUNCTION__);
+diff --git a/cdx-5.03.1/devman.h b/cdx-5.03.1/devman.h
+index 9ff02ef..1f3daa2 100644
+--- a/cdx-5.03.1/devman.h
++++ b/cdx-5.03.1/devman.h
+@@ -64,3 +64,10 @@ void *create_ddr_and_copy_from_muram(void *muramptr, void **ddrptr, U32 size);
+ void copy_ddr_to_muram_and_free_ddr(void *muramptr, void **ddrptr, U32 size);
+ struct dpa_bp* get_ipsec_bp(void);
+ struct dpa_bp* get_frag_bp(void);
++int cdx_check_rx_iface_type_vlan(struct _itf *input_itf);
++void dpa_update_timestamp(uint32_t ts);
++struct dpa_priv_s* get_eth_priv(unsigned char* name);
++int dpa_get_l2l3_info_by_itf_id(uint32_t itf_id, struct dpa_l2hdr_info *l2_info,
++		struct dpa_l3hdr_info *l3_info, uint32_t *dir_in);
++int insert_entry_in_pppoe_table(int fm_idx, int port_idx,
++		uint8_t *ac_mac_addr, uint32_t sessid, uint32_t ppp_pid);
+diff --git a/cdx-5.03.1/devoh.c b/cdx-5.03.1/devoh.c
+index 28a3e61..170be2b 100755
+--- a/cdx-5.03.1/devoh.c
++++ b/cdx-5.03.1/devoh.c
+@@ -602,71 +602,10 @@ int cdxdrv_create_of_fqs(struct dpa_iface_info *dpa_oh_iface_info)
+ 		}
+ 	} 		
+ 	offline_port_info[iface_info->fman_idx][iface_info->port_idx].flags |=
+-		(OF_FQID_VALID | PORT_VALID); 
++		(OF_FQID_VALID | PORT_VALID);
+ 	return 0;
+ }
+ 
+-void add_oh_port_tbl_info(uint32_t fm_index, uint32_t port_idx, void * td,
+-		uint32_t type)
+-{
+-	uint32_t ii;
+-
+-	for (ii = 0; ii < MAX_OF_PORTS; ii++) {
+-		if (port_idx & (1 << ii)) {
+-#ifdef DEVOH_DEBUG
+-			DPA_INFO("%s:;adding tab idx %p for fman %d, port %d\n", 
+-					__FUNCTION__, td, fm_index, ii);
+-#endif
+-			offline_port_info[fm_index][ii].td[type] = td;
+-			offline_port_info[fm_index][ii].flags |= (1 << type);
+-		}
+-	}
+-}
+-
+-#define TEST_FMAN_INDEX 0
+-#define CDXPORT_INFRA_TEST 1
+-int cdx_ofport_infra_test(void)
+-{
+-#ifdef CDXPORT_INFRA_TEST
+-	uint32_t channel;
+-	void * ofport_td[MAX_MATCH_TABLES];
+-	int handle;
+-	uint32_t ii;
+-	uint32_t jj;
+-	uint32_t type;
+-
+-
+-	for (jj = 0; jj < 2; jj++) {
+-		/* Get OH port instance */
+-		if (!jj)
+-			type = PORT_TYPE_WIFI;
+-		else
+-			type = PORT_TYPE_IPSEC;
+-		handle = alloc_offline_port(TEST_FMAN_INDEX, type, NULL, NULL);
+-		if (handle < 0)
+-		{
+-			DPA_ERROR("%s: Error in allocating OH port for type %x\n",
+-					__FUNCTION__, type);
+-			return FAILURE;
+-		}
+-		if (get_ofport_info(TEST_FMAN_INDEX, handle, &channel,
+-					&ofport_td[0])) {
+-			DPA_ERROR("%s: Error in getting OH port info for type %x\n",
+-					__FUNCTION__, type);
+-			return FAILURE;
+-		}
+-		DPA_INFO("%s: allocated oh port for type %x - handle %d, channel %x\n",
+-				__FUNCTION__, type, handle, channel);
+-		for (ii = 0; ii < MAX_MATCH_TABLES; ii++) {
+-			if (ofport_td[ii] != NULL )
+-				DPA_INFO("table type %d, td %p\n", ii, ofport_td[ii]);
+-		}
+-		release_offline_port(TEST_FMAN_INDEX, handle);
+-	}
+-#endif
+-	return SUCCESS;
+-}
+-
+ int ohport_set_ofne(uint32_t handle, uint32_t nia_val)
+ {
+ 	uint32_t fm_idx;
+diff --git a/cdx-5.03.1/dpa_cfg.c b/cdx-5.03.1/dpa_cfg.c
+index cd5fe24..8b7052d 100755
+--- a/cdx-5.03.1/dpa_cfg.c
++++ b/cdx-5.03.1/dpa_cfg.c
+@@ -231,7 +231,7 @@ void *get_ethdist_info_by_fman_params(struct cdx_fman_info *finfo)
+ 	return NULL;
+ }
+ #else
+-void *get_dist_info_by_fman_params(struct cdx_fman_info *finfo, uint32_t table_type)
++static void *get_dist_info_by_fman_params(struct cdx_fman_info *finfo, uint32_t table_type)
+ {
+ 	struct cdx_port_info *port_info;
+ 	struct cdx_dist_info *dist;
+@@ -525,9 +525,8 @@ static int cdxdrv_set_miss_action(uint32_t fm_index)
+ 				return -1;
+ 			}
+ 			miss_engine_params.nextEngine = e_FM_PCD_KG;
+-#if 1//def DPA_CFG_DEBUG
+-			//DPA_INFO("%s::changing miss action table %s as KG scheme %p\n",
+-			printk("%s::changing miss action table %s as KG scheme %p\n",
++#ifdef CDX_DPA_DEBUG
++			DPA_INFO("%s::changing miss action table %s as KG scheme %p\n",
+ 					__FUNCTION__, tbl_info->name,
+ 					miss_engine_params.params.kgParams.h_DirectScheme);
+ #endif
+@@ -539,9 +538,8 @@ static int cdxdrv_set_miss_action(uint32_t fm_index)
+ 			//get policer profile id for CP traffic
+ 			miss_engine_params.params.plcrParams.newRelativeProfileId =
+ 				CDX_EXPT_ETH_RATELIMIT;
+-#if 1//def DPA_CFG_DEBUG
+-			//DPA_INFO("%s::changing miss action table %s as policer, profile %d\n",
+-			printk("%s::changing miss action table %s as policer, profile %d\n",
++#ifdef CDX_DPA_DEBUG
++			DPA_INFO("%s::changing miss action table %s as policer, profile %d\n",
+ 					__FUNCTION__, tbl_info->name,
+ 					miss_engine_params.params.plcrParams.newRelativeProfileId);
+ #endif
+@@ -566,8 +564,8 @@ static int cdxdrv_get_fman_handles(struct cdx_fman_info *finfo)
+ 	struct file *fm_pcd_file;
+ 	t_LnxWrpFmDev *fm_wrapper_dev;
+ 
+-	//get handle	
+-	fm_pcd_file = fcheck((unsigned long)finfo->pcd_handle);
++	//get handle - use fget() instead of fcheck() for kernel 5.7+
++	fm_pcd_file = fget((unsigned long)finfo->pcd_handle);
+ 	if (!fm_pcd_file) {
+ 		DPA_ERROR("%s::PCD handle 0x%p trans failed.\n",
+ 				__FUNCTION__, finfo->pcd_handle);
+@@ -578,19 +576,22 @@ static int cdxdrv_get_fman_handles(struct cdx_fman_info *finfo)
+ 	if (!fm_wrapper_dev) {
+ 		DPA_ERROR("%s::null wrap dev for pcd 0x%p\n",
+ 				__FUNCTION__, finfo->pcd_handle);
++		fput(fm_pcd_file);
+ 		return -1;
+ 	}
+ 	if (!fm_wrapper_dev->h_PcdDev) {
+ 		DPA_ERROR("%s::null pcd dev for pcd 0x%p\n",
+ 				__FUNCTION__, finfo->pcd_handle);
++		fput(fm_pcd_file);
+ 		return -1;
+ 	}
+ 	//get handle from dev
+ 	finfo->pcd_handle = fm_wrapper_dev->h_PcdDev;
+ 	finfo->fm_handle = fm_wrapper_dev->h_Dev;
+-	finfo->muram_handle = fm_wrapper_dev->h_MuramDev; 
+-	finfo->physicalMuramBase = fm_wrapper_dev->fmMuramPhysBaseAddr; 
+-	finfo->fmMuramMemSize = fm_wrapper_dev->fmMuramMemSize; 	
++	finfo->muram_handle = fm_wrapper_dev->h_MuramDev;
++	finfo->physicalMuramBase = fm_wrapper_dev->fmMuramPhysBaseAddr;
++	finfo->fmMuramMemSize = fm_wrapper_dev->fmMuramMemSize;
++	fput(fm_pcd_file);
+ 	return 0;
+ }
+ 
+@@ -954,11 +955,6 @@ int dpa_get_wan_port(uint32_t fm_index, uint32_t *port_idx)
+ 	return FAILURE;
+ }
+ 
+-uint32_t dpa_get_fm_timestamp(void *fm_ctx)
+-{
+-	return JIFFIES32;
+-}
+-
+ void *dpa_get_fm_ctx(uint32_t fm_idx)
+ {
+ 	if (fm_idx < num_fmans)
+diff --git a/cdx-5.03.1/dpa_control_mc.c b/cdx-5.03.1/dpa_control_mc.c
+index 72f0fc0..22f4782 100644
+--- a/cdx-5.03.1/dpa_control_mc.c
++++ b/cdx-5.03.1/dpa_control_mc.c
+@@ -121,7 +121,7 @@ int GetMcastGrpId( struct mcast_group_info *pMcastGrpInfo,
+ 	return -1;
+ }
+ 
+-int GetNewMcastGrpId(uint8_t mctype)
++static int GetNewMcastGrpId(uint8_t mctype)
+ {
+ 	unsigned int ii;
+ 
+@@ -150,7 +150,7 @@ int GetNewMcastGrpId(uint8_t mctype)
+ 	return -1;
+ }
+ 
+-void FreeMcastGrpID(uint8_t mctype, int grp_id)
++static void FreeMcastGrpID(uint8_t mctype, int grp_id)
+ {
+ 	if (mctype == 0)
+ 	{
+@@ -224,7 +224,7 @@ struct mcast_group_info* GetMcastGrp( struct mcast_group_info *pMcastGrpInfo)
+ 	return NULL;
+ }
+ 
+-int Cdx_GetMcastMemberId(char *pIn_Info, struct mcast_group_info *pMcastGrpInfo)
++static int Cdx_GetMcastMemberId(char *pIn_Info, struct mcast_group_info *pMcastGrpInfo)
+ {
+ 	int ii;
+ 	struct mcast_group_member *pMember;
+@@ -266,7 +266,7 @@ int Cdx_GetMcastMemberId(char *pIn_Info, struct mcast_group_info *pMcastGrpInfo)
+ }
+ 
+ 
+-int Cdx_GetMcastMemberFreeIndex(struct mcast_group_info *pMcastGrpInfo)
++static int Cdx_GetMcastMemberFreeIndex(struct mcast_group_info *pMcastGrpInfo)
+ {
+ 	int ii;
+ 	struct mcast_group_member *pMember;
+@@ -307,7 +307,7 @@ int Cdx_GetMcastMemberFreeIndex(struct mcast_group_info *pMcastGrpInfo)
+ 
+ 
+ int cdx_free_exthash_mcast_members(struct mcast_group_info *pMcastGrpInfo);
+-int cdx_add_mcast_table_entry(void *mcast_cmd,
++static int cdx_add_mcast_table_entry(void *mcast_cmd,
+ 		struct mcast_group_info *pMcastGrpInfo)
+ {
+ 	PMC4Command mcast4_group;
+@@ -420,7 +420,7 @@ err_ret:
+ }
+ 
+ 
+-int cdx_create_mcast_group(void *mcast_cmd, int bIsIPv6)
++static int cdx_create_mcast_group(void *mcast_cmd, int bIsIPv6)
+ {
+ 	PMC4Command mcast4_group;
+ 	PMC6Command mcast6_group;
+@@ -1010,7 +1010,7 @@ static int MC6_Command_Handler(PMC6Command cmd)
+ 			break;
+ 		case ACTION_QUERY:
+ 			reset_action = 1;
+-			/* fall through */
++			fallthrough;
+ 		case ACTION_QUERY_CONT:
+ 			rc = MC6_Get_Next_Hash_Entry(cmd, reset_action);
+ 			if(rc == NO_ERR)
+@@ -1074,7 +1074,7 @@ static int MC4_Command_Handler(PMC4Command cmd)
+ 			break;
+ 		case ACTION_QUERY:
+ 			reset_action = 1;
+-			/* fall through */
++			fallthrough;
+ 		case ACTION_QUERY_CONT:
+ 			rc = MC4_Get_Next_Hash_Entry(cmd, reset_action);
+ 			if(rc == NO_ERR)
+diff --git a/cdx-5.03.1/dpa_control_mc.h b/cdx-5.03.1/dpa_control_mc.h
+index f678ec2..0723020 100644
+--- a/cdx-5.03.1/dpa_control_mc.h
++++ b/cdx-5.03.1/dpa_control_mc.h
+@@ -117,9 +117,17 @@ int MC6_Get_Next_Hash_Entry(PMC6Command pMC6Cmd, int reset_action);
+ int cdx_update_mcast_group(void *mcast_cmd, int bIsIPv6);
+ 
+ struct en_exthash_tbl_entry* create_exthash_entry4mcast_member(RouteEntry *pRtEntry,
+-	struct ins_entry_info *pInsEntryInfo, MC4Output	*pListener, struct en_exthash_tbl_entry* prev_tbl_entry, 
++	struct ins_entry_info *pInsEntryInfo, MC4Output	*pListener, struct en_exthash_tbl_entry* prev_tbl_entry,
+ 	uint32_t tbl_type);
+ 
++/* Module init/exit functions */
++int mc4_init(void);
++int mc6_init(void);
++void mc4_exit(void);
++void mc6_exit(void);
++U16 M_mc4_cmdproc(U16 cmd_code, U16 cmd_len, U16 *pcmd);
++U16 M_mc6_cmdproc(U16 cmd_code, U16 cmd_len, U16 *pcmd);
++
+ static inline u32 HASH_MC4(u32 destaddr)  // pass in IPv4 dest addr
+ {
+   u32 hash;
+diff --git a/cdx-5.03.1/dpa_ipsec.c b/cdx-5.03.1/dpa_ipsec.c
+index 8bafc26..c368078 100644
+--- a/cdx-5.03.1/dpa_ipsec.c
++++ b/cdx-5.03.1/dpa_ipsec.c
+@@ -56,10 +56,14 @@
+ {\
+         printk(KERN_CRIT fmt, ## __VA_ARGS__);\
+ }
++#ifdef CDX_DPA_DEBUG
+ #define DPAIPSEC_INFO(fmt, ...)\
+ {\
+         printk(KERN_INFO fmt, ## __VA_ARGS__);\
+ }
++#else
++#define DPAIPSEC_INFO(fmt, ...)
++#endif
+ 
+ #define MAX_IPSEC_SA_INFO	16
+ #define IPSEC_WQ_ID		2
+@@ -126,6 +130,13 @@ static struct ipsec_info ipsecinfo;
+ extern struct xfrm_state *xfrm_state_lookup_byhandle(struct net *net, u16 handle);
+ #endif
+ 
++/* Forward declarations for internal functions */
++static int cdx_find_ipsec_pcd_fqinfo(int fqid, struct ipsec_info *info);
++static void ipsec_addfq_to_exceptionfq_list(struct dpa_fq *frameq,
++		struct ipsec_info *info);
++static void ipsec_delfq_from_exceptionfq_list(uint32_t fqid,
++		struct ipsec_info *info);
++
+ struct dpa_bp* get_ipsec_bp(void)
+ {
+ 	return (ipsecinfo.ipsec_bp);
+@@ -167,7 +178,7 @@ static void dpa_ipsec_ern_cb(struct qman_portal *qm, struct qman_fq *fq,
+ }
+ 
+ 
+-uint32_t ipsec_exception_pkt_cnt;
++static uint32_t ipsec_exception_pkt_cnt;
+ void print_ipsec_exception_pkt_cnt(void)
+ {
+ 	printk("%s:: Ipsec offload slow path packet count = %d\n",__func__,ipsec_exception_pkt_cnt);
+@@ -175,7 +186,7 @@ void print_ipsec_exception_pkt_cnt(void)
+ 	ipsec_exception_pkt_cnt= 0;
+ }
+ 
+-void * cdx_get_xfrm_state_of_sa(void *dev, uint16_t handle)
++void *cdx_get_xfrm_state_of_sa(void *dev, uint16_t handle)
+ {
+ 	struct xfrm_state *x;
+ 	struct net_device *netdev = (struct net_device *)dev;
+@@ -217,11 +228,11 @@ static enum qman_cb_dqrr_result ipsec_exception_pkt_handler(struct qman_portal *
+ 	unsigned short sagd_pkt;
+ 	struct sec_path *sp;
+ 	struct xfrm_state *x;
+-	struct timespec ktime;
++	struct timespec64 ktime;
+ #ifdef DPA_IPSEC_DEBUG1
+ 	unsigned short sagd; 
+ #endif
+-	int use_gro;
++	bool use_gro;
+ 	int *percpu_bp_cnt;
+ 	unsigned short protocol;
+ 	int no_l2_itf_dev;
+@@ -288,7 +299,7 @@ static enum qman_cb_dqrr_result ipsec_exception_pkt_handler(struct qman_portal *
+ 		goto rel_fd;
+ 	}
+ 
+-	use_gro = net_dev->features & NETIF_F_GRO;
++	use_gro = !!(net_dev->features & NETIF_F_GRO);
+ 	if ((x = xfrm_state_lookup_byhandle(dev_net(net_dev), sagd_pkt )) == NULL)
+ 	{
+ #ifdef DPA_IPSEC_DEBUG
+@@ -312,7 +323,7 @@ static enum qman_cb_dqrr_result ipsec_exception_pkt_handler(struct qman_portal *
+ 
+ 	no_l2_itf_dev = vwd_is_no_l2_itf_device(net_dev);
+ 	ipsec_exception_pkt_cnt++;
+-	percpu_bp_cnt =	raw_cpu_ptr(dpa_bp->percpu_count);
++	percpu_bp_cnt =	raw_cpu_ptr(priv->percpu_count);
+ 	/*  When V6 SA is applied to v4 packet and vice versa, since ether header is
+ 	 *  copied from input packet, it will be wrong. Below logic is added just
+ 	 *  make the required correction in this case.
+@@ -339,9 +350,9 @@ static enum qman_cb_dqrr_result ipsec_exception_pkt_handler(struct qman_portal *
+ #endif
+ 
+ 	if (likely(dq->fd.format == qm_fd_contig)) {
+-		skb = contig_fd_to_skb(priv, &dq->fd, &use_gro);
++		skb = contig_fd_to_skb(priv, &dq->fd, &use_gro, false);
+ 	} else {
+-		skb = sg_fd_to_skb(priv, &dq->fd, &use_gro, percpu_bp_cnt);
++		skb = sg_fd_to_skb(priv, &dq->fd, &use_gro, percpu_bp_cnt, false);
+ 		percpu_priv->rx_sg++;
+ 	}
+ 
+@@ -384,7 +395,7 @@ static enum qman_cb_dqrr_result ipsec_exception_pkt_handler(struct qman_portal *
+ 
+ 	if (!x->curlft.use_time)
+ 	{
+-		getnstimeofday(&ktime);
++		ktime_get_real_ts64(&ktime);
+ 		x->curlft.use_time = (unsigned long)ktime.tv_sec;
+ 	}
+ 	sp->len = 1;
+@@ -401,11 +412,7 @@ static enum qman_cb_dqrr_result ipsec_exception_pkt_handler(struct qman_portal *
+ 
+ 		np->p = qm;
+ 		gro_result = napi_gro_receive(&np->napi, skb);
+-		/* If frame is dropped by the stack, rx_dropped counter is
+-		 * incremented automatically, so no need for us to update it
+-		 */
+-		if (unlikely(gro_result == GRO_DROP))
+-			goto pkt_drop;
++		(void)gro_result; /* Result no longer checked - GRO_DROP removed in kernel 6.12 */
+ 
+ 	}
+ 	else if ( (netif_receive_skb(skb) == NET_RX_DROP)) /* (netif_rx(skb) != NET_RX_SUCCESS) */
+@@ -424,7 +431,7 @@ rel_fd:
+ 
+ #define PORTID_SHIFT_VAL 8
+ 
+-int cdx_find_ipsec_pcd_fqinfo(int fqid, struct ipsec_info *info)
++static int cdx_find_ipsec_pcd_fqinfo(int fqid, struct ipsec_info *info)
+ {
+ 	struct dpa_fq *list = info->ipsec_exception_fq;
+ 	while (list)
+@@ -436,14 +443,14 @@ int cdx_find_ipsec_pcd_fqinfo(int fqid, struct ipsec_info *info)
+ 	return -1;
+ }
+ 
+-void ipsec_addfq_to_exceptionfq_list(struct dpa_fq *frameq,
++static void ipsec_addfq_to_exceptionfq_list(struct dpa_fq *frameq,
+ 		struct ipsec_info *info)
+ {
+ 	frameq->list.next = (struct list_head *)info->ipsec_exception_fq;
+ 	info->ipsec_exception_fq = frameq;
+ }
+ 
+-void ipsec_delfq_from_exceptionfq_list(uint32_t fqid,
++static void ipsec_delfq_from_exceptionfq_list(uint32_t fqid,
+ 		struct ipsec_info *info)
+ {
+ 	struct dpa_fq *prev, *list = info->ipsec_exception_fq;
+@@ -1104,10 +1111,8 @@ static int add_ipsec_bpool(struct ipsec_info *info)
+ 			(unsigned long)bp->paddr, bp->vaddr, bp->dev);
+ #endif
+ 	bp->dev = bp_parent->dev;
+-	bp->percpu_count = devm_alloc_percpu(bp->dev, *bp->percpu_count);
+ 	bp->size = IPSEC_BUFSIZE;
+ 	bp->config_count = IPSEC_BUFCOUNT;
+-	bp->seed_cb = dpa_bp_priv_seed;
+ 	bp->free_buf_cb = _dpa_bp_free_pf;
+ 	if (dpa_bp_alloc(bp, bp->dev)) {
+ 		DPAIPSEC_ERROR("%s::dpa_bp_alloc failed for ipsec\n", 
+diff --git a/cdx-5.03.1/dpa_ipsec.h b/cdx-5.03.1/dpa_ipsec.h
+index b8bcd12..8cb6c25 100644
+--- a/cdx-5.03.1/dpa_ipsec.h
++++ b/cdx-5.03.1/dpa_ipsec.h
+@@ -123,5 +123,14 @@ void print_ipsec_offload_pkt_count(void);
+ void display_fq_info(void *handle);
+ int cdx_init_fqid_procfs(void);
+ 
++/* Exception packet handling */
++void print_ipsec_exception_pkt_cnt(void);
++void *cdx_get_xfrm_state_of_sa(void *dev, uint16_t handle);
++void cdx_dpa_ipsec_xfrm_state_dec_ref_cnt(void *xfrm_state);
++
++/* SA frame queue management */
++int cdx_dpa_ipsec_retire_fq(void *handle, int fq_num);
++int cdx_ipsec_sa_fq_check_if_retired_state(void *dpa_ipsecsa_handle, int fq_num);
++
+ #endif
+ 
+diff --git a/cdx-5.03.1/dpa_wifi.c b/cdx-5.03.1/dpa_wifi.c
+index 52162d5..4615db4 100644
+--- a/cdx-5.03.1/dpa_wifi.c
++++ b/cdx-5.03.1/dpa_wifi.c
+@@ -33,6 +33,7 @@
+ #endif
+ 
+ #include "portdefs.h"
++#include "misc.h"
+ #include "dpaa_eth.h"
+ #include "dpaa_eth_common.h"
+ #include "dpa_wifi.h"
+@@ -59,10 +60,14 @@ static DEFINE_PER_CPU(unsigned int, num_tx_done);
+ {\
+         printk(KERN_CRIT fmt, ## __VA_ARGS__);\
+ }
++#ifdef CDX_DPA_DEBUG
+ #define DPAWIFI_INFO(fmt, ...)\
+ {\
+         printk(KERN_INFO fmt, ## __VA_ARGS__);\
+ }
++#else
++#define DPAWIFI_INFO(fmt, ...)
++#endif
+ 
+ #define percpu_var_sum(var, total)\
+ {\
+@@ -117,7 +122,7 @@ static int wifi_rx_dummy_hdlr(struct sk_buff *skb)
+ 	return -1;
+ }
+ 
+-int wifi_rx_fastpath_register(int (*hdlr)(struct sk_buff *skb))
++static int wifi_rx_fastpath_register(int (*hdlr)(struct sk_buff *skb))
+ {
+ 	pr_info("%s:%d VWD Tx function registered\n", __func__, __LINE__ );
+ 	vwd_rx_hdlr = hdlr;
+@@ -125,7 +130,7 @@ int wifi_rx_fastpath_register(int (*hdlr)(struct sk_buff *skb))
+ 	return 0;
+ }
+ 
+-void wifi_rx_fastpath_unregister(void)
++static void wifi_rx_fastpath_unregister(void)
+ {
+ 	pr_info("%s:%d VWD Tx function unregistered\n", __func__, __LINE__ );
+ 	vwd_rx_hdlr = wifi_rx_dummy_hdlr;
+@@ -939,47 +944,6 @@ done:
+ }
+ 
+ 
+-void wifi_release_buf(struct qm_fd *fd)
+-{
+-	dma_addr_t addr;
+-	void *vaddr;
+-	struct sk_buff *skb;
+-	struct sk_buff **skbh;
+-
+-	//get phys address and virt address
+-	addr = qm_fd_addr(fd);
+-	vaddr = phys_to_virt(addr);
+-	//get skb ref from buffer
+-	DPA_READ_SKB_PTR(skb, skbh, vaddr, -1);
+-#ifdef DPA_WIFI_DEBUG
+-	DPAWIFI_INFO("%s::skb:%p addr %llx\n", 
+-			__FUNCTION__, skb, addr);
+-#endif
+-	dev_kfree_skb(skb);
+-}
+-
+-void disp_sglist_data(struct qm_sg_entry *sg_entry)
+-{
+-	void *vaddr;
+-	dma_addr_t addr;
+-	uint32_t len;
+-
+-	while(1) {
+-		addr = qm_sg_addr(sg_entry);
+-		vaddr = ((char *)phys_to_virt(addr) + qm_sg_entry_get_offset(sg_entry));
+-		len = qm_sg_entry_get_len(sg_entry);
+-		len &= 0xffff;
+-		printk("sg_entry %p addr %p len %d:%d pktdata::\n", sg_entry, (void *)addr, len, sg_entry->length);
+-		display_buf(sg_entry, 16);
+-		printk("packet::\n");
+-		display_buf(vaddr, len);
+-		if(qm_sg_entry_get_final(sg_entry))
+-			break;
+-		sg_entry++;
+-	}
+-}
+-
+-
+ static inline struct sk_buff *get_skb_from_sg_list(struct qm_sg_entry *sg_entry)
+ {
+ 
+@@ -1006,7 +970,7 @@ static inline void release_skb_in_sglist(struct qm_sg_entry *sg_entry)
+ 	}
+ }
+ 
+-int __hot vwd_skb_to_contig_fd(struct dpaa_vwd_priv_s *priv,
++static int __hot vwd_skb_to_contig_fd(struct dpaa_vwd_priv_s *priv,
+ 		struct sk_buff *skb, struct qm_fd *fd,
+ 		int* offset)
+ {
+@@ -1189,7 +1153,7 @@ sg0_map_failed:
+  * vwd_skb_to_sg_fd
+  *
+  */
+-int __hot vwd_skb_to_sg_fd(struct dpaa_vwd_priv_s *priv,
++static int __hot vwd_skb_to_sg_fd(struct dpaa_vwd_priv_s *priv,
+ 		struct sk_buff *skb, struct qm_fd *fd)
+ {
+ 	dma_addr_t addr;
+@@ -1944,7 +1908,7 @@ void drain_tx_bp_pool(struct dpa_bp *bp)
+ }
+ 
+ 
+-enum qman_cb_dqrr_result vwd_rx_exception_pkt(struct qman_portal *portal, struct qman_fq *fq,
++static enum qman_cb_dqrr_result vwd_rx_exception_pkt(struct qman_portal *portal, struct qman_fq *fq,
+ 		const struct qm_dqrr_entry *dq)
+ {
+ 
+@@ -1965,7 +1929,7 @@ enum qman_cb_dqrr_result vwd_rx_exception_pkt(struct qman_portal *portal, struct
+ }
+ 
+ 
+-void vwd_send_to_vap(struct sk_buff* skb)
++static void vwd_send_to_vap(struct sk_buff* skb)
+ {
+ 	struct ethhdr *hdr;
+ 
+@@ -2056,12 +2020,12 @@ static int process_vap_rx_fwd_pkt(struct qman_portal *portal, struct qman_fq *fq
+ 		skb = sec_frag_fd_to_vwd_skb(dq, dpa_bp);
+ 		goto process_skb;
+ 	}
+-	/* Check if buffer is from ethernet pool to refill buffer pool 
++	/* Check if buffer is from ethernet pool to refill buffer pool
+ 	   for wifi packets, buffers are skb buffers and they will get freed to kernel */
+ 	if ( (dpa_bp != priv->txconf_bp) && (dpa_bp != priv->tx_bp))
+ 	{
+ 		wifi_skb = 0;
+-		count_ptr = raw_cpu_ptr(dpa_bp->percpu_count);
++		count_ptr = raw_cpu_ptr(vwd.eth_priv->percpu_count);
+ 		if (unlikely(dpaa_eth_refill_bpools(dpa_bp, count_ptr,
+ 				CONFIG_FSL_DPAA_ETH_REFILL_THRESHOLD))) {
+ 			//if we cant refill give this up
+@@ -2903,7 +2867,7 @@ static int vwd_vap_up(struct dpaa_vwd_priv_s *priv, struct vap_desc_s *vap, stru
+ 	return 0;
+ }
+ 
+-int vwd_vap_down(struct dpaa_vwd_priv_s *priv , struct vap_desc_s *vap)
++static int vwd_vap_down(struct dpaa_vwd_priv_s *priv , struct vap_desc_s *vap)
+ {
+ #ifdef DPA_WIFI_DEBUG
+ 	DPAWIFI_INFO("%s:%d\n", __func__, __LINE__);
+@@ -2955,7 +2919,7 @@ static int vwd_vap_configure(struct dpaa_vwd_priv_s *priv, struct vap_desc_s *va
+ /** dpaa_vwd_handle_vap
+  *
+  */
+-int dpaa_vwd_handle_vap( struct dpaa_vwd_priv_s *priv, struct vap_cmd_s *cmd )
++static int dpaa_vwd_handle_vap( struct dpaa_vwd_priv_s *priv, struct vap_cmd_s *cmd )
+ {
+ 	int rc = 0, ii;
+ 	struct vap_desc_s *vap;
+@@ -3350,7 +3314,7 @@ err0:
+ /** dpaa_vwd_down
+  *
+  */
+-int dpaa_vwd_down( struct dpaa_vwd_priv_s *priv )
++static int dpaa_vwd_down( struct dpaa_vwd_priv_s *priv )
+ {
+ 	int ii;
+ 
+@@ -3427,7 +3391,7 @@ int dpaa_vwd_down( struct dpaa_vwd_priv_s *priv )
+  *       -
+  */
+ 
+-int dpaa_vwd_driver_init( struct dpaa_vwd_priv_s *priv )
++static int dpaa_vwd_driver_init( struct dpaa_vwd_priv_s *priv )
+ {
+ 	int rc;
+ 
+@@ -3468,11 +3432,12 @@ int dpaa_vwd_init(void)
+ #ifdef DPA_WIFI_DEBUG
+ 	DPAWIFI_INFO("%s: created vwd device(%d, 0)\n", __func__, priv->vwd_major );
+ #endif
+-	priv->vwd_class = class_create(THIS_MODULE, "vwd");
+-	if (priv->vwd_class == NULL)
++	priv->vwd_class = class_create("vwd");
++	if (IS_ERR(priv->vwd_class))
+ 	{
+ 		DPAWIFI_ERROR("%s class_create failed\n",__func__);
+-		goto err1;	
++		priv->vwd_class = NULL;
++		goto err1;
+ 	}
+ 
+ 	priv->vwd_device = device_create(priv->vwd_class, NULL, MKDEV(priv->vwd_major,0), NULL, "vwd0");
+diff --git a/cdx-5.03.1/dpa_wifi.h b/cdx-5.03.1/dpa_wifi.h
+index e31cfde..399296a 100755
+--- a/cdx-5.03.1/dpa_wifi.h
++++ b/cdx-5.03.1/dpa_wifi.h
+@@ -181,8 +181,10 @@ int vwd_is_no_l2_itf_device(struct net_device* dev);
+ to avoid multiple declarations , declaration added here
+ other header files are added in many files where the struct qman_fq 
+ definition is not found */
+-void cdx_create_fqid_info_in_procfs(uint32_t fqid, 
++void cdx_create_fqid_info_in_procfs(uint32_t fqid,
+ 					struct qman_fq *fq);
+ void cdx_remove_fqid_info_in_procfs(uint32_t fqid);
+ 
++int cdx_wifi_rx_fastpath(struct sk_buff *skb);
++
+ #endif /* _DPAA_HOST_GENERIC_H_ */
+diff --git a/cdx-5.03.1/jenk_hash.h b/cdx-5.03.1/jenk_hash.h
+index d27c105..728e0df 100644
+--- a/cdx-5.03.1/jenk_hash.h
++++ b/cdx-5.03.1/jenk_hash.h
+@@ -69,35 +69,35 @@ static uint32_t compute_jenkins_hash(uint8_t *k, uint32_t length, uint32_t initv
+ 	{
+ 		case 11: 
+ 			c+=((uint32_t)k[10] <<24);
+-            /* fall through */
++            fallthrough;
+ 		case 10: 
+ 			c+=((uint32_t)k[9] <<16);
+-            /* fall through */
++            fallthrough;
+ 		case 9 : 		
+ 			c+=((uint32_t)k[8] <<8);
+-            /* fall through */
++            fallthrough;
+ 		/* the first byte of c is reserved for the length */
+ 		case 8 : 
+ 			b+=((uint32_t)k[7] <<24);
+-            /* fall through */
++            fallthrough;
+ 		case 7 : 
+ 			b+=((uint32_t)k[6] <<16);
+-            /* fall through */
++            fallthrough;
+ 		case 6 : 
+ 			b+=((uint32_t)k[5] <<8);
+-            /* fall through */
++            fallthrough;
+ 		case 5 : 
+ 			b+=k[4];
+-            /* fall through */
++            fallthrough;
+ 		case 4 : 
+ 			a+=((uint32_t)k[3] <<24);
+-            /* fall through */
++            fallthrough;
+ 		case 3 : 
+ 			a+=((uint32_t)k[2] <<16);
+-            /* fall through */
++            fallthrough;
+ 		case 2 : 
+ 			a+=((uint32_t)k[1] <<8);
+-            /* fall through */
++            fallthrough;
+ 		case 1 : 
+ 			a+=k[0];
+ 		/* case 0: nothing left to add */
+diff --git a/cdx-5.03.1/layer2.c b/cdx-5.03.1/layer2.c
+index 6e0a593..9181c13 100644
+--- a/cdx-5.03.1/layer2.c
++++ b/cdx-5.03.1/layer2.c
+@@ -178,7 +178,7 @@ struct _itf *itf_get_phys_itf(struct _itf *itf)
+  *          This function removes an L2 route entry
+  *
+  */
+-int __L2_route_remove(PRouteEntry pRtEntry)
++static int __L2_route_remove(PRouteEntry pRtEntry)
+ {
+ 	U32 hash;
+ 
+diff --git a/cdx-5.03.1/layer2.h b/cdx-5.03.1/layer2.h
+index 07cbfb7..0dd9aa3 100755
+--- a/cdx-5.03.1/layer2.h
++++ b/cdx-5.03.1/layer2.h
+@@ -145,6 +145,8 @@ static __inline void rte_set_mtu(PRouteEntry prte,U16 mtu) {
+   prte->mtu = mtu == 0 ? 0xFFFF : mtu;
+ }
+ 
++/* Debug functions */
++void display_itf(struct _itf *itf);
+ 
+ #endif /* _LAYER2_H_ */
+ 
+diff --git a/cdx-5.03.1/procfs.c b/cdx-5.03.1/procfs.c
+index 9eb65ad..11c2b62 100644
+--- a/cdx-5.03.1/procfs.c
++++ b/cdx-5.03.1/procfs.c
+@@ -10,6 +10,7 @@
+ #ifdef CONFIG_PROC_FS
+ #include "procfs.h"
+ #include <linux/slab.h>
++#include "misc.h"
+ 
+ static struct proc_dir_entry *proc_fqid_dir = NULL ;
+ static struct proc_dir_entry *proc_tx_dir = NULL ;
+@@ -32,7 +33,7 @@ static ssize_t proc_fqid_stats_read(struct file *fp, char __user *buff, size_t s
+ 	if (*ppos)
+ 		return 0;
+ 
+-	node = PDE_DATA(file_inode(fp));
++	node = pde_data(file_inode(fp));
+ 	printk("%s()::%d node %p\n", __func__, __LINE__, node);
+ 
+ 	if (!node || !node->fq)
+@@ -68,9 +69,8 @@ static ssize_t proc_fqid_stats_read(struct file *fp, char __user *buff, size_t s
+ 	return len;
+ }
+ 
+-static const struct file_operations proc_fqid_stats = {
+-         .owner          = THIS_MODULE,
+-         .read           = proc_fqid_stats_read,
++static const struct proc_ops proc_fqid_stats = {
++         .proc_read      = proc_fqid_stats_read,
+ };
+ 
+ 
+@@ -160,9 +160,13 @@ int cdx_create_dir_in_procfs(void **proc_dir_entry, char *name,uint32_t type)
+ 		printk("%s(%d) proc_mkdir failed \n",__FUNCTION__,__LINE__);
+ 		return -1;
+ 	}
++#ifdef CDX_DPA_DEBUG
+ 	printk("/proc/fqid_stats/%s/%s directory created.\n", parent_dir,name);
++#endif
+ 	*proc_dir_entry = (void *)proc_entry;
++#ifdef CDX_DPA_DEBUG
+ 	printk("%s()::%d proc_entry %p proc dir %p\n", __func__, __LINE__, proc_entry, proc_entry->proc_dir);
++#endif
+ 
+ 	return 0;
+ }
+diff --git a/cdx-5.03.1/query_Rx.c b/cdx-5.03.1/query_Rx.c
+index f7b13f9..2e8e22a 100644
+--- a/cdx-5.03.1/query_Rx.c
++++ b/cdx-5.03.1/query_Rx.c
+@@ -26,12 +26,12 @@ static int L2Flow_snapshot_buf_entries = 0;
+ 
+ extern U32 L2Bridge_timeout;
+ 
+-PVOID bridge_snapshot_alloc(U32 size)
++static PVOID bridge_snapshot_alloc(U32 size)
+ {
+ 	return kzalloc(size, GFP_KERNEL);
+ }
+ 
+-void bridge_snapshot_free(PVOID p)
++static void bridge_snapshot_free(PVOID p)
+ {
+ 	kfree(p);
+ }
+diff --git a/cdx-5.03.1/query_ipsec.c b/cdx-5.03.1/query_ipsec.c
+index 7d4c64e..150fec4 100644
+--- a/cdx-5.03.1/query_ipsec.c
++++ b/cdx-5.03.1/query_ipsec.c
+@@ -221,7 +221,7 @@ static int IPsec_SA_Get_Handle_Snapshot(int sa_handle_index, int sa_entries, PSA
+ }
+ 
+ 
+-void __reset_stats_of_sa(PSAEntry pEntry, U32 pkts_processed, U64 bytes_processed)
++static void __reset_stats_of_sa(PSAEntry pEntry, U32 pkts_processed, U64 bytes_processed)
+ {
+ 	pEntry->stats.last_pkts_processed = pkts_processed;
+ 	pEntry->stats.last_bytes_processed = bytes_processed;
+diff --git a/cdx-5.03.1/vsp_cfg.c b/cdx-5.03.1/vsp_cfg.c
+index f8fc1cd..822513e 100644
+--- a/cdx-5.03.1/vsp_cfg.c
++++ b/cdx-5.03.1/vsp_cfg.c
+@@ -25,6 +25,8 @@
+ #include "dpaa_eth_common.h"
+ #include "mac.h"
+ #include "portdefs.h"
++#include "cdx_defs.h"
++#include "misc.h"
+ static struct dpa_bp *gs_dpa_vsp_bp;		/* VSP Buffer pool */
+ 
+ #define DPAA_VSP_MAX_BUF_COUNT 512
+@@ -42,10 +44,8 @@ static struct dpa_bp *dpa_vsp_bp_probe(struct net_device *net_dev)
+ 		goto out;
+ 	}
+ 
+-	dpa_vsp_bp->percpu_count = devm_alloc_percpu(net_dev->dev.parent, *dpa_vsp_bp->percpu_count);
+ 	dpa_vsp_bp->config_count = DPAA_VSP_MAX_BUF_COUNT;
+ 	dpa_vsp_bp->size = DPAA_VSP_BUF_SIZE;
+-	dpa_vsp_bp->seed_cb = dpa_bp_priv_seed;
+ 	dpa_vsp_bp->free_buf_cb = _dpa_bp_free_pf;
+ 	dpa_vsp_bp->dev = net_dev->dev.parent;
+ 	if (dpa_bp_alloc(dpa_vsp_bp, dpa_vsp_bp->dev)) {
+@@ -54,7 +54,9 @@ static struct dpa_bp *dpa_vsp_bp_probe(struct net_device *net_dev)
+ 		goto out;
+ 	}
+ 	gs_dpa_vsp_bp = dpa_vsp_bp;
++#ifdef CDX_DPA_DEBUG
+ 	pr_info("%s:: VSP BPID %d created config_count %d \n",__FUNCTION__,dpa_vsp_bp->bpid, dpa_vsp_bp->config_count);
++#endif
+ 	return dpa_vsp_bp;
+ out:
+ 	return NULL;
+@@ -133,12 +135,14 @@ int dpa_add_virt_storage_profile(struct net_device *net_dev,
+ 		netdev_err(net_dev, "FM_VSP_Init failed %d\n", _errno);
+ 		goto out;
+ 	}
++#ifdef CDX_DPA_DEBUG
+ 	pr_info("%s:Configured storage profile -relative id %u bpid %u size %u for %s\n",
+ 			__FUNCTION__,
+ 			1,
+ 			fmVspParams.extBufPools.extBufPool[0].id ,
+ 			fmVspParams.extBufPools.extBufPool[0].size,
+ 			net_dev->name);
++#endif
+ 	return 0;
+ 
+ out:

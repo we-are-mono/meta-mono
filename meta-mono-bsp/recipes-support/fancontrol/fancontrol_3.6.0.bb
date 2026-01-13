@@ -49,7 +49,7 @@ do_install() {
 
     # binaries
     install -m 0755 ${S}/prog/sensors/sensors ${D}${bindir}/
-    install -m 0755 ${S}/prog/pwm/fancontrol ${D}${sbindir}/    
+    install -m 0755 ${S}/prog/pwm/fancontrol ${D}${sbindir}/
 
     # configuration
     install -m 0644 ${UNPACKDIR}/fancontrol.conf ${D}${sysconfdir}/fancontrol

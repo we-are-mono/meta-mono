@@ -16,7 +16,7 @@ do_compile() {
 do_install() {
     install -d ${D}${sbindir}
     install -m 0755 sfp-led-daemon ${D}${sbindir}/
-    
+
     # Install systemd service if systemd is enabled
     if ${@bb.utils.contains('DISTRO_FEATURES', 'systemd', 'true', 'false', d)}; then
         install -d ${D}${systemd_system_unitdir}
@@ -32,7 +32,7 @@ do_install() {
 }
 
 SYSTEMD_SERVICE:${PN} = "sfp-led-daemon.service"
-SYSTEMD_AUTO_ENABLE = "enable"
+SYSTEMD_AUTO_ENABLE:${PN} = "enable"
 
-FILES:${PN} = "${sbindir}/sfp-led-daemon"
-FILES:${PN} += "${@bb.utils.contains('DISTRO_FEATURES', 'systemd', '', '${sysconfdir}/init.d/S99sfp-led-daemon ${sysconfdir}/rcS.d/S99sfp-led-daemon', d)}"
+FILES:${PN} = "${sbindir}/sfp-led-daemon \
+               ${@bb.utils.contains('DISTRO_FEATURES', 'systemd', '', '${sysconfdir}/init.d/S99sfp-led-daemon ${sysconfdir}/rcS.d/S99sfp-led-daemon', d)}"

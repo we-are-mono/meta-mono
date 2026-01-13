@@ -14,7 +14,7 @@ S = "${WORKDIR}/git"
 
 do_deploy () {
     install -d ${DEPLOYDIR}/
-    install -m 644 ${B}/${FMAN_UCODE} ${DEPLOYDIR}
+    install -m 0644 ${B}/${FMAN_UCODE} ${DEPLOYDIR}
 }
 
 addtask deploy before do_build

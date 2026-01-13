@@ -1,0 +1,1886 @@
+From: Tomaz Zaman <tomaz@mono.si>
+Date: Tue Jan 13 02:02:05 2026 +0100
+Subject: CMM: Port to kernel 6.12 and arm64 glibc
+
+- Fix arm64 signal handler to use mcontext_t from ucontext.h instead of
+  struct sigcontext (not available in arm64 glibc headers)
+- Replace deprecated nfct_sizeof()/nfct_maxsize() with proper API:
+  nfct_new()/nfct_destroy()/nfct_clear()
+- Fix packed struct alignment issues on arm64 by using aligned local
+  buffers with memcpy for addresses passed to functions
+- Add 4RD netlink constants (RTM_NEW4RD, etc.) not present in glibc
+- Wrap conditionally-compiled functions in appropriate #ifdef blocks
+  (ENABLE_EGRESS_QOS, CMM_THIRD_PART)
+- Fix libtool build order by using libcmm.la instead of -lcmm in LDADD
+- Fix various compiler warnings (unused variables, string truncation,
+  void function returning value, uninitialized variables)
+- Update libcli callback signatures to use const char*
+- Add cleanup for stale message queues from previous crash
+- Add cmm_addattr8 declaration for AUTO_BRIDGE support
+
+Upstream-Status: Inappropriate [NXP vendor extension]
+Signed-off-by: Tomaz Zaman <tomaz@mono.si>
+---
+diff --git a/cmm-17.03.1/src/Makefile.am b/cmm-17.03.1/src/Makefile.am
+index c5d3e44..652fc4f 100644
+--- a/cmm-17.03.1/src/Makefile.am
++++ b/cmm-17.03.1/src/Makefile.am
+@@ -59,10 +59,10 @@ cmm_SOURCES = 	neighbor_resolution.c  \
+ 		module_ipr.c
+ 
+ 
+-cmm_LDADD = -lpthread -lfci -lcli -lcmm -lpcap @CMM_LIBS@
++cmm_LDADD = -lpthread -lfci -lcli libcmm.la -lpcap @CMM_LIBS@
+ 
+ libcmm_sample_SOURCES = libcmm_sample.c
+-libcmm_sample_LDADD = -lcmm
++libcmm_sample_LDADD = libcmm.la
+ 
+ lib_LTLIBRARIES = libcmm.la
+ libcmm_la_SOURCES = libcmm.c
+diff --git a/cmm-17.03.1/src/client_daemon.c b/cmm-17.03.1/src/client_daemon.c
+index a9b6613..b35c16b 100644
+--- a/cmm-17.03.1/src/client_daemon.c
++++ b/cmm-17.03.1/src/client_daemon.c
+@@ -1156,6 +1156,14 @@ int cmmDaemonInit(struct cmm_daemon *ctx)
+ 		goto err0;
+ 	}
+ 
++	// Remove any stale message queue from previous run
++	ctx->queueIdRx = msgget(key, 0);
++	if (ctx->queueIdRx >= 0)
++	{
++		cmm_print(DEBUG_INFO, "%s: removing stale rx queue %d\n", __func__, ctx->queueIdRx);
++		msgctl(ctx->queueIdRx, IPC_RMID, NULL);
++	}
++
+ 	// Create the message queue
+ 	ctx->queueIdRx = msgget(key, IPC_CREAT | IPC_EXCL);
+ 	if (ctx->queueIdRx < 0)
+@@ -1171,6 +1179,14 @@ int cmmDaemonInit(struct cmm_daemon *ctx)
+ 		goto err1;
+ 	}
+ 
++	// Remove any stale message queue from previous run
++	ctx->queueIdTx = msgget(key, 0);
++	if (ctx->queueIdTx >= 0)
++	{
++		cmm_print(DEBUG_INFO, "%s: removing stale tx queue %d\n", __func__, ctx->queueIdTx);
++		msgctl(ctx->queueIdTx, IPC_RMID, NULL);
++	}
++
+ 	ctx->queueIdTx = msgget(key, IPC_CREAT | IPC_EXCL);
+ 	if (ctx->queueIdTx < 0)
+ 	{
+diff --git a/cmm-17.03.1/src/cmm.c b/cmm-17.03.1/src/cmm.c
+index 9a00a0d..00db75b 100644
+--- a/cmm-17.03.1/src/cmm.c
++++ b/cmm-17.03.1/src/cmm.c
+@@ -23,6 +23,7 @@
+ #include <sched.h>
+ #include <signal.h>
+ #include <stdarg.h>
++#include <ucontext.h>
+ #if !defined(__UCLIBC__)
+ #include <execinfo.h>
+ #endif
+@@ -30,6 +31,7 @@
+ struct cmm_global globalConf;
+ unsigned int nf_conntrack_max = CONNTRACK_MAX;
+ 
++#ifdef ARCH_ARM32
+ struct kernel_ucontext {
+ 	unsigned long     uc_flags;
+ 	struct kernel_ucontext  *uc_link;
+@@ -42,21 +44,26 @@ struct kernel_ucontext {
+            coprocessors require eight byte alignment.  */
+ 	unsigned long     uc_regspace[128] __attribute__((__aligned__(8)));
+ };
++#endif
+ 
+ static void cmm_crit_err_hdlr(int sig_num, siginfo_t *info, void *ucontext)
+ {
++#ifdef ARCH_ARM32
+ 	struct sigcontext *sigcontext;
++#else
++	mcontext_t *mctx;
++#endif
+ #if !defined(__UCLIBC__)
+ 	void *array[50];
+ 	char **messages;
+ 	int size, i;
+ #endif
+ 
++#ifdef ARCH_ARM32
+ 	sigcontext = &((struct kernel_ucontext *)ucontext)->uc_mcontext;
+ 
+-#ifdef ARCH_ARM32
+ 	fprintf(stderr, "\n%s: signal %d (%s), fault address is %p at %p PID %d\n",
+-		__func__, sig_num, strsignal(sig_num), info->si_addr, 
++		__func__, sig_num, strsignal(sig_num), info->si_addr,
+ 		(void *)sigcontext->arm_pc, getpid());
+ 
+ 	fprintf(stderr, "register dump:\nr0:%08lx r1:%08lx r2:%08lx r3:%08lx r4:%08lx r5:%08lx r6:%08lx r7:%08lx\n",
+@@ -69,19 +76,23 @@ static void cmm_crit_err_hdlr(int sig_num, siginfo_t *info, void *ucontext)
+ 
+ 	fprintf(stderr, "cpsr:%08lx fault_address:%08lx\n", sigcontext->arm_cpsr, sigcontext->fault_address);
+ #else
++	mctx = &((ucontext_t *)ucontext)->uc_mcontext;
++
+ 	fprintf(stderr, "\n%s: signal %d (%s), fault address is %p at %p PID %d\n",
+                 __func__, sig_num, strsignal(sig_num), info->si_addr,
+-                (void *)sigcontext->pc, getpid());
++                (void *)mctx->pc, getpid());
+ 
+ 	fprintf (stderr, "register dump:");
+ 	for (i = 0; i < 31; i++)
+ 	{
+ 		if (i%8 == 0)
+ 			fprintf(stderr, "\n");
+-		fprintf(stderr, "r%d:%016llx", i, sigcontext->regs[i]);
++		fprintf(stderr, "r%d:%016llx", i, (unsigned long long)mctx->regs[i]);
+ 	}
+ 
+-        fprintf(stderr, "pc:%016llx sp:%016llx fault_address:%016llx\n", sigcontext->pc,sigcontext->pc, sigcontext->fault_address);
++        fprintf(stderr, "\npc:%016llx sp:%016llx fault_address:%016llx\n",
++		(unsigned long long)mctx->pc, (unsigned long long)mctx->sp,
++		(unsigned long long)mctx->fault_address);
+ 
+ #endif
+ 
+@@ -92,7 +103,7 @@ static void cmm_crit_err_hdlr(int sig_num, siginfo_t *info, void *ucontext)
+ #ifdef ARCH_ARM32
+ 	array[1] = (void *)sigcontext->arm_pc;
+ #else
+-	array[1] = (void *)sigcontext->pc;
++	array[1] = (void *)mctx->pc;
+ #endif
+ 
+ 	messages = backtrace_symbols(array, size);
+diff --git a/cmm-17.03.1/src/cmm_asym_ff.c b/cmm-17.03.1/src/cmm_asym_ff.c
+index b4a8db9..b96b718 100644
+--- a/cmm-17.03.1/src/cmm_asym_ff.c
++++ b/cmm-17.03.1/src/cmm_asym_ff.c
+@@ -25,7 +25,7 @@
+ *
+ *
+ ******************************************************************/
+-int cmmAsymFFEnableShow(struct cli_def * cli, char *command, char *argv[], int argc)
++int cmmAsymFFEnableShow(struct cli_def * cli, const char *command, char *argv[], int argc)
+ {
+ 	if(globalConf.asymff_enable)
+ 		cli_print(cli, " The Asymmetric Fast forward support is enabled");
+diff --git a/cmm-17.03.1/src/conntrack.c b/cmm-17.03.1/src/conntrack.c
+index 46b3be7..7b18659 100644
+--- a/cmm-17.03.1/src/conntrack.c
++++ b/cmm-17.03.1/src/conntrack.c
+@@ -37,8 +37,7 @@ struct list_head ct_flow_no_sa_list;
+ #endif /* IPSEC_FLOW_CACHE */
+ 
+ struct conntrack_stats ct_stats;
+-char *p_nfconn_clone_buf, *p_nfconn_update_buf;
+-char *p_nfconn_clone_buf_align, *p_nfconn_update_buf_align;
++struct nf_conntrack *p_nfconn_clone, *p_nfconn_update;
+ unsigned char resync_buf[CMM_MAX_64K_BUFF_SIZE];
+ 
+ pthread_mutex_t ctMutex = PTHREAD_MUTEX_INITIALIZER;		/*mutex to prevent race condition on the conntrack table*/
+@@ -106,9 +105,8 @@ static void cmmCtSetPermanent(struct nfct_handle * handler, int flags,  struct n
+ ******************************************************************/
+ static struct nf_conntrack* cmmCtClone( struct nf_conntrack* ct)
+ {
+-	struct nf_conntrack *CtClone = (struct nf_conntrack* )p_nfconn_clone_buf_align;
+-	nfct_copy(CtClone, ct, NFCT_CP_OVERRIDE);
+-	return CtClone;
++	nfct_copy(p_nfconn_clone, ct, NFCT_CP_OVERRIDE);
++	return p_nfconn_clone;
+ }
+ 
+ /*****************************************************************
+@@ -119,14 +117,14 @@ static struct nf_conntrack* cmmCtClone( struct nf_conntrack* ct)
+ ******************************************************************/
+ static void cmmCtForceUpdate(struct nfct_handle * handler, struct ctTable * ctEntry)
+ {
+-	struct nf_conntrack *ctTemp = (struct nf_conntrack *)p_nfconn_update_buf_align;
++	struct nf_conntrack *ctTemp = p_nfconn_update;
+ 	struct nf_conntrack *ct = ctEntry->ct;
+ 	const unsigned int *Saddr, *Daddr, *SaddrReply, *DaddrReply;
+ 	unsigned short Sport, Dport, SportReply, DportReply;
+ 	int family, proto;
+ 
+ 
+-	memset(ctTemp, 0, nfct_maxsize());
++	nfct_clear(ctTemp);
+ 
+ 	family = nfct_get_attr_u8(ct, ATTR_ORIG_L3PROTO);
+ 	proto = nfct_get_attr_u8(ct, ATTR_ORIG_L4PROTO);
+@@ -204,7 +202,7 @@ int cmmCtNetlinkRemove(struct nfct_handle * handler, struct nf_conntrack *ct)
+ *
+ *
+ ******************************************************************/
+-int cmmCtShow(struct cli_def * cli, char *command, char *argv[], int argc)
++int cmmCtShow(struct cli_def * cli, const char *command, char *argv[], int argc)
+ {
+ 	struct ctTable * temp;
+ 	struct list_head *entry;
+@@ -3165,22 +3163,18 @@ int cmmCtInit(struct cmm_ct *ctx)
+ 
+ 	cmm_print(DEBUG_INFO, "%s\n", __func__);
+ 
+-	p_nfconn_clone_buf = (char *)malloc(nfct_maxsize() + CMM_16B_ALIGN);
+-	if (!p_nfconn_clone_buf)
++	p_nfconn_clone = nfct_new();
++	if (!p_nfconn_clone)
+ 	{
+ 		goto err0;
+ 	}
+-	p_nfconn_clone_buf_align = (char *) (((unsigned long) p_nfconn_clone_buf + CMM_16B_ALIGN - 1) &
+-							~( CMM_16B_ALIGN - 1));
+-	p_nfconn_update_buf = (char *)malloc(nfct_maxsize() + CMM_16B_ALIGN);
+-	if (!p_nfconn_update_buf)
++
++	p_nfconn_update = nfct_new();
++	if (!p_nfconn_update)
+ 	{
+ 		goto err0;
+ 	}
+ 
+-	p_nfconn_update_buf_align = (char *) (((unsigned long) p_nfconn_update_buf + CMM_16B_ALIGN - 1) &
+-						  ~( CMM_16B_ALIGN - 1));
+-
+ 	for (i = 0; i < CONNTRACK_HASH_TABLE_SIZE; i++)
+ 	{
+ 		list_head_init(&ct_table[i]);
+@@ -3490,10 +3484,10 @@ err1:
+ 	cmmCtKernelModuleUnInit();
+ 
+ err0:
+-	if (p_nfconn_update_buf)
+-		free(p_nfconn_update_buf);
+-	if (p_nfconn_clone_buf)
+-		free(p_nfconn_clone_buf);
++	if (p_nfconn_update)
++		nfct_destroy(p_nfconn_update);
++	if (p_nfconn_clone)
++		nfct_destroy(p_nfconn_clone);
+ 	return -1;
+ }
+ 
+@@ -3542,10 +3536,10 @@ void cmmCtExit(struct cmm_ct *ctx)
+ #endif
+ 	cmmCtKernelModuleUnInit();
+ 
+-	if (p_nfconn_update_buf)
+-		free(p_nfconn_update_buf);
+-	if (p_nfconn_clone_buf)
+-		free(p_nfconn_clone_buf);
++	if (p_nfconn_update)
++		nfct_destroy(p_nfconn_update);
++	if (p_nfconn_clone)
++		nfct_destroy(p_nfconn_clone);
+ 
+ 	cmm_print(DEBUG_INFO, "%s: exiting\n", __func__);
+ }
+@@ -3925,7 +3919,7 @@ void cmmQosmarkSet(struct nf_conntrack *ct, u_int64_t qosmark)
+ *
+ *
+ ******************************************************************/
+-int cmmDPIEnableShow(struct cli_def * cli, char *command, char *argv[], int argc)
++int cmmDPIEnableShow(struct cli_def * cli, const char *command, char *argv[], int argc)
+ {
+ 	if(globalConf.dpi_enable)
+ 		cli_print(cli, " The DPI flag is enabled");
+diff --git a/cmm-17.03.1/src/conntrack.h b/cmm-17.03.1/src/conntrack.h
+index 00cf759..cfc47d2 100644
+--- a/cmm-17.03.1/src/conntrack.h
++++ b/cmm-17.03.1/src/conntrack.h
+@@ -147,8 +147,8 @@
+ 	int cmmCtNetlinkRemove(struct nfct_handle * handler, struct nf_conntrack *ct);
+ 	int cmmCtHandle(FCI_CLIENT *fci_handle, int function_code, u_int8_t *cmd_buf, u_int16_t cmd_len, u_int16_t *res_buf, u_int16_t *res_len);
+ 
+-	int cmmCtShow(struct cli_def * cli, char *command, char *argv[], int argc);
+-	int cmmFlowLocalShow(struct cli_def * cli, char *command, char *argv[], int argc);
++	int cmmCtShow(struct cli_def * cli, const char *command, char *argv[], int argc);
++	int cmmFlowLocalShow(struct cli_def * cli, const char *command, char *argv[], int argc);
+ 
+ 	u_int64_t cmmQosmarkGet(struct nf_conntrack *ct);
+ 	void cmmQosmarkSet(struct nf_conntrack *ct, u_int64_t qosmark);
+@@ -190,7 +190,7 @@ static __inline u_int32_t HASH_CT(int family, const u_int32_t *Saddr, const u_in
+ #define DPI_ENABLE_CMD      1
+ 
+ int cmmDPIFlagSetProcess(char ** keywords, int tabStart, daemon_handle_t daemon_handle);
+-int cmmDPIEnableShow(struct cli_def * cli, char *command, char *argv[], int argc);
++int cmmDPIEnableShow(struct cli_def * cli, const char *command, char *argv[], int argc);
+ int cmmDPIFlagProcessClientCmd(u_int8_t *cmd_buf, u_int16_t *res_buf, u_int16_t *res_len);
+ 
+ #endif /*C2000_DPI*/
+@@ -231,7 +231,7 @@ int cmmDPIFlagProcessClientCmd(u_int8_t *cmd_buf, u_int16_t *res_buf, u_int16_t
+ #define ASYMFF_UNKNOWN_CMD     0
+ #define ASYMFF_ENABLE_CMD      1
+ int cmmAsymFFSetProcess(char ** keywords, int tabStart, daemon_handle_t daemon_handle);
+-int cmmAsymFFEnableShow(struct cli_def * cli, char *command, char *argv[], int argc);
++int cmmAsymFFEnableShow(struct cli_def * cli, const char *command, char *argv[], int argc);
+ int cmmAsymFFProcessClientCmd(u_int8_t *cmd_buf, u_int16_t *res_buf, u_int16_t *res_len);
+ #endif
+ 
+diff --git a/cmm-17.03.1/src/ffcontrol.c b/cmm-17.03.1/src/ffcontrol.c
+index f9dbed0..2987c7f 100644
+--- a/cmm-17.03.1/src/ffcontrol.c
++++ b/cmm-17.03.1/src/ffcontrol.c
+@@ -333,7 +333,7 @@ refused:
+ *
+ *
+ ******************************************************************/
+-int cmmFcStop(struct cli_def * cli, char *command, char *argv[], int argc)
++int cmmFcStop(struct cli_def * cli, const char *command, char *argv[], int argc)
+ {
+ 	cli_print(cli, "Killing cmm ...\n");
+ 
+@@ -347,7 +347,7 @@ int cmmFcStop(struct cli_def * cli, char *command, char *argv[], int argc)
+ *
+ *
+ ******************************************************************/
+-int cmmFcActivate(struct cli_def * cli, char *command, char *argv[], int argc)
++int cmmFcActivate(struct cli_def * cli, const char *command, char *argv[], int argc)
+ {
+ 	int val;
+ 	int family;
+@@ -400,7 +400,7 @@ usage:
+ *
+ *
+ ******************************************************************/
+-int cmmFcActivateShow(struct cli_def * cli, char *command, char *argv[], int argc)
++int cmmFcActivateShow(struct cli_def * cli, const char *command, char *argv[], int argc)
+ {
+ 	cli_print(cli, "%d", globalConf.enable);
+ 
+@@ -412,7 +412,7 @@ int cmmFcActivateShow(struct cli_def * cli, char *command, char *argv[], int arg
+ *
+ *
+ ******************************************************************/
+-int cmmFcDebug(struct cli_def * cli, char *command, char *argv[], int argc)
++int cmmFcDebug(struct cli_def * cli, const char *command, char *argv[], int argc)
+ {
+ 	int val;
+ 	int flag = 0;
+@@ -455,7 +455,7 @@ usage:
+ *
+ *
+ ******************************************************************/
+-int cmmFcDebugShow(struct cli_def * cli, char *command, char *argv[], int argc)
++int cmmFcDebugShow(struct cli_def * cli, const char *command, char *argv[], int argc)
+ {
+ 	cli_print(cli, "command:\t%s", (globalConf.debug_level & DEBUG_COMMAND) ? "printed": "not printed");
+ 	cli_print(cli, "error:  \t%s", (globalConf.debug_level & DEBUG_ERROR) ? "printed": "not printed");
+@@ -481,8 +481,13 @@ asymFFRule_t cmmFcAsymFFRuleAddAttribut(asymFFRule_t rule, int attributType, int
+ 	temp->next = rule;
+ 	temp->type = attributType;
+ 	temp->value = attributValue;
+-	strncpy(temp->strValue, attrStrValue, sizeof(temp->strValue));
+-	STR_TRUNC_END(temp->strValue , sizeof(temp->strValue));
++	{
++		size_t len = strlen(attrStrValue);
++		if (len >= sizeof(temp->strValue))
++			len = sizeof(temp->strValue) - 1;
++		memcpy(temp->strValue, attrStrValue, len);
++		temp->strValue[len] = '\0';
++	}
+ 	temp->width = attributWidth;
+ 	temp->mask = mask;
+ 
+@@ -504,8 +509,13 @@ struct asymFFRuleList * cmmFcAsymFFListAddRule(struct asymFFRuleList *list, char
+ 
+ 	temp->next = list;
+ 	temp->rule = rule;
+-	strncpy(temp->name, ruleName, sizeof(temp->name));
+-	STR_TRUNC_END(temp->name , sizeof(temp->name));
++	{
++		size_t len = strlen(ruleName);
++		if (len >= sizeof(temp->name))
++			len = sizeof(temp->name) - 1;
++		memcpy(temp->name, ruleName, len);
++		temp->name[len] = '\0';
++	}
+ 	return temp;
+ }
+ 
+@@ -514,7 +524,7 @@ struct asymFFRuleList * cmmFcAsymFFListAddRule(struct asymFFRuleList *list, char
+ *
+ *	Print rules on CLI
+ ******************************************************************/
+-int cmmFcAsymFFRulesShow(struct cli_def * cli, char *command, char *argv[], int argc)
++int cmmFcAsymFFRulesShow(struct cli_def * cli, const char *command, char *argv[], int argc)
+ {
+ 	struct asymFFRuleList *rulesList;
+ 	struct asymFFRule *rule;
+@@ -699,8 +709,13 @@ struct denyRuleList * cmmFcListAddRule(struct denyRuleList *list, char * ruleNam
+ 
+ 	temp->next = list;
+ 	temp->rule = rule;
+-	strncpy(temp->name, ruleName, sizeof(temp->name));
+-	STR_TRUNC_END(temp->name , sizeof(temp->name));
++	{
++		size_t len = strlen(ruleName);
++		if (len >= sizeof(temp->name))
++			len = sizeof(temp->name) - 1;
++		memcpy(temp->name, ruleName, len);
++		temp->name[len] = '\0';
++	}
+ 	return temp;
+ }
+ 
+@@ -709,7 +724,7 @@ struct denyRuleList * cmmFcListAddRule(struct denyRuleList *list, char * ruleNam
+ *
+ *		Print rules on CLI
+ ******************************************************************/
+-int cmmFcRulesShow(struct cli_def * cli, char *command, char *argv[], int argc)
++int cmmFcRulesShow(struct cli_def * cli, const char *command, char *argv[], int argc)
+ {
+ 	struct denyRuleList *rulesList;
+ 	struct denyRule *rule;
+@@ -982,8 +997,11 @@ static int section_wifi_fastforward_option_hdlr(void *data, int argc, char **arg
+ 
+ 	if (!strcasecmp(option, "ifname"))
+ 	{
+-		strncpy(wifi_if->ifname, value, IFNAMSIZ);
+-		STR_TRUNC_END(wifi_if->ifname, IFNAMSIZ);
++		size_t len = strlen(value);
++		if (len >= IFNAMSIZ)
++			len = IFNAMSIZ - 1;
++		memcpy(wifi_if->ifname, value, len);
++		wifi_if->ifname[len] = '\0';
+ 
+ 		cmm_print(DEBUG_ERROR, "cmmFcParser: WiFi name: %s\n", wifi_if->ifname);
+ 	}
+@@ -1012,9 +1030,12 @@ err:
+ static void *section_rule_start_hdlr(int argc, char **argv)
+ {
+ 	struct rule_section_data *section = &section_data;
++	size_t len = strlen(argv[0]);
+ 
+-	strncpy(section->name, argv[0], sizeof(section->name));
+-	STR_TRUNC_END(section->name, sizeof(section->name));
++	if (len >= sizeof(section->name))
++		len = sizeof(section->name) - 1;
++	memcpy(section->name, argv[0], len);
++	section->name[len] = '\0';
+ 	section->rule = NULL;
+ 	section->last = 0;
+ 
+@@ -1619,9 +1640,12 @@ static int section_asym_fastforward_option_hdlr(void *data, int argc, char **arg
+ 	}
+ 	else if (!strcmp(option, "interface"))
+ 	{
++		size_t len = strlen(value);
+ 		attrValue = 0;
+-		strncpy(attrSValue, value, IFNAMSIZ);
+-		STR_TRUNC_END(attrSValue, IFNAMSIZ);
++		if (len >= IFNAMSIZ)
++			len = IFNAMSIZ - 1;
++		memcpy(attrSValue, value, len);
++		attrSValue[len] = '\0';
+ 		attrType = ATTR_ORIG_COMCERTO_FP_IIF;
+ 		attrWidth = sizeof(int);
+ 		mask = 0x000000FF;
+@@ -1821,7 +1845,7 @@ int cmmFcParser(char *confFilePath)
+ *
+ *
+ ******************************************************************/
+-static int cmmRxCmd(struct cli_def * cli, char *command, char *argv[], int argc)
++static int cmmRxCmd(struct cli_def * cli, const char *command, char *argv[], int argc)
+ {
+   /*Call RX process function*/
+   cmmRxSetProcess(argv, 0, globalConf.cli.daemon_handle);
+@@ -1835,7 +1859,7 @@ static int cmmRxCmd(struct cli_def * cli, char *command, char *argv[], int argc)
+ *
+ *
+ ******************************************************************/
+-static int cmmTxCmd(struct cli_def * cli, char *command, char *argv[], int argc)
++static int cmmTxCmd(struct cli_def * cli, const char *command, char *argv[], int argc)
+ {
+ 	/*Call TX process function*/
+ 	cmmTxSetProcess(argv, 0, globalConf.cli.daemon_handle);
+@@ -1849,7 +1873,7 @@ static int cmmTxCmd(struct cli_def * cli, char *command, char *argv[], int argc)
+ *
+ *
+ ******************************************************************/
+-static int cmmStatCmd(struct cli_def * cli, char *command, char *argv[], int argc)
++static int cmmStatCmd(struct cli_def * cli, const char *command, char *argv[], int argc)
+ {
+   /*Call RX process function*/
+   cmmStatSetProcess(argv, 0, globalConf.cli.daemon_handle);
+@@ -1862,7 +1886,7 @@ static int cmmStatCmd(struct cli_def * cli, char *command, char *argv[], int arg
+ *
+ *
+ ******************************************************************/
+-static int cmm4rdIdConvCmd(struct cli_def * cli, char *command, char *argv[], int argc)
++static int cmm4rdIdConvCmd(struct cli_def * cli, const char *command, char *argv[], int argc)
+ {
+   /*Call tunnel 4rd id conversion set process function*/
+   cmm4rdIdConvSetProcess(argv, 0, argc, globalConf.cli.daemon_handle);
+@@ -1876,7 +1900,7 @@ static int cmm4rdIdConvCmd(struct cli_def * cli, char *command, char *argv[], in
+ *
+ *
+ ******************************************************************/
+-static int cmmDPDSaQueryCmd(struct cli_def * cli, char *command, char *argv[], int argc)
++static int cmmDPDSaQueryCmd(struct cli_def * cli, const char *command, char *argv[], int argc)
+ {
+   /*Call RX process function*/
+   cmmDPDSaQuerySetProcess(argv, 0, globalConf.cli.daemon_handle);
+@@ -1890,7 +1914,7 @@ static int cmmDPDSaQueryCmd(struct cli_def * cli, char *command, char *argv[], i
+ *
+ *
+ ******************************************************************/
+-static int cmmDPIEnableCmd(struct cli_def * cli, char *command, char *argv[], int argc)
++static int cmmDPIEnableCmd(struct cli_def * cli, const char *command, char *argv[], int argc)
+ {
+   /*Call RX process function*/
+   cmmDPIFlagSetProcess(argv, 0, globalConf.cli.daemon_handle);
+@@ -1904,7 +1928,7 @@ static int cmmDPIEnableCmd(struct cli_def * cli, char *command, char *argv[], in
+ *
+ *
+ ******************************************************************/
+-static int cmmAsymFFEnableCmd(struct cli_def * cli, char *command, char *argv[], int argc)
++static int cmmAsymFFEnableCmd(struct cli_def * cli, const char *command, char *argv[], int argc)
+ {
+   /*Call RX process function*/
+   cmmAsymFFSetProcess(argv, 0, globalConf.cli.daemon_handle);
+@@ -1917,7 +1941,7 @@ static int cmmAsymFFEnableCmd(struct cli_def * cli, char *command, char *argv[],
+ *
+ *
+ ******************************************************************/
+-static int cmmShowRxCmd(struct cli_def * cli, char *command, char *argv[], int argc)
++static int cmmShowRxCmd(struct cli_def * cli, const char *command, char *argv[], int argc)
+ {
+   /*Call RX process function*/
+   cmmRxShowProcess(argv, 0, globalConf.cli.daemon_handle);
+@@ -1930,7 +1954,7 @@ static int cmmShowRxCmd(struct cli_def * cli, char *command, char *argv[], int a
+ *
+ *
+ ******************************************************************/
+-static int cmmShowStatCmd(struct cli_def * cli, char *command, char *argv[], int argc)
++static int cmmShowStatCmd(struct cli_def * cli, const char *command, char *argv[], int argc)
+ {
+   /*Call Stat process function*/
+   cmmStatShowProcess(argv, 0, globalConf.cli.daemon_handle);
+@@ -1944,7 +1968,7 @@ static int cmmShowStatCmd(struct cli_def * cli, char *command, char *argv[], int
+ *
+ *
+ ******************************************************************/
+-static int cmmQueryRxCmd(struct cli_def * cli, char *command, char *argv[], int argc)
++static int cmmQueryRxCmd(struct cli_def * cli, const char *command, char *argv[], int argc)
+ {
+   /*Call RX process function*/
+   cmmRxQueryProcess(argv, 0, globalConf.cli.daemon_handle);
+@@ -1958,7 +1982,7 @@ static int cmmQueryRxCmd(struct cli_def * cli, char *command, char *argv[], int
+ *
+ *
+ ******************************************************************/
+-static int cmmQueryRtCmd(struct cli_def * cli, char *command, char *argv[], int argc)
++static int cmmQueryRtCmd(struct cli_def * cli, const char *command, char *argv[], int argc)
+ {
+   /*Call RX process function*/
+   cmmRtQueryProcess(argv, 0, globalConf.cli.daemon_handle);
+@@ -1971,7 +1995,7 @@ static int cmmQueryRtCmd(struct cli_def * cli, char *command, char *argv[], int
+ *
+ *
+ ******************************************************************/
+-static int cmmQueryCtCmd(struct cli_def * cli, char *command, char *argv[], int argc)
++static int cmmQueryCtCmd(struct cli_def * cli, const char *command, char *argv[], int argc)
+ {
+   /*Call RX process function*/
+   cmmCtQueryProcess(argv, 0, globalConf.cli.daemon_handle);
+@@ -1984,7 +2008,7 @@ static int cmmQueryCtCmd(struct cli_def * cli, char *command, char *argv[], int
+ *
+ *
+ ******************************************************************/
+-static int cmmQueryMacVlanCmd(struct cli_def * cli, char *command, char *argv[], int argc)
++static int cmmQueryMacVlanCmd(struct cli_def * cli, const char *command, char *argv[], int argc)
+ {
+   /*Call MacVlan process function*/
+   cmmMacVlanQueryProcess(argv, 0, globalConf.cli.daemon_handle);
+@@ -1997,7 +2021,7 @@ static int cmmQueryMacVlanCmd(struct cli_def * cli, char *command, char *argv[],
+  * *
+  * *
+  * ******************************************************************/
+-static int cmmQueryV6CtCmd(struct cli_def * cli, char *command, char *argv[], int argc)
++static int cmmQueryV6CtCmd(struct cli_def * cli, const char *command, char *argv[], int argc)
+ {
+   /*Call RX process function*/
+   cmmCt6QueryProcess(argv, 0, globalConf.cli.daemon_handle);
+@@ -2012,7 +2036,7 @@ static int cmmQueryV6CtCmd(struct cli_def * cli, char *command, char *argv[], in
+ *
+ *
+ ******************************************************************/
+-static int cmmQueryPPPoECmd(struct cli_def * cli, char *command, char *argv[], int argc)
++static int cmmQueryPPPoECmd(struct cli_def * cli, const char *command, char *argv[], int argc)
+ {
+   /*Call PPPoE process function*/
+   cmmPPPoEQueryProcess(argv, 0, globalConf.cli.daemon_handle);
+@@ -2026,7 +2050,7 @@ static int cmmQueryPPPoECmd(struct cli_def * cli, char *command, char *argv[], i
+  * *
+  * *
+  * ******************************************************************/
+-static int cmmQueryVlanCmd(struct cli_def * cli, char *command, char *argv[], int argc)
++static int cmmQueryVlanCmd(struct cli_def * cli, const char *command, char *argv[], int argc)
+ {
+   /*Call Vlan process function*/
+   cmmVlanQuery(argv, 0, globalConf.cli.daemon_handle);
+@@ -2040,12 +2064,12 @@ static int cmmQueryVlanCmd(struct cli_def * cli, char *command, char *argv[], in
+  * *
+  * *
+  * ******************************************************************/
+-static int cmmQueryipr4statsCmd(struct cli_def * cli, char *command, char *argv[], int argc)
++static int cmmQueryipr4statsCmd(struct cli_def * cli, const char *command, char *argv[], int argc)
+ {
+   	/*Call ipr process function*/
+ 	return (cmmIpr4StatsQuery(argv, 0, globalConf.cli.daemon_handle));
+ }
+-static int cmmQueryipr6statsCmd(struct cli_def * cli, char *command, char *argv[], int argc)
++static int cmmQueryipr6statsCmd(struct cli_def * cli, const char *command, char *argv[], int argc)
+ {
+   	/*Call ipr process function*/
+ 	return (cmmIpr6StatsQuery(argv, 0, globalConf.cli.daemon_handle));
+@@ -2057,7 +2081,7 @@ static int cmmQueryipr6statsCmd(struct cli_def * cli, char *command, char *argv[
+  *   * *
+  *    * *
+  *     * ******************************************************************/
+-static int cmmQueryMc4Cmd(struct cli_def * cli, char *command, char *argv[], int argc)
++static int cmmQueryMc4Cmd(struct cli_def * cli, const char *command, char *argv[], int argc)
+ {
+   /*Call Multicast IPV4 process function*/
+    cmmMc4QueryProcess(argv, 0, globalConf.cli.daemon_handle);
+@@ -2070,7 +2094,7 @@ static int cmmQueryMc4Cmd(struct cli_def * cli, char *command, char *argv[], int
+  *   *   * *
+  *    *    * *
+  *     *     * ******************************************************************/
+-static int cmmQueryMc6Cmd(struct cli_def * cli, char *command, char *argv[], int argc)
++static int cmmQueryMc6Cmd(struct cli_def * cli, const char *command, char *argv[], int argc)
+ {
+   /*Call Multicast IPV4 process function*/
+    cmmMc6QueryProcess(argv, 0, globalConf.cli.daemon_handle);
+@@ -2084,7 +2108,7 @@ static int cmmQueryMc6Cmd(struct cli_def * cli, char *command, char *argv[], int
+  *   *   *   * *
+  *    *    *    * *
+  *     *     *     * ******************************************************************/
+-static int cmmQueryQmCmd(struct cli_def * cli, char *command, char *argv[], int argc)
++static int cmmQueryQmCmd(struct cli_def * cli, const char *command, char *argv[], int argc)
+ {
+    cmmQmQueryProcess(argv, 0, globalConf.cli.daemon_handle);
+ 
+@@ -2097,7 +2121,7 @@ static int cmmQueryQmCmd(struct cli_def * cli, char *command, char *argv[], int
+  *   *   *   *   * *
+  *    *    *    *    * *
+  *     *     *     *     * ******************************************************************/
+-static int cmmQmExptRateQueryCmd(struct cli_def * cli, char *command, char *argv[], int argc)
++static int cmmQmExptRateQueryCmd(struct cli_def * cli, const char *command, char *argv[], int argc)
+ {
+    cmmQmExptRateQueryProcess(argv, 0, globalConf.cli.daemon_handle);
+ 
+@@ -2110,7 +2134,7 @@ static int cmmQmExptRateQueryCmd(struct cli_def * cli, char *command, char *argv
+  *   *   *   *   * * This function query the dscp fq map configuration on the interface.
+  *    *    *    *    * *
+  *     *     *     *     * ******************************************************************/
+-static int cmmQmDSCPFqMapQueryCmd(struct cli_def * cli, char *command, char *argv[], int argc)
++static int cmmQmDSCPFqMapQueryCmd(struct cli_def * cli, const char *command, char *argv[], int argc)
+ {
+    cmmQmDSCPFqMapQueryProcess(argv, 0, globalConf.cli.daemon_handle);
+ 
+@@ -2122,7 +2146,7 @@ static int cmmQmDSCPFqMapQueryCmd(struct cli_def * cli, char *command, char *arg
+  *   *   *   *   * *
+  *    *    *    *    * *
+  *     *     *     *     * ******************************************************************/
+-static int cmmQmFFRateQueryCmd(struct cli_def * cli, char *command, char *argv[], int argc)
++static int cmmQmFFRateQueryCmd(struct cli_def * cli, const char *command, char *argv[], int argc)
+ {
+   /*Call process function*/
+    cmmQmFFRateQueryProcess(argv, 0, globalConf.cli.daemon_handle);
+@@ -2134,7 +2158,7 @@ static int cmmQmFFRateQueryCmd(struct cli_def * cli, char *command, char *argv[]
+  *   *   *   *   * * This function query the dscp vlan pcp map configuration on the interface.
+  *    *    *    *    * *
+  *     *     *     *     * ******************************************************************/
+-static int cmmDSCPVlanPcpMapQueryCmd(struct cli_def * cli, char *command, char *argv[], int argc)
++static int cmmDSCPVlanPcpMapQueryCmd(struct cli_def * cli, const char *command, char *argv[], int argc)
+ {
+ 	cmmDSCPVlanPcpMapQueryProcess(argv, 0, globalConf.cli.daemon_handle);
+ 
+@@ -2147,7 +2171,7 @@ static int cmmDSCPVlanPcpMapQueryCmd(struct cli_def * cli, char *command, char *
+  *   * *
+  *    * *
+  *     * ******************************************************************/
+-static int cmmSaQueryCmd(struct cli_def * cli, char *command, char *argv[], int argc)
++static int cmmSaQueryCmd(struct cli_def * cli, const char *command, char *argv[], int argc)
+ {
+   /*Call Sa Query process function*/
+   cmmSAQueryProcess(argv, 0, globalConf.cli.daemon_handle);
+@@ -2161,7 +2185,7 @@ static int cmmSaQueryCmd(struct cli_def * cli, char *command, char *argv[], int
+ *
+ *
+ ******************************************************************/
+-static int cmmSECfailStatsQueryCmd(struct cli_def * cli, char *command, char *argv[], int argc)
++static int cmmSECfailStatsQueryCmd(struct cli_def * cli, const char *command, char *argv[], int argc)
+ {
+ 	/*Call SEC failure stats Query process function*/
+ 	cmmSECfailStatsQueryProcess(argv, 0, globalConf.cli.daemon_handle);
+@@ -2175,7 +2199,7 @@ static int cmmSECfailStatsQueryCmd(struct cli_def * cli, char *command, char *ar
+ *
+ *
+ ******************************************************************/
+-static int cmmQueryNatptCmd(struct cli_def * cli, char *command, char *argv[], int argc)
++static int cmmQueryNatptCmd(struct cli_def * cli, const char *command, char *argv[], int argc)
+ {
+ 	/*Call NATPT process function*/
+ 	cmmNATPTQueryProcess(argv, 0, globalConf.cli.daemon_handle);
+@@ -2188,7 +2212,7 @@ static int cmmQueryNatptCmd(struct cli_def * cli, char *command, char *argv[], i
+ *
+ *
+ ******************************************************************/
+-static int cmmQueryL2FlowCmd(struct cli_def * cli, char *command, char *argv[], int argc)
++static int cmmQueryL2FlowCmd(struct cli_def * cli, const char *command, char *argv[], int argc)
+ {
+ 	/*Call L2Flow query function*/
+ 	cmmL2FlowQueryProcess(argv, 0, globalConf.cli.daemon_handle);
+@@ -2201,7 +2225,7 @@ static int cmmQueryL2FlowCmd(struct cli_def * cli, char *command, char *argv[],
+ *
+ *
+ ******************************************************************/
+-static int cmmQmCmds(struct cli_def * cli, char *command, char *argv[], int argc)
++static int cmmQmCmds(struct cli_def * cli, const char *command, char *argv[], int argc)
+ {
+ 	/*Call QM process function*/
+ 	cmmQmSetProcess(argv, 0, globalConf.cli.daemon_handle);
+@@ -2214,7 +2238,7 @@ static int cmmQmCmds(struct cli_def * cli, char *command, char *argv[], int argc
+ *
+ *
+ ******************************************************************/
+-static int cmmMc4Cmd(struct cli_def * cli, char *command, char *argv[], int argc)
++static int cmmMc4Cmd(struct cli_def * cli, const char *command, char *argv[], int argc)
+ {
+   /*Call RX process function*/
+   cmmMc4SetProcess(argv, 0, globalConf.cli.daemon_handle);
+@@ -2226,7 +2250,7 @@ static int cmmMc4Cmd(struct cli_def * cli, char *command, char *argv[], int argc
+ *
+ *
+ ******************************************************************/
+-static int cmmMc6Cmd(struct cli_def * cli, char *command, char *argv[], int argc)
++static int cmmMc6Cmd(struct cli_def * cli, const char *command, char *argv[], int argc)
+ {
+   /*Call RX process function*/
+   cmmMc6SetProcess(argv, 0, globalConf.cli.daemon_handle);
+@@ -2239,7 +2263,7 @@ static int cmmMc6Cmd(struct cli_def * cli, char *command, char *argv[], int argc
+ *
+ *
+ ******************************************************************/
+-static int cmmMspMem(struct cli_def * cli, char *command, char *argv[], int argc)
++static int cmmMspMem(struct cli_def * cli, const char *command, char *argv[], int argc)
+ {
+   /*Call Memory DIsplay function */
+ 	prfMspMS( globalConf.cli.daemon_handle,argc, argv);
+@@ -2251,7 +2275,7 @@ static int cmmMspMem(struct cli_def * cli, char *command, char *argv[], int argc
+ *
+ *
+ ******************************************************************/
+-static int cmmMspMemW(struct cli_def * cli, char *command, char *argv[], int argc)
++static int cmmMspMemW(struct cli_def * cli, const char *command, char *argv[], int argc)
+ {
+   /*Call Memory DIsplay function */
+ 	prfMspMSW( globalConf.cli.daemon_handle,argc, argv);
+@@ -2261,7 +2285,7 @@ static int cmmMspMemW(struct cli_def * cli, char *command, char *argv[], int arg
+ /*****************************************************************
+ * cmmMspMem
+ ******************************************************************/
+-static int cmmMspCT(struct cli_def * cli, char *command, char *argv[], int argc)
++static int cmmMspCT(struct cli_def * cli, const char *command, char *argv[], int argc)
+ {
+   /*Call Memory DIsplay function */
+ 	prfMspCT(globalConf.cli.daemon_handle,argc, argv );
+@@ -2272,30 +2296,30 @@ static int cmmMspCT(struct cli_def * cli, char *command, char *argv[], int argc)
+ ** Performance mesaurement and tracing 
+ */
+ /* Busy CPU */
+-static int cmmPTBusyCPU(struct cli_def * cli, char *command, char *argv[], int argc) {
++static int cmmPTBusyCPU(struct cli_def * cli, const char *command, char *argv[], int argc) {
+ 	prfPTBusyCPU( globalConf.cli.daemon_handle,argc, argv);
+ 	return CLI_OK;
+ }
+ /* Tracing/profiling */
+-static int cmmPTsetmask(struct cli_def * cli, char *command, char *argv[], int argc) {
++static int cmmPTsetmask(struct cli_def * cli, const char *command, char *argv[], int argc) {
+ 	prfPTsetmask( globalConf.cli.daemon_handle, argc, argv);
+ 	return CLI_OK;
+ }
+-static int cmmPTstart(struct cli_def * cli, char *command, char *argv[], int argc) {
++static int cmmPTstart(struct cli_def * cli, const char *command, char *argv[], int argc) {
+ 	prfPTstart(globalConf.cli.daemon_handle, argc, argv);
+ 	return CLI_OK;
+ }
+-static int cmmPTswitch(struct cli_def * cli, char *command, char *argv[], int argc) {
++static int cmmPTswitch(struct cli_def * cli, const char *command, char *argv[], int argc) {
+ 	prfPTswitch(globalConf.cli.daemon_handle, argc,argv);
+ 	return CLI_OK;
+ }
+ 
+-static int cmmPTshow(struct cli_def * cli, char *command, char *argv[], int argc) {
++static int cmmPTshow(struct cli_def * cli, const char *command, char *argv[], int argc) {
+ 	prfPTshow(globalConf.cli.daemon_handle, argc,argv);
+ 	return CLI_OK;
+ }
+ 
+-static int cmmPTstatus(struct cli_def * cli, char *command, char *argv[], int argc) {
++static int cmmPTstatus(struct cli_def * cli, const char *command, char *argv[], int argc) {
+ 	prfStatus(globalConf.cli.daemon_handle,argc, argv);
+ 	return CLI_OK;
+ }
+@@ -2305,14 +2329,14 @@ static int cmmPTstatus(struct cli_def * cli, char *command, char *argv[], int ar
+ *
+ *
+ ******************************************************************/
+-static int cmmVlanCliAdd(struct cli_def *cli, char *command, char *argv[], int argc)
++static int cmmVlanCliAdd(struct cli_def *cli, const char *command, char *argv[], int argc)
+ {
+ 	/*Call vlan process function*/
+   	vlanAddProcess(globalConf.cli.daemon_handle, argc, argv);
+ 	return CLI_OK;
+ }
+ 
+-static int cmmVlanCliDelete(struct cli_def *cli, char *command, char *argv[], int argc)
++static int cmmVlanCliDelete(struct cli_def *cli, const char *command, char *argv[], int argc)
+ {
+ 	/*Call vlan process function*/
+   	vlanDeleteProcess(globalConf.cli.daemon_handle, argc, argv);
+@@ -2326,28 +2350,28 @@ static int cmmVlanCliDelete(struct cli_def *cli, char *command, char *argv[], in
+ *
+ *
+ ******************************************************************/
+-static int cmmPktCapSlice(struct cli_def *cli, char *command, char *argv[], int argc)
++static int cmmPktCapSlice(struct cli_def *cli, const char *command, char *argv[], int argc)
+ {
+ 	
+   	PktCapSliceProcess(globalConf.cli.daemon_handle, argc, argv);
+ 	return CLI_OK;
+ }
+ 
+-static int cmmPktCapStat(struct cli_def *cli, char *command, char *argv[], int argc)
++static int cmmPktCapStat(struct cli_def *cli, const char *command, char *argv[], int argc)
+ {
+   	PktCapStatProcess(globalConf.cli.daemon_handle, argc, argv);
+ 	return CLI_OK;
+ }
+ 
+ 
+-static int cmmPktCapFilter(struct cli_def *cli, char *command, char *argv[], int argc)
++static int cmmPktCapFilter(struct cli_def *cli, const char *command, char *argv[], int argc)
+ {
+   	PktCapFilterProcess(globalConf.cli.daemon_handle, argc, argv);
+ 	return CLI_OK;
+ }
+ 
+ 
+-static int cmmPktCapQuery(struct cli_def *cli, char *command, char *argv[], int argc)
++static int cmmPktCapQuery(struct cli_def *cli, const char *command, char *argv[], int argc)
+ {
+   	PktCapQueryProcess(cli , globalConf.cli.daemon_handle);
+ 	return CLI_OK;
+@@ -2359,42 +2383,42 @@ static int cmmPktCapQuery(struct cli_def *cli, char *command, char *argv[], int
+ *
+ *
+ ******************************************************************/
+-static int cmmIccReset(struct cli_def *cli, char *command, char *argv[], int argc)
++static int cmmIccReset(struct cli_def *cli, const char *command, char *argv[], int argc)
+ {
+ 	
+   	IccReset(globalConf.cli.daemon_handle, argc, argv);
+ 	return CLI_OK;
+ }
+ 
+-static int cmmIccThreshold(struct cli_def *cli, char *command, char *argv[], int argc)
++static int cmmIccThreshold(struct cli_def *cli, const char *command, char *argv[], int argc)
+ {
+   	IccThreshold(globalConf.cli.daemon_handle, argc, argv);
+ 	return CLI_OK;
+ }
+ 
+ 
+-static int cmmIccAdd(struct cli_def *cli, char *command, char *argv[], int argc)
++static int cmmIccAdd(struct cli_def *cli, const char *command, char *argv[], int argc)
+ {
+   	IccAdd(globalConf.cli.daemon_handle, argc, argv);
+ 	return CLI_OK;
+ }
+ 
+ 
+-static int cmmIccDelete(struct cli_def *cli, char *command, char *argv[], int argc)
++static int cmmIccDelete(struct cli_def *cli, const char *command, char *argv[], int argc)
+ {
+   	IccDelete(globalConf.cli.daemon_handle, argc, argv);
+ 	return CLI_OK;
+ }
+ 
+ 
+-static int cmmIccQuery(struct cli_def *cli, char *command, char *argv[], int argc)
++static int cmmIccQuery(struct cli_def *cli, const char *command, char *argv[], int argc)
+ {
+   	IccQuery(globalConf.cli.daemon_handle, argc, argv);
+ 	return CLI_OK;
+ }
+ 
+ 
+-static int cmmQueryTnlCmd(struct cli_def * cli, char *command, char *argv[], int argc)
++static int cmmQueryTnlCmd(struct cli_def * cli, const char *command, char *argv[], int argc)
+ {
+ 	cmmTnlQueryProcess(argv, 0, globalConf.cli.daemon_handle);
+ 
+@@ -2406,31 +2430,31 @@ static int cmmQueryTnlCmd(struct cli_def * cli, char *command, char *argv[], int
+ /*****************************************************************
+ * cmmSetTimeoutCLI
+ ******************************************************************/
+-static int cmmSetTimeoutCLI(struct cli_def * cli, char *command, char *argv[], int argc) 
++static int cmmSetTimeoutCLI(struct cli_def * cli, const char *command, char *argv[], int argc) 
+ {
+ 	timeoutSet(globalConf.cli.daemon_handle, argv, argc);
+ 	return CLI_OK; 
+ }
+ 
+-static int cmmSetRouteCLI(struct cli_def * cli, char *command, char *argv[], int argc) 
++static int cmmSetRouteCLI(struct cli_def * cli, const char *command, char *argv[], int argc) 
+ {
+ 	cmmRouteSetProcess(argv, 0, globalConf.cli.daemon_handle);
+ 	return CLI_OK; 
+ }
+ 
+-static int cmmFFControlCmd(struct cli_def * cli, char *command, char *argv[], int argc) 
++static int cmmFFControlCmd(struct cli_def * cli, const char *command, char *argv[], int argc) 
+ {
+ 	cmmFFControlProcess(argv, 0, globalConf.cli.daemon_handle);
+ 	return CLI_OK;
+ }
+ 
+-static int cmmIpv4Cmd(struct cli_def * cli, char *command, char *argv[], int argc) 
++static int cmmIpv4Cmd(struct cli_def * cli, const char *command, char *argv[], int argc) 
+ {
+ 	cmmCtChangeProcess4(argv, 0, globalConf.cli.daemon_handle);
+ 	return CLI_OK;
+ }
+ 
+-static int cmmIpv6Cmd(struct cli_def * cli, char *command, char *argv[], int argc) 
++static int cmmIpv6Cmd(struct cli_def * cli, const char *command, char *argv[], int argc) 
+ {
+ 	cmmCtChangeProcess6(argv, 0, globalConf.cli.daemon_handle);
+ 	return CLI_OK;
+@@ -2516,49 +2540,49 @@ usage:
+ 	return -1;
+ }
+ 
+-int cmmExptCmd(struct cli_def * cli, char *command, char *argv[], int argc) 
++int cmmExptCmd(struct cli_def * cli, const char *command, char *argv[], int argc) 
+ {
+   	/*Call exception path process function*/
+  	cmmExptSetProcess(argv, 0, globalConf.cli.daemon_handle);
+ 	return CLI_OK;
+ }
+ 
+-int cmmRtpCmd(struct cli_def * cli, char *command, char *argv[], int argc) 
++int cmmRtpCmd(struct cli_def * cli, const char *command, char *argv[], int argc) 
+ {
+   	/*Call RTP process function*/
+  	cmmRTPSetProcess(argv, 0, globalConf.cli.daemon_handle);
+ 	return CLI_OK;
+ }
+ 
+-int cmmSocketCmd(struct cli_def * cli, char *command, char *argv[], int argc) 
++int cmmSocketCmd(struct cli_def * cli, const char *command, char *argv[], int argc) 
+ {
+ 	/*Call Socket process function*/
+ 	cmmSocketSetProcess(argv, 0, globalConf.cli.daemon_handle, AF_INET);
+ 	return CLI_OK;
+ }
+ 
+-int cmmSocket6Cmd(struct cli_def * cli, char *command, char *argv[], int argc)
++int cmmSocket6Cmd(struct cli_def * cli, const char *command, char *argv[], int argc)
+ {
+ 	/*Call Socket process function*/
+ 	cmmSocketSetProcess(argv, 0, globalConf.cli.daemon_handle, AF_INET6);
+ 	return CLI_OK;
+ }
+ 
+-int cmmNatptCmd(struct cli_def * cli, char *command, char *argv[], int argc) 
++int cmmNatptCmd(struct cli_def * cli, const char *command, char *argv[], int argc) 
+ {
+   	/*Call NAT-PT process function*/
+  	cmmNATPTSetProcess(argv, 0, globalConf.cli.daemon_handle);
+ 	return CLI_OK;
+ }
+ 
+-int cmmAltConfCmd(struct cli_def * cli, char *command, char *argv[], int argc) 
++int cmmAltConfCmd(struct cli_def * cli, const char *command, char *argv[], int argc) 
+ {
+   	/*Call AltConf process function*/
+  	cmmAltConfClient(argc, argv, 0, globalConf.cli.daemon_handle);
+ 	return CLI_OK;
+ }
+ 
+-static void cliCallback(struct cli_def *cliHandle, char *format)
++static void cliCallback(struct cli_def *cliHandle, const char *format)
+ {
+ 	if (format[0] && cliHandle->client)
+ 		fprintf(cliHandle->client, "%s\r\n", format);
+@@ -2569,7 +2593,7 @@ static void cliCallback(struct cli_def *cliHandle, char *format)
+ *
+ *
+ ******************************************************************/
+-static int cmmBridgeControlCmd(struct cli_def * cli, char *command, char *argv[], int argc)
++static int cmmBridgeControlCmd(struct cli_def * cli, const char *command, char *argv[], int argc)
+ {
+ 	/*Call L2Flow query function*/
+ 	cmmBridgeControlProcess(argv, 0, globalConf.cli.daemon_handle);
+diff --git a/cmm-17.03.1/src/forward_engine.c b/cmm-17.03.1/src/forward_engine.c
+index 97107bc..f2cecfc 100644
+--- a/cmm-17.03.1/src/forward_engine.c
++++ b/cmm-17.03.1/src/forward_engine.c
+@@ -361,24 +361,26 @@ int cmmFeCtUpdate4(FCI_CLIENT *fci_handler, int action, struct ctTable *ctEntry)
+ 		 * the queue, DSCP marking parameters, and VLAN p-bit settings with the twin connection.
+ 		 */
+ 
+-		qosconnmark_t qmark;
+-		qmark.x = cmd.qosconnmark;
+ #if !defined(LS1043)
+-		if ( (qmark.qosmark_ds.ds_flag) &&
+-			(((ctEntry->fpp_dir & ORIGINATOR) &&
+-			(is_wan_port_ifindex(nfct_get_attr_u32(ctEntry->ct, ATTR_ORIG_COMCERTO_FP_IIF)) &&
+-			!is_wan_port_ifindex(ctEntry->orig.route->oifindex))) ||
+-		     	((ctEntry->fpp_dir & REPLIER) &&
+-			(!is_wan_port_ifindex(nfct_get_attr_u32(ctEntry->ct, ATTR_REPL_COMCERTO_FP_IIF)) &&
+-			is_wan_port_ifindex(ctEntry->rep.route->oifindex))))
+-			)
+-		{
+-			qosmark_t qmark_lo, qmark_hi;
+-			qmark_lo.x = qmark.x_us;
+-			qmark_hi.x = qmark.x_ds;
+-			qmark.x_us = qmark_hi.x; qmark.qosmark_us.ds_flag = 0;
+-			qmark.x_ds = qmark_lo.x; qmark.qosmark_ds.ds_flag = 1;
+-			cmd.qosconnmark = qmark.x;
++		{
++			qosconnmark_t qmark;
++			qmark.x = cmd.qosconnmark;
++			if ( (qmark.qosmark_ds.ds_flag) &&
++				(((ctEntry->fpp_dir & ORIGINATOR) &&
++				(is_wan_port_ifindex(nfct_get_attr_u32(ctEntry->ct, ATTR_ORIG_COMCERTO_FP_IIF)) &&
++				!is_wan_port_ifindex(ctEntry->orig.route->oifindex))) ||
++				((ctEntry->fpp_dir & REPLIER) &&
++				(!is_wan_port_ifindex(nfct_get_attr_u32(ctEntry->ct, ATTR_REPL_COMCERTO_FP_IIF)) &&
++				is_wan_port_ifindex(ctEntry->rep.route->oifindex))))
++				)
++			{
++				qosmark_t qmark_lo, qmark_hi;
++				qmark_lo.x = qmark.x_us;
++				qmark_hi.x = qmark.x_ds;
++				qmark.x_us = qmark_hi.x; qmark.qosmark_us.ds_flag = 0;
++				qmark.x_ds = qmark_lo.x; qmark.qosmark_ds.ds_flag = 1;
++				cmd.qosconnmark = qmark.x;
++			}
+ 		}
+ #endif
+ 
+@@ -714,24 +716,26 @@ int cmmFeCtUpdate6(FCI_CLIENT *fci_handler, int action, struct ctTable *ctEntry)
+ 		 * the queue, DSCP marking parameters, and VLAN p-bit settings with the twin connection.
+ 		 */
+ 
+-		qosconnmark_t qmark;
+-		qmark.x = cmd.qosconnmark;
+ #if !defined(LS1043)
+-		if ( (qmark.qosmark_ds.ds_flag) &&
+-			(((ctEntry->fpp_dir & ORIGINATOR) &&
+-			(is_wan_port_ifindex(nfct_get_attr_u32(ctEntry->ct, ATTR_ORIG_COMCERTO_FP_IIF)) &&
+-			!is_wan_port_ifindex(ctEntry->orig.route->oifindex))) ||
+-		     	((ctEntry->fpp_dir & REPLIER) &&
+-			(!is_wan_port_ifindex(nfct_get_attr_u32(ctEntry->ct, ATTR_REPL_COMCERTO_FP_IIF)) &&
+-			is_wan_port_ifindex(ctEntry->rep.route->oifindex))))
+-			)
+-		{
+-			qosmark_t qmark_lo, qmark_hi;
+-			qmark_lo.x = qmark.x_us;
+-			qmark_hi.x = qmark.x_ds;
+-			qmark.x_us = qmark_hi.x; qmark.qosmark_us.ds_flag = 0;
+-			qmark.x_ds = qmark_lo.x; qmark.qosmark_ds.ds_flag = 1;
+-			cmd.qosconnmark = qmark.x;
++		{
++			qosconnmark_t qmark;
++			qmark.x = cmd.qosconnmark;
++			if ( (qmark.qosmark_ds.ds_flag) &&
++				(((ctEntry->fpp_dir & ORIGINATOR) &&
++				(is_wan_port_ifindex(nfct_get_attr_u32(ctEntry->ct, ATTR_ORIG_COMCERTO_FP_IIF)) &&
++				!is_wan_port_ifindex(ctEntry->orig.route->oifindex))) ||
++				((ctEntry->fpp_dir & REPLIER) &&
++				(!is_wan_port_ifindex(nfct_get_attr_u32(ctEntry->ct, ATTR_REPL_COMCERTO_FP_IIF)) &&
++				is_wan_port_ifindex(ctEntry->rep.route->oifindex))))
++				)
++			{
++				qosmark_t qmark_lo, qmark_hi;
++				qmark_lo.x = qmark.x_us;
++				qmark_hi.x = qmark.x_ds;
++				qmark.x_us = qmark_hi.x; qmark.qosmark_us.ds_flag = 0;
++				qmark.x_ds = qmark_lo.x; qmark.qosmark_ds.ds_flag = 1;
++				cmd.qosconnmark = qmark.x;
++			}
+ 		}
+ #endif
+ 
+diff --git a/cmm-17.03.1/src/itf.c b/cmm-17.03.1/src/itf.c
+index 4638c64..cbd0435 100644
+--- a/cmm-17.03.1/src/itf.c
++++ b/cmm-17.03.1/src/itf.c
+@@ -24,6 +24,14 @@
+ #include <linux/if_vlan.h>
+ #include <net/if_arp.h>
+ 
++/* 4RD (IPv4 Residual Deployment) netlink constants - NXP ASK extension.
++ * These are defined in the ASK-patched kernel but not in glibc headers. */
++#ifndef RTM_NEW4RD
++#define RTM_NEW4RD	97
++#define RTM_DEL4RD	98
++#define RTM_GET4RD	99
++#endif
++
+ #include "cmm.h"
+ #include "itf.h"
+ #include "pppoe.h"
+@@ -510,8 +518,6 @@ static void del_itf_bridge_vlan_info(struct interface *itf)
+ 		vinfo = container_of(entry, struct interface_bridge_vlan_info, list);
+ 		vinfo_remove(vinfo);
+ 	}
+-
+-	return 0;
+ }
+ 
+ static void update_itf_bridge_vlan_info(struct interface *itf,  struct ifinfomsg *ifi, struct rtattr *tb, int dellink)
+@@ -759,9 +765,9 @@ static struct interface *__itf_add(struct interface_table *ctx, int ifindex)
+ #ifdef VLAN_FILTER
+ 	/* Default vlan filtering configuration */
+ 	list_head_init(&itf->bridge_vlan_info_list);
++	memset(&vinfo, 0, sizeof(vinfo));
+ 	vinfo.vid = 1;
+-	vinfo.flags |= BRIDGE_VLAN_INFO_PVID;
+-	vinfo.flags |= BRIDGE_VLAN_INFO_UNTAGGED;
++	vinfo.flags = BRIDGE_VLAN_INFO_PVID | BRIDGE_VLAN_INFO_UNTAGGED;
+ 	vinfo_add(itf,&vinfo);
+ #endif
+ 
+diff --git a/cmm-17.03.1/src/itf.h b/cmm-17.03.1/src/itf.h
+index 5592a4a..2d37adb 100644
+--- a/cmm-17.03.1/src/itf.h
++++ b/cmm-17.03.1/src/itf.h
+@@ -146,7 +146,13 @@ static inline char *get_port_name(int port_id, char *buf, int buf_size)
+ 			continue;
+ 
+ 		if (port_table[ii].port_id == port_id)
+-			snprintf(buf, buf_size, "%s",  port_table[ii].ifname);
++		{
++			size_t len = strlen(port_table[ii].ifname);
++			if (len >= (size_t)buf_size)
++				len = buf_size - 1;
++			memcpy(buf, port_table[ii].ifname, len);
++			buf[len] = '\0';
++		}
+ 	}
+ 
+ 	return buf;
+diff --git a/cmm-17.03.1/src/keytrack.c b/cmm-17.03.1/src/keytrack.c
+index 55b8a32..ca1d150 100644
+--- a/cmm-17.03.1/src/keytrack.c
++++ b/cmm-17.03.1/src/keytrack.c
+@@ -316,7 +316,7 @@ err0:
+ 
+ /* This function displays the list of local Secure Flows */
+ 
+-int cmmFlowLocalShow( struct cli_def * cli, char *command, char *argv[], int argc)
++int cmmFlowLocalShow( struct cli_def * cli, const char *command, char *argv[], int argc)
+ {
+ 	struct FlowEntry *flow;
+ 	struct list_head *entry;
+@@ -1075,7 +1075,6 @@ int cmmUpdateFlowsWithNewSAInfo(struct SATable *pNewSAEntry,unsigned short old_x
+ {
+ 	struct ctTable *ctEntry;
+ 	struct list_head *entry;
+-	struct list_head *entry1;
+ 	int list_sa_index, dir =0;
+ 	struct SATable *pSAEntry;
+ 	unsigned short	*orig_xfrm_handle, *rep_xfrm_handle;
+@@ -1891,7 +1890,7 @@ int cmmDPDSAQUERYProcessClientCmd(u_int8_t *cmd_buf, u_int16_t *res_buf, u_int16
+ 	return 0;
+ }
+ 
+-int cmmSaQueryTimerShow(struct cli_def * cli, char *command, char *argv[], int argc)
++int cmmSaQueryTimerShow(struct cli_def * cli, const char *command, char *argv[], int argc)
+ {
+ 	if(gSAQueryTimerEnable)
+ 		cli_print(cli, " The SA query timer is enabled: the current timer value is %d", gSAQueryTimerVal);
+diff --git a/cmm-17.03.1/src/keytrack.h b/cmm-17.03.1/src/keytrack.h
+index 55d0c0a..b9fe9d0 100644
+--- a/cmm-17.03.1/src/keytrack.h
++++ b/cmm-17.03.1/src/keytrack.h
+@@ -296,6 +296,6 @@ int cmmUpdateFlowsWithNewSAInfo(struct SATable *pNewSAEntry,unsigned short old_x
+ #endif /* IPSEC_FLOW_CACHE */
+ 
+ int cmmDPDSaQuerySetProcess(char ** keywords, int tabStart, daemon_handle_t daemon_handle);
+-int cmmSaQueryTimerShow(struct cli_def * cli, char *command, char *argv[], int argc);
++int cmmSaQueryTimerShow(struct cli_def * cli, const char *command, char *argv[], int argc);
+ int cmmDPDSAQUERYProcessClientCmd(u_int8_t *cmd_buf, u_int16_t *res_buf, u_int16_t *res_len);
+ #endif
+diff --git a/cmm-17.03.1/src/module_ipsec.c b/cmm-17.03.1/src/module_ipsec.c
+index 576c6b9..ed3ef86 100644
+--- a/cmm-17.03.1/src/module_ipsec.c
++++ b/cmm-17.03.1/src/module_ipsec.c
+@@ -42,7 +42,7 @@ static inline unsigned short  getSAHash(unsigned short id)
+ }
+ 
+ 
+-int cmmSAShow(struct cli_def * cli, char *command, char *argv[], int argc)
++int cmmSAShow(struct cli_def * cli, const char *command, char *argv[], int argc)
+ {
+ 	int i, count = 0;
+ 	struct SATable *pSAEntry;
+@@ -265,9 +265,6 @@ out:
+ 
+ static int __cmmSARemove(FCI_CLIENT *fci_handle, struct SATable *SAEntry)
+ {
+-	unsigned short hash;
+-	hash = getSAHash(SAEntry->SAInfo.sagd);
+-
+ 	__cmmRouteDeregister(fci_handle, &SAEntry->tnl_rt, "sa");
+ 
+         /* Remove it from the hash table */
+diff --git a/cmm-17.03.1/src/module_ipsec.h b/cmm-17.03.1/src/module_ipsec.h
+index 15d2e04..7dfa4de 100644
+--- a/cmm-17.03.1/src/module_ipsec.h
++++ b/cmm-17.03.1/src/module_ipsec.h
+@@ -200,7 +200,7 @@ typedef struct _tCommandIPSecSetLifetime{
+ 
+ int __cmmSATunnelRegister(FCI_CLIENT *fci_handle, struct SATable* SAEntry);
+ void __cmmSAUpdateWithRoute(FCI_CLIENT *fci_handle, struct RtEntry *route);
+-int cmmSAShow(struct cli_def * cli, char *command, char *argv[], int argc);
++int cmmSAShow(struct cli_def * cli, const char *command, char *argv[], int argc);
+ int cmmSACreate(FCI_CLIENT *fci_handle, unsigned short fcode, unsigned short len, unsigned short *payload);
+ int cmmSADelete(FCI_CLIENT *fci_handle, PCommandIPSecDeleteSA pSA_cmd);
+ int cmmSAFlush(FCI_CLIENT *fci_handle, unsigned short fcode, unsigned short len, unsigned short *payload);
+diff --git a/cmm-17.03.1/src/module_l2tp.c b/cmm-17.03.1/src/module_l2tp.c
+index 89d7804..8de5f87 100644
+--- a/cmm-17.03.1/src/module_l2tp.c
++++ b/cmm-17.03.1/src/module_l2tp.c
+@@ -134,6 +134,10 @@ int l2tp_new_session(FCI_CLIENT *fci_handle, cmmd_l2tp_session_t *cmd, u_int16_t
+ 	struct interface *itf;
+ 	int rc = 0;
+ 	struct socket *s = NULL;
++	/* Aligned local copies to avoid packed struct member address issues on arm64 */
++	u_int32_t peer_addr_aligned[4], local_addr_aligned[4];
++	memcpy(peer_addr_aligned, cmd->peer_addr, sizeof(peer_addr_aligned));
++	memcpy(local_addr_aligned, cmd->local_addr, sizeof(local_addr_aligned));
+ 
+ 	__pthread_mutex_lock(&itf_table.lock);
+ 	__pthread_mutex_lock(&rtMutex);
+@@ -186,7 +190,7 @@ int l2tp_new_session(FCI_CLIENT *fci_handle, cmmd_l2tp_session_t *cmd, u_int16_t
+ 	itf->l2tp.local_tun_id = cmd->local_tun_id;
+ 	itf->l2tp.peer_tun_id = cmd->peer_tun_id;
+ 
+-	s = socket_find_by_addr(cmd->family, cmd->peer_addr, cmd->local_addr, cmd->peer_port, cmd->local_port, IPPROTO_UDP);
++	s = socket_find_by_addr(cmd->family, peer_addr_aligned, local_addr_aligned, cmd->peer_port, cmd->local_port, IPPROTO_UDP);
+ 	if (!s)	{
+ 
+ 		s = malloc(sizeof(struct socket));
+diff --git a/cmm-17.03.1/src/module_macvlan.c b/cmm-17.03.1/src/module_macvlan.c
+index 52bce8a..52bba89 100644
+--- a/cmm-17.03.1/src/module_macvlan.c
++++ b/cmm-17.03.1/src/module_macvlan.c
+@@ -200,7 +200,7 @@ int cmmMacVlanQueryProcess(char **keywords, int tabStart, daemon_handle_t daemon
+ *
+ *
+ ******************************************************************/
+-int cmmMacVlanLocalShow(struct cli_def *cli, char *command, char *argv[], int argc)
++int cmmMacVlanLocalShow(struct cli_def *cli, const char *command, char *argv[], int argc)
+ {
+ 	struct list_head *entry;
+ 	struct interface *itf;
+diff --git a/cmm-17.03.1/src/module_macvlan.h b/cmm-17.03.1/src/module_macvlan.h
+index 6ed5d4f..087b795 100644
+--- a/cmm-17.03.1/src/module_macvlan.h
++++ b/cmm-17.03.1/src/module_macvlan.h
+@@ -19,7 +19,7 @@
+ void __cmmGetMacVlan(int fd, struct interface *itf);
+ int cmmFeMacVlanUpdate(FCI_CLIENT *fci_handle,int fd, int request, struct interface *itf);
+ int cmmMacVlanQueryProcess(char **keywords, int tabStart, daemon_handle_t daemon_handle);
+-int cmmMacVlanLocalShow(struct cli_def *cli, char *command, char *argv[], int argc);
++int cmmMacVlanLocalShow(struct cli_def *cli, const char *command, char *argv[], int argc);
+ 
+ #endif
+ 
+diff --git a/cmm-17.03.1/src/module_mc4.c b/cmm-17.03.1/src/module_mc4.c
+index 2782522..188f898 100644
+--- a/cmm-17.03.1/src/module_mc4.c
++++ b/cmm-17.03.1/src/module_mc4.c
+@@ -20,7 +20,7 @@
+ extern int cmmMcParseListener(char ** keywords, int *cpt, cmmd_mc6_listener_t * listener, u_int8_t * mode, u_int16_t action );
+ extern pthread_mutex_t mc_lock;
+ 
+-int cmmMc4Show(struct cli_def * cli, char *command, char *argv[], int argc)
++int cmmMc4Show(struct cli_def * cli, const char *command, char *argv[], int argc)
+ {
+ 	int count = 0, ii, jj;
+ 	struct list_head *entry;
+diff --git a/cmm-17.03.1/src/module_mc4.h b/cmm-17.03.1/src/module_mc4.h
+index 62642e6..1376a84 100644
+--- a/cmm-17.03.1/src/module_mc4.h
++++ b/cmm-17.03.1/src/module_mc4.h
+@@ -20,6 +20,6 @@
+ 	int cmmMc4SetProcess(char ** keywords, int tabStart, daemon_handle_t daemon_handle);
+ 	int cmmMc4ProcessClientCmd(FCI_CLIENT* fciMsgHandler, int function_code, u_int8_t *cmd_buf, u_int16_t cmd_len, u_int16_t *res_buf, u_int16_t *res_len);
+ 	 int cmmMc4QueryProcess(char ** keywords, int tabStart, daemon_handle_t daemon_handle);
+-	int cmmMc4Show(struct cli_def * cli, char *command, char *argv[], int argc);
++	int cmmMc4Show(struct cli_def * cli, const char *command, char *argv[], int argc);
+ 
+ #endif
+diff --git a/cmm-17.03.1/src/module_mc6.c b/cmm-17.03.1/src/module_mc6.c
+index 866f30c..9dddaa4 100644
+--- a/cmm-17.03.1/src/module_mc6.c
++++ b/cmm-17.03.1/src/module_mc6.c
+@@ -26,7 +26,7 @@ unsigned char Null_Mac[6] = {0,0,0,0,0,0};
+ 
+ extern pthread_mutex_t mc_lock;
+ 
+-int cmmMc6Show(struct cli_def * cli, char *command, char *argv[], int argc)
++int cmmMc6Show(struct cli_def * cli, const char *command, char *argv[], int argc)
+ {
+ 	int count = 0, ii, jj;
+ 	struct list_head *entry;
+diff --git a/cmm-17.03.1/src/module_mc6.h b/cmm-17.03.1/src/module_mc6.h
+index 1c1e46e..438f36d 100644
+--- a/cmm-17.03.1/src/module_mc6.h
++++ b/cmm-17.03.1/src/module_mc6.h
+@@ -20,7 +20,7 @@
+ 	void cmmMc6SetPrintHelp();
+ 	int cmmMc6SetProcess(char ** keywords, int tabStart, daemon_handle_t daemon_handle);
+ 	int cmmMc6ProcessClientCmd(FCI_CLIENT* fciMsgHandler, int function_code, u_int8_t *cmd_buf, u_int16_t cmd_len, u_int16_t *res_buf, u_int16_t *res_len);
+-	int cmmMc6Show(struct cli_def * cli, char *command, char *argv[], int argc);
++	int cmmMc6Show(struct cli_def * cli, const char *command, char *argv[], int argc);
+ 
+ 	extern  int parse_macaddr(char *pstring, unsigned char *pmacaddr);
+ 
+diff --git a/cmm-17.03.1/src/module_mcast.h b/cmm-17.03.1/src/module_mcast.h
+index 9f61459..c0ee607 100644
+--- a/cmm-17.03.1/src/module_mcast.h
++++ b/cmm-17.03.1/src/module_mcast.h
+@@ -34,12 +34,15 @@ typedef struct mc_listener {
+         u_int8_t        padding[2];
+ }__attribute__((__packed__)) mc_listener_t;
+ 
++/* Note: __packed__ removed - this struct is only used internally in CMM
++ * for linked list management and is not sent to kernel or used for IPC.
++ * Packed attribute caused arm64 alignment issues with list_head operations. */
+ typedef struct mcast_entry {
+ 	struct list_head list;
+ 	u_int8_t  family;
+ //	u_int8_t  programmed;
+-	u_int8_t  mode : 1, 
+-		  queue : 5, 
++	u_int8_t  mode : 1,
++		  queue : 5,
+ 		  rsvd : 2;
+ 	u_int8_t  src_mask_len;
+ 	u_int32_t src_addr[4];
+@@ -50,7 +53,7 @@ typedef struct mcast_entry {
+ 	char	        input_device_str[IFNAMSIZ];
+ #endif
+ 	struct mc_listener listener[MC_MAX_LISTENERS_PER_GROUP];
+-}__attribute__((__packed__)) mcast_entry_t;
++} mcast_entry_t;
+ 
+ extern struct list_head mc_table[MC_NUM_HASH_ENTRIES];
+ struct mcast_entry *mc_find ( void  *data, unsigned char family );
+diff --git a/cmm-17.03.1/src/module_qm.c b/cmm-17.03.1/src/module_qm.c
+index c70718b..b00645a 100644
+--- a/cmm-17.03.1/src/module_qm.c
++++ b/cmm-17.03.1/src/module_qm.c
+@@ -816,6 +816,7 @@ int qm_get_num(char **keywords, int *pcpt, uint32_t max_val, uint32_t *val, char
+ 	return QM_SUCCESS;
+ }
+ 
++#ifdef ENABLE_EGRESS_QOS
+ static int qm_shaper_cfg(char **keywords, int *pcpt, fpp_qm_shaper_cfg_cmd_t *shaperCmd, daemon_handle_t daemon_handle)
+ {
+ 	union u_rxbuf rxbuf;
+@@ -1328,12 +1329,16 @@ static int qm_interface_cfg(char **keywords, int *pcpt, daemon_handle_t daemon_h
+ 	*pcpt = cpt;
+ 	return QM_INVALID_KEYWORD;
+ }
++#endif /* ENABLE_EGRESS_QOS */
+ 
+ static int qm_exptrate_cfg(char **keywords, int cpt, daemon_handle_t daemon_handle)
+ {
+ 	/* Exception packet rate limit */
+ 	fpp_qm_expt_rate_cmd_t exptRateCmd;
+ 	union u_rxbuf rxbuf;
++	/* Use aligned local variable for qm_get_num() to avoid taking
++	 * address of packed struct members (causes alignment issues on arm64) */
++	uint32_t tmp_val;
+ 
+ 	if(!keywords[++cpt])
+ 		return QM_ERROR;
+@@ -1343,19 +1348,21 @@ static int qm_exptrate_cfg(char **keywords, int cpt, daemon_handle_t daemon_hand
+ 		return QM_ERROR;
+ 	exptRateCmd.if_type = FPP_EXPT_TYPE_ETH;
+ 	/* Get an integer from the string */
+-	if (qm_get_num(keywords, &cpt, UINT_MAX, &exptRateCmd.pkts_per_sec, 
++	if (qm_get_num(keywords, &cpt, UINT_MAX, &tmp_val,
+ 		"invalid value for expt rate\n"))
+ 		return QM_ERROR;
+-	if ((exptRateCmd.pkts_per_sec != 0 && 
+-		(exptRateCmd.pkts_per_sec < QM_EXPTRATE_MINVAL || exptRateCmd.pkts_per_sec > QM_EXPTRATE_MAXVAL))) {	
++	exptRateCmd.pkts_per_sec = tmp_val;
++	if ((exptRateCmd.pkts_per_sec != 0 &&
++		(exptRateCmd.pkts_per_sec < QM_EXPTRATE_MINVAL || exptRateCmd.pkts_per_sec > QM_EXPTRATE_MAXVAL))) {
+ 		cmm_print(DEBUG_CRIT, "CMD_QM_EXPT_RATE ERROR: rate must be zero (to disable) or a number between %d and %d\n",
+ 			QM_EXPTRATE_MINVAL, QM_EXPTRATE_MAXVAL);
+ 		return QM_ERROR;
+ 	}
+ 	cpt--;
+ 	/* Get an integer from the string*/
+-	if (qm_get_num(keywords, &cpt, UINT_MAX, &exptRateCmd.burst_size, "invalid value for burst_size value\n"))
++	if (qm_get_num(keywords, &cpt, UINT_MAX, &tmp_val, "invalid value for burst_size value\n"))
+ 		return QM_ERROR;
++	exptRateCmd.burst_size = tmp_val;
+ 	/* pps values for 64 bytes frames 10 Gbps max */
+ 	if ((exptRateCmd.burst_size < QM_EXPTRATE_MIN_BS) || (exptRateCmd.burst_size > QM_EXPTRATE_MAX_BS))
+ 	{
+@@ -1375,6 +1382,9 @@ static int qm_exptrate_cfg(char **keywords, int cpt, daemon_handle_t daemon_hand
+ static int qm_ffrate_cfg(char **keywords, int cpt, daemon_handle_t daemon_handle)
+ {
+ 	union u_rxbuf rxbuf;
++	/* Use aligned local variable for qm_get_num() to avoid taking
++	 * address of packed struct members (causes alignment issues on arm64) */
++	uint32_t tmp_val;
+ 
+ 	/* fast forward rate limit */
+ 	fpp_qm_ff_rate_cmd_t ffRateCmd;
+@@ -1395,15 +1405,16 @@ static int qm_ffrate_cfg(char **keywords, int cpt, daemon_handle_t daemon_handle
+ 		return QM_ERROR;
+ 	}
+ 	strncpy((char *)&ffRateCmd.interface[0], keywords[cpt], IFNAMSIZ);
+-	
++
+ 	if((!keywords[cpt + 1]) || (strcasecmp(keywords[++cpt], "cir") != 0))  {
+ 		cmm_print(DEBUG_STDERR, "Error : invalid keyword. It expects cir parameter and its value.\n");
+ 		return QM_ERROR;
+ 	}
+ 	/* Get an integer from the string */
+-	if (qm_get_num(keywords, &cpt, UINT_MAX, &ffRateCmd.cir, 
++	if (qm_get_num(keywords, &cpt, UINT_MAX, &tmp_val,
+ 		"invalid value for port cir rate\n"))
+ 		return QM_ERROR;
++	ffRateCmd.cir = tmp_val;
+ 	if ((ffRateCmd.cir < QM_FFRATE_MIN_CIR) || (ffRateCmd.cir > QM_FFRATE_MAX_CIR))
+ 	{
+ 		cmm_print(DEBUG_CRIT, "CMD_QM_FF_RATE ERROR: invalid cir rate\n");
+@@ -1415,9 +1426,10 @@ static int qm_ffrate_cfg(char **keywords, int cpt, daemon_handle_t daemon_handle
+ 		return QM_ERROR;
+ 	}
+ 	/* Get an integer from the string*/
+-	if (qm_get_num(keywords, &cpt, UINT_MAX, &ffRateCmd.pir, 
++	if (qm_get_num(keywords, &cpt, UINT_MAX, &tmp_val,
+ 		"invalid value for port pir rate\n"))
+ 		return QM_ERROR;
++	ffRateCmd.pir = tmp_val;
+ 	/* pps values for 64 bytes frames 10 Gbps max */
+ 	if ((ffRateCmd.pir < QM_FFRATE_MIN_PIR) || (ffRateCmd.pir > QM_FFRATE_MAX_PIR))
+ 	{
+@@ -1592,6 +1604,9 @@ help:
+ static int qm_sec_policer_cfg(char **keywords, int cpt, daemon_handle_t daemon_handle)
+ {
+ 	union u_rxbuf rxbuf;
++	/* Use aligned local variable for qm_get_num() to avoid taking
++	 * address of packed struct members (causes alignment issues on arm64) */
++	uint32_t tmp_val;
+ 
+ 	/* fast forward rate limit */
+ 	fpp_qm_sec_rate_cmd_t secRateCmd;
+@@ -1614,7 +1629,7 @@ static int qm_sec_policer_cfg(char **keywords, int cpt, daemon_handle_t daemon_h
+ 		fpp_qm_ingress_policer_reset_cmd_t resetCmd;
+ 
+ 		/* Send FPP_CMD_QM_SEC_POLICER_RESET command */
+-		if(cmmSendToDaemon(daemon_handle, FPP_CMD_QM_SEC_POLICER_RESET, 
++		if(cmmSendToDaemon(daemon_handle, FPP_CMD_QM_SEC_POLICER_RESET,
+ 				&resetCmd, sizeof(fpp_qm_ingress_policer_reset_cmd_t), &rxbuf.rcvBuffer) == 2) {
+ 
+ 			if (rxbuf.result != 0) {
+@@ -1632,9 +1647,10 @@ static int qm_sec_policer_cfg(char **keywords, int cpt, daemon_handle_t daemon_h
+ 		goto help;
+ 	}
+ 	/* Get an integer from the string */
+-	if (qm_get_num(keywords, &cpt, UINT_MAX, &secRateCmd.cir, 
++	if (qm_get_num(keywords, &cpt, UINT_MAX, &tmp_val,
+ 		"invalid value for port cir rate\n"))
+ 		goto help;
++	secRateCmd.cir = tmp_val;
+ 
+ 	if ((secRateCmd.cir < QM_SECRATE_MIN_CIR) || (secRateCmd.cir > QM_SECRATE_MAX_CIR))
+ 	{
+@@ -1647,9 +1663,10 @@ static int qm_sec_policer_cfg(char **keywords, int cpt, daemon_handle_t daemon_h
+ 		goto help;
+ 	}
+ 	/* Get an integer from the string*/
+-	if (qm_get_num(keywords, &cpt, UINT_MAX, &secRateCmd.pir, 
++	if (qm_get_num(keywords, &cpt, UINT_MAX, &tmp_val,
+ 		"invalid value for port pir rate\n"))
+ 		goto help;
++	secRateCmd.pir = tmp_val;
+ 	/* pps values for 64 bytes frames 10 Gbps max */
+ 	if ((secRateCmd.pir < QM_SECRATE_MIN_PIR) || (secRateCmd.pir > QM_SECRATE_MAX_PIR))
+ 	{
+@@ -1665,8 +1682,9 @@ static int qm_sec_policer_cfg(char **keywords, int cpt, daemon_handle_t daemon_h
+ 		goto help;
+ 	}
+ 	/* Get an integer from the string*/
+-	if (qm_get_num(keywords, &cpt, UINT_MAX, &secRateCmd.cbs, "invalid value for port cbs value\n"))
++	if (qm_get_num(keywords, &cpt, UINT_MAX, &tmp_val, "invalid value for port cbs value\n"))
+ 		goto help;
++	secRateCmd.cbs = tmp_val;
+ 	/* pps values for 64 bytes frames 10 Gbps max */
+ 	if ((secRateCmd.cbs < QM_SECRATE_MIN_CBS) || (secRateCmd.cbs > QM_SECRATE_MAX_CBS))
+ 	{
+@@ -1677,10 +1695,11 @@ static int qm_sec_policer_cfg(char **keywords, int cpt, daemon_handle_t daemon_h
+ 		cmm_print(DEBUG_STDERR, "Error : invalid keyword. It expects pbs parameter and its value.\n");
+ 		goto help;
+ 	}
+-	         /* Get an integer from the string*/
+-	if (qm_get_num(keywords, &cpt, UINT_MAX, &secRateCmd.pbs, "invalid value for port pbs value\n"))
++	/* Get an integer from the string*/
++	if (qm_get_num(keywords, &cpt, UINT_MAX, &tmp_val, "invalid value for port pbs value\n"))
+ 		goto help;
+-		         /* pps values for 64 bytes frames 10 Gbps max */
++	secRateCmd.pbs = tmp_val;
++	/* pps values for 64 bytes frames 10 Gbps max */
+ 	if ((secRateCmd.pbs < QM_SECRATE_MIN_PBS) || (secRateCmd.pbs > QM_SECRATE_MAX_PBS))
+ 	{
+ 		cmm_print(DEBUG_CRIT, "CMD_QM_SEC_POLICER_PBS ERROR: invalid pbs\n");
+@@ -2731,8 +2750,7 @@ help:
+ 
+ void cmmQmResetQ2Prio(fpp_qm_reset_cmd_t *cmdp, int cmdlen)
+ {
+-	u_int16_t interface;
+-	char fname[128], ifname[IFNAMSIZ];
++	char fname[128];
+ 	FILE *fp;
+ 
+ 	if (cmdlen != sizeof(fpp_qm_reset_cmd_t))
+@@ -2742,9 +2760,8 @@ void cmmQmResetQ2Prio(fpp_qm_reset_cmd_t *cmdp, int cmdlen)
+ 		return;
+ 	}
+ 
+-	interface = cmdp->interface;
+-
+-	snprintf(fname, 128, "/sys/class/net/%s/q2prio", get_port_name(interface, ifname, IFNAMSIZ));
++	/* cmdp->interface already contains the interface name as a string */
++	snprintf(fname, sizeof(fname), "/sys/class/net/%s/q2prio", (const char *)cmdp->interface);
+ 	fp = fopen(fname, "w");
+ 	if (!fp)
+ 	{
+diff --git a/cmm-17.03.1/src/module_relay.c b/cmm-17.03.1/src/module_relay.c
+index 5d74fa4..42737c0 100644
+--- a/cmm-17.03.1/src/module_relay.c
++++ b/cmm-17.03.1/src/module_relay.c
+@@ -293,7 +293,7 @@ int cmmRelayProcessClientCmd(FCI_CLIENT * fci_handle, int function_code,
+  * *
+  * *
+  * ******************************************************************/
+-int cmmRelayLocalShow(struct cli_def *cli, char *command, char *argv[],
++int cmmRelayLocalShow(struct cli_def *cli, const char *command, char *argv[],
+                       int argc)
+ {
+     struct PPPoERelayEntry *temp;
+diff --git a/cmm-17.03.1/src/module_relay.h b/cmm-17.03.1/src/module_relay.h
+index 2a6ef8a..6dc2c44 100644
+--- a/cmm-17.03.1/src/module_relay.h
++++ b/cmm-17.03.1/src/module_relay.h
+@@ -21,7 +21,7 @@ void cmmRelayShowPrintHelp();
+ int cmmRelayProcessClientCmd(FCI_CLIENT * fciMsgHandler, int function_code,
+                              u_int8_t *cmd_buf, u_int16_t cmd_len, u_int16_t *res_buf, u_int16_t *res_len);
+ 
+-int cmmRelayLocalShow(struct cli_def *cli, char *command, char *argv[],
++int cmmRelayLocalShow(struct cli_def *cli, const char *command, char *argv[],
+                       int argc);
+ int cmmRelayParseCmd(int argc, char ** keywords, int tabStart, daemon_handle_t daemon_handle);
+ #endif
+diff --git a/cmm-17.03.1/src/module_rx.c b/cmm-17.03.1/src/module_rx.c
+index e7dca78..5e77365 100644
+--- a/cmm-17.03.1/src/module_rx.c
++++ b/cmm-17.03.1/src/module_rx.c
+@@ -414,8 +414,13 @@ int cmmFeBridgedIfUpdate(FCI_CLIENT *fci_handle, int fd, struct interface *itf)
+ 	if ((itf->flags & (FPP_PROGRAMMED | FPP_NEEDS_UPDATE)) == FPP_PROGRAMMED)
+ 		return 0;
+ 
+-	strncpy(br_cmd.ifname, itf->ifname , IFNAMSIZ);
+-	STR_TRUNC_END(br_cmd.ifname, IFNAMSIZ);
++	{
++		size_t len = strlen(itf->ifname);
++		if (len >= IFNAMSIZ)
++			len = IFNAMSIZ - 1;
++		memcpy(br_cmd.ifname, itf->ifname, len);
++		br_cmd.ifname[len] = '\0';
++	}
+ 
+ 	if (__itf_is_bridged_port(itf))
+ 	{
+@@ -508,7 +513,10 @@ int cmmFeUpdateAllBridgedIfs( FCI_CLIENT *fci_handle, int fd, struct interface *
+ 	struct list_head *entry;
+ 	struct interface *itf;
+ 	short ret = 0;
+-	int i, j;
++	int i;
++#ifndef VLAN_FILTER
++	int j;
++#endif
+ 	/* Search through interface table if there are any
+ 	 * interface and they are part of bridge then
+ 	 * update the interfce in FPP with bridge MAC
+diff --git a/cmm-17.03.1/src/module_socket.c b/cmm-17.03.1/src/module_socket.c
+index 730e2e0..b55b694 100644
+--- a/cmm-17.03.1/src/module_socket.c
++++ b/cmm-17.03.1/src/module_socket.c
+@@ -155,11 +155,15 @@ static struct socket *socket_add(cmmd_socket_open_cmd_t *cmd)
+ #if defined(LS1043)
+ 	struct RtEntry *output_route;
+ 	struct interface *out_itf;
+-	struct flow flow = {
+-		.family = cmd->family,
+-		.sAddr = cmd->daddr,
+-		.dAddr = cmd->saddr,
+-	};
++	/* Copy addresses to aligned local buffers to avoid packed struct alignment issues */
++	unsigned int saddr_aligned[4], daddr_aligned[4];
++	struct flow flow;
++	memcpy(saddr_aligned, cmd->saddr, sizeof(saddr_aligned));
++	memcpy(daddr_aligned, cmd->daddr, sizeof(daddr_aligned));
++	memset(&flow, 0, sizeof(flow));
++	flow.family = cmd->family;
++	flow.sAddr = daddr_aligned;  /* reverse src and dest addrs for input interface */
++	flow.dAddr = saddr_aligned;
+ #endif
+ 
+ 
+diff --git a/cmm-17.03.1/src/module_tunnel.c b/cmm-17.03.1/src/module_tunnel.c
+index 8289a98..a52ba31 100644
+--- a/cmm-17.03.1/src/module_tunnel.c
++++ b/cmm-17.03.1/src/module_tunnel.c
+@@ -1078,7 +1078,13 @@ static int tunnel_show(FCI_CLIENT *fci_handle, char *name, u_int16_t *res_buf, u
+ 		res_buf[0] = CMMD_ERR_OK;
+ 		pInfo = (struct tunnel_info*)((uint8_t *)res_buf + 4);	
+ 		pInfo->tunnel_family = itf->tunnel_family;
+-		strncpy(pInfo->ifname, itf->ifname, IFNAMSIZ -1);	
++		{
++			size_t len = strlen(itf->ifname);
++			if (len >= IFNAMSIZ)
++				len = IFNAMSIZ - 1;
++			memcpy(pInfo->ifname, itf->ifname, len);
++			pInfo->ifname[len] = '\0';
++		}
+ 		pInfo->phys_ifindex = itf->phys_ifindex;
+ 		pInfo->ipsec = (itf->tunnel_flags & TNL_IPSEC);
+ 		pInfo->itf_programmed = (itf->flags & FPP_PROGRAMMED) ? 1 : 0;
+diff --git a/cmm-17.03.1/src/module_vlan.c b/cmm-17.03.1/src/module_vlan.c
+index afadf53..f42f420 100644
+--- a/cmm-17.03.1/src/module_vlan.c
++++ b/cmm-17.03.1/src/module_vlan.c
+@@ -245,7 +245,7 @@ int cmmVlanCheckPolicy(struct interface *itf)
+ *
+ *
+ ******************************************************************/
+-int cmmVlanLocalShow(struct cli_def *cli, char *command, char *argv[], int argc)
++int cmmVlanLocalShow(struct cli_def *cli, const char *command, char *argv[], int argc)
+ {
+ 	struct list_head *entry;
+ 	struct interface *itf;
+diff --git a/cmm-17.03.1/src/module_vlan.h b/cmm-17.03.1/src/module_vlan.h
+index b67ffe4..f15b13f 100644
+--- a/cmm-17.03.1/src/module_vlan.h
++++ b/cmm-17.03.1/src/module_vlan.h
+@@ -19,7 +19,7 @@
+ 	void __cmmGetVlan(int fd, struct interface *itf);
+ 	int cmmFeVLANUpdate(FCI_CLIENT *fci_handle, int request, struct interface *itf);
+ 	void cmmVlanReset(FCI_CLIENT *fci_handle);
+-	int cmmVlanLocalShow(struct cli_def *cli, char *command, char *argv[], int argc);
++	int cmmVlanLocalShow(struct cli_def *cli, const char *command, char *argv[], int argc);
+ 	int cmmVlanCheckPolicy(struct interface *itf);
+ 
+ /* remote command processing */
+diff --git a/cmm-17.03.1/src/neighbor_resolution.c b/cmm-17.03.1/src/neighbor_resolution.c
+index 6dadca2..83a49b1 100644
+--- a/cmm-17.03.1/src/neighbor_resolution.c
++++ b/cmm-17.03.1/src/neighbor_resolution.c
+@@ -137,7 +137,6 @@ err0:
+ 
+ static int get_neigh(const struct sockaddr_nl *nladdr, struct nlmsghdr *nlh, void *arg)
+ {
+-	struct NeighborEntry *neigh;
+ 	struct ndmsg *ndm;
+ 	struct rtattr *attr;
+ 	uint32_t * out_index = (uint32_t *)arg;
+@@ -166,7 +165,7 @@ err:
+ 
+ /* This function returns the index of physical port for given
+    neighbour mac, bridge index and  vlan */
+-int cmm_br_get_neigh(char *lladdr, uint32_t br_ifindex, uint16_t vlan)
++int cmm_br_get_neigh(unsigned char *lladdr, uint32_t br_ifindex, uint16_t vlan)
+ {
+ 	struct rtnl_handle rth;
+ 	struct ndmsg ndm = {
+@@ -181,7 +180,6 @@ int cmm_br_get_neigh(char *lladdr, uint32_t br_ifindex, uint16_t vlan)
+ 	struct nlmsghdr *nlh = (struct nlmsghdr *)buf;
+ 	uint32_t out_index = 0;
+ 	char ifname[IFNAMSIZ];
+-	int rc;
+ 
+ 	if(!lladdr)
+ 		goto err0;
+@@ -205,7 +203,7 @@ int cmm_br_get_neigh(char *lladdr, uint32_t br_ifindex, uint16_t vlan)
+ 		goto err1;
+ 	}
+ 
+-	rc = cmm_rtnl_listen(&rth, get_neigh, &out_index);
++	(void)cmm_rtnl_listen(&rth, get_neigh, &out_index);
+ 	cmm_print(DEBUG_STDOUT, "%s: outgoing interaface is %s\n", __func__, if_indextoname(out_index,ifname));
+ 
+ 	cmm_rtnl_close(&rth);
+@@ -665,7 +663,7 @@ err:
+ *
+ *
+ ******************************************************************/
+-int cmmNeighShow(struct cli_def * cli, char *command, char *argv[], int argc)
++int cmmNeighShow(struct cli_def * cli, const char *command, char *argv[], int argc)
+ {
+ 	int i;
+ 	struct NeighborEntry *temp;
+diff --git a/cmm-17.03.1/src/neighbor_resolution.h b/cmm-17.03.1/src/neighbor_resolution.h
+index 50cbdb0..ee2c64d 100644
+--- a/cmm-17.03.1/src/neighbor_resolution.h
++++ b/cmm-17.03.1/src/neighbor_resolution.h
+@@ -83,9 +83,9 @@
+ 
+ 	int cmmRtnlNeigh(const struct sockaddr_nl *who, struct nlmsghdr *nlh, void *arg);
+ 
+-	int cmmNeighShow(struct cli_def * cli, char *command, char *argv[], int argc);
++	int cmmNeighShow(struct cli_def * cli, const char *command, char *argv[], int argc);
+ #ifdef VLAN_FILTER
+-	int cmm_br_get_neigh(char *lladdr, uint32_t br_ifindex, uint16_t vlan);
++	int cmm_br_get_neigh(unsigned char *lladdr, uint32_t br_ifindex, uint16_t vlan);
+ #endif
+ 
+ static inline u_int32_t HASH_NEIGHBOR(int family, const u_int32_t *ipaddr)
+diff --git a/cmm-17.03.1/src/pppoe.c b/cmm-17.03.1/src/pppoe.c
+index 77f8a03..6aa2dd5 100644
+--- a/cmm-17.03.1/src/pppoe.c
++++ b/cmm-17.03.1/src/pppoe.c
+@@ -247,7 +247,7 @@ err:
+ *
+ *
+ ******************************************************************/
+-int cmmPPPoELocalShow(struct cli_def * cli, char *command, char *argv[], int argc)
++int cmmPPPoELocalShow(struct cli_def * cli, const char *command, char *argv[], int argc)
+ {
+ 	struct list_head *entry;
+ 	struct interface *itf;
+diff --git a/cmm-17.03.1/src/pppoe.h b/cmm-17.03.1/src/pppoe.h
+index ce1240a..44251de 100644
+--- a/cmm-17.03.1/src/pppoe.h
++++ b/cmm-17.03.1/src/pppoe.h
+@@ -21,7 +21,7 @@
+ 	int __cmmGetPPPoESession(FILE *fp, struct interface* ifp);
+ 
+ 	int cmmFePPPoEUpdate(FCI_CLIENT *fci_handler, int action, struct interface *itf);
+-	int cmmPPPoELocalShow(struct cli_def * cli, char *command, char *argv[], int argc);
++	int cmmPPPoELocalShow(struct cli_def * cli, const char *command, char *argv[], int argc);
+ 	int cmmPPPoEQueryProcess(char ** keywords, int tabStart, daemon_handle_t daemon_handle);
+ 
+ #endif
+diff --git a/cmm-17.03.1/src/route_cache.c b/cmm-17.03.1/src/route_cache.c
+index 14d7cba..fde6178 100644
+--- a/cmm-17.03.1/src/route_cache.c
++++ b/cmm-17.03.1/src/route_cache.c
+@@ -526,7 +526,7 @@ err:
+ *
+ *
+ ******************************************************************/
+-int cmmFPPRtShow(struct cli_def * cli, char *command, char *argv[], int argc)
++int cmmFPPRtShow(struct cli_def * cli, const char *command, char *argv[], int argc)
+ {
+ 	struct fpp_rt *route;
+ 	struct list_head *entry;
+@@ -573,7 +573,7 @@ int cmmFPPRtShow(struct cli_def * cli, char *command, char *argv[], int argc)
+ *
+ *
+ ******************************************************************/
+-int cmmRtShow(struct cli_def * cli, char *command, char *argv[], int argc)
++int cmmRtShow(struct cli_def * cli, const char *command, char *argv[], int argc)
+ {
+ 	struct RtEntry *route;
+ 	struct list_head *entry;
+diff --git a/cmm-17.03.1/src/route_cache.h b/cmm-17.03.1/src/route_cache.h
+index 5e898a0..1a9e8f5 100644
+--- a/cmm-17.03.1/src/route_cache.h
++++ b/cmm-17.03.1/src/route_cache.h
+@@ -129,8 +129,8 @@
+ 	struct fpp_rt *__cmmFPPRouteGet(int oifindex, int iifindex, int underlying_iifindex, 
+ 				const unsigned char *dst_mac, int mtu, const unsigned int *dst_addr, int dst_addr_len);
+ 
+-	int cmmRtShow(struct cli_def * cli, char *command, char *argv[], int argc);
+-	int cmmFPPRtShow(struct cli_def * cli, char *command, char *argv[], int argc);
++	int cmmRtShow(struct cli_def * cli, const char *command, char *argv[], int argc);
++	int cmmFPPRtShow(struct cli_def * cli, const char *command, char *argv[], int argc);
+ 
+ 	int cmmRtnlRoute(const struct sockaddr_nl *who, struct nlmsghdr *nlh, void *arg);
+ 	int cmmRtnlRule(const struct sockaddr_nl *who, struct nlmsghdr *nlh, void *arg);
+diff --git a/cmm-17.03.1/src/rtnl.h b/cmm-17.03.1/src/rtnl.h
+index 96b0300..e5688c4 100644
+--- a/cmm-17.03.1/src/rtnl.h
++++ b/cmm-17.03.1/src/rtnl.h
+@@ -60,6 +60,7 @@ int cmm_rtnl_listen(struct rtnl_handle *rtnl, rtnl_filter_t handler, void *jarg)
+ int cmm_parse_rtattr(struct rtattr *tb[], int max, struct rtattr *rta, int len);
+ struct rtattr *cmm_get_rtattr(struct rtattr *rta, int len, int type);
+ void cmm_addattr_l(struct nlmsghdr *n, int maxlen, int type, const void *data, int alen);
++int cmm_addattr8(struct nlmsghdr *n, int maxlen, int type, __u8 data);
+ int cmm_addattr16(struct nlmsghdr *n, int maxlen, int type, __u16 data);
+ int cmm_addattr32(struct nlmsghdr *n, int maxlen, int type, __u32 data);
+ 
+diff --git a/cmm-17.03.1/src/third_part.c b/cmm-17.03.1/src/third_part.c
+index 373fada..2736b2d 100644
+--- a/cmm-17.03.1/src/third_part.c
++++ b/cmm-17.03.1/src/third_part.c
+@@ -29,7 +29,7 @@ int * cmm_third_part_init(void)
+     return NULL;
+ }
+ 
+-
++#ifdef CMM_THIRD_PART
+ static void cmm_third_part_cb (void *priv, unsigned short type, void *data, unsigned short *resp_length, unsigned short *resp_payload)
+ {
+     struct cmm_ct_to_queue_t *msg;
+@@ -74,6 +74,7 @@ static void cmm_third_part_cb (void *priv, unsigned short type, void *data, unsi
+             break;
+     }
+ }
++#endif /* CMM_THIRD_PART */
+ 
+ void cmm_third_part_exit(void *priv_data)
+ {
+@@ -86,7 +87,7 @@ void cmm_third_part_exit(void *priv_data)
+     /* free allocated resources */
+ }
+ 
+-
++#ifdef CMM_THIRD_PART
+ static void cmm_third_part_dump_ct(struct cmm_ct_to_queue_t * msg)
+ {
+     char saddr_buf[INET6_ADDRSTRLEN], daddr_buf[INET6_ADDRSTRLEN];
+@@ -105,6 +106,7 @@ static void cmm_third_part_dump_ct(struct cmm_ct_to_queue_t * msg)
+ 
+     cmm_print(DEBUG_INFO, "mark 0x%" PRIx64 "\n", msg->qosmark);
+ }
++#endif /* CMM_THIRD_PART */
+ 
+ 
+ void cmm_third_part_update(struct ctTable *ctEntry, int dir)

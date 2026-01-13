@@ -1,9 +1,10 @@
+SUMMARY = "Mono SDK Development Image"
 DESCRIPTION = "A minimal systemd-based root filesystem image for console/UART operation"
 LICENSE = "MIT"
 
 inherit core-image extrausers
 
-# TODO: Set proper root password for production
+# Empty password for development/SDK use
 EXTRA_USERS_PARAMS = "usermod -p '' root;"
 
 # Enable package management for runtime updates
@@ -52,6 +53,17 @@ IMAGE_INSTALL:append = " \
     systemd-analyze \
     "
 
+# Development and debugging tools
+IMAGE_INSTALL:append = " \
+    strace \
+    gdb \
+    gdbserver \
+    ltrace \
+    tcpdump \
+    file \
+    binutils \
+    "
+
 # Filesystem and storage utilities
 IMAGE_INSTALL:append = " \
     e2fsprogs \
@@ -63,7 +75,6 @@ IMAGE_INSTALL:append = " \
     kernel-devicetree \
     kmod \
     udev \
-    udev-rules-qoriq \
     modprobe-config \
     mtd-utils \
     "
@@ -71,6 +82,7 @@ IMAGE_INSTALL:append = " \
 # System services
 IMAGE_INSTALL:append = " \
     systemd-serialgetty \
+    systemd-preset-mono \
     packagegroup-core-ssh-openssh \
     "
 
@@ -90,8 +102,23 @@ IMAGE_INSTALL:append = " \
     packagegroup-fsl-tools-extended \
     "
 
+# ASK (Application Software Kit) fast path offloading
+IMAGE_INSTALL:append = " \
+    kernel-module-cdx \
+    kernel-module-auto-bridge \
+    kernel-module-fci \
+    libfci \
+    cmm \
+    dpa-app \
+    libcli \
+    "
+
 # Networking (Ethernet, WiFi, Bluetooth)
 IMAGE_INSTALL:append = " \
+    conntrack-tools \
+    iptables \
+    dhcpcd \
+    dnsmasq \
     iperf3 \
     hostapd \
     wpa-supplicant \
@@ -118,6 +145,7 @@ EXTRA_IMAGECMD:ext4 = "-F -i 4096 -J size=64"
 
 SYSTEMD_DEFAULT_TARGET = "multi-user.target"
 
+# Note: dhcpcd/dnsmasq disabled via bbappends, systemd-networkd/resolved via preset
 
 sdk_image_postprocess() {
     # Setup hugepages for DPDK
@@ -127,5 +155,5 @@ sdk_image_postprocess() {
 }
 
 ROOTFS_POSTPROCESS_COMMAND += "sdk_image_postprocess; "
-SYSTEMD_AUTO_ENABLE_sshd = "enable"
+SYSTEMD_AUTO_ENABLE:pn-openssh-sshd = "enable"
 hostname:pn-base-files = "sdk"

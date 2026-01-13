@@ -8,7 +8,7 @@ DEPENDS += "bison-native flex-native bc-native"
 
 FILESEXTRAPATHS:prepend := "${THISDIR}/files:"
 
-LINUX_VERSION = "6.12.34"
+LINUX_VERSION = "6.12.49"
 PV = "${LINUX_VERSION}+git${SRCPV}"
 
 LINUX_QORIQ_BRANCH = "lf-6.12.y"
@@ -20,12 +20,14 @@ SRC_URI = "${LINUX_QORIQ_SRC};branch=${LINUX_QORIQ_BRANCH} \
            file://mono-gateway-dk-sdk.dts \
            file://mono-gateway-dk-usdpaa-xg-only.dts \
            file://0001-hwmon-ina2xx-Add-INA234-support.patch \
+           file://002-mono-gateway-ask-kernel_linux_6_12.patch \
           "
-SRCREV = "be78e49cb4339fd38c9a40019df49b72fbb8bcb7"
+# Latest lf-6.12.y as of 2026-01-11
+SRCREV = "df24f9428e38740256a410b983003a478e72a7c0"
 
 S = "${WORKDIR}/git"
 
 do_configure:prepend() {
-    cp ${UNPACKDIR}/defconfig ${B}/.config        
+    cp ${UNPACKDIR}/defconfig ${B}/.config
     cp ${UNPACKDIR}/*.dts ${S}/arch/arm64/boot/dts/freescale/
 }

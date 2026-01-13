@@ -7,7 +7,7 @@ DEPENDS = "bison-native flex-native dtc-native bc-native u-boot-tools-native"
 SRC_URI = "git://github.com/we-are-mono/u-boot.git;protocol=https;branch=mt-6.12.34-2.1.0 \
            file://environment.txt \
           "
-SRCREV = "a79ea9500a217d9060a774de7fc54457153d2250"
+SRCREV = "e0c66b74f3fed22ea6bcba9a2faeb2916a1f6359"
 
 FILESEXTRAPATHS:prepend := "${THISDIR}/files:"
 
@@ -26,17 +26,17 @@ do_compile() {
     unset CFLAGS
     unset CPPFLAGS
 
-    oe_runmake ${UBOOT_MACHINE} 
-    oe_runmake ${EXTRA_OEMAKE}    
+    oe_runmake ${UBOOT_MACHINE}
+    oe_runmake ${EXTRA_OEMAKE}
     mkenvimage -s 0x2000 -o ${B}/u-boot.env ${UNPACKDIR}/environment.txt
 }
 
 do_deploy() {
     install -d ${DEPLOYDIR}
-    install -m 644 ${B}/u-boot.bin ${DEPLOYDIR}/u-boot-${MACHINE}-${PV}-${PR}.bin
+    install -m 0644 ${B}/u-boot.bin ${DEPLOYDIR}/u-boot-${MACHINE}-${PV}-${PR}.bin
     ln -sf u-boot-${MACHINE}-${PV}-${PR}.bin ${DEPLOYDIR}/u-boot.bin
-    
-    install -m 644 ${B}/u-boot.env ${DEPLOYDIR}/uboot-${MACHINE}-${PV}-${PR}.env
+
+    install -m 0644 ${B}/u-boot.env ${DEPLOYDIR}/uboot-${MACHINE}-${PV}-${PR}.env
     ln -sf uboot-${MACHINE}-${PV}-${PR}.env ${DEPLOYDIR}/u-boot.env
 }
 

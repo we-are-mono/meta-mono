@@ -38,7 +38,7 @@ do_compile() {
             rcwimg="${RCWEMMC}"
             ;;
         esac
-        
+
         make V=1 realclean
         oe_runmake pbl fip PLAT=${PLATFORM} BOOT_MODE=${d} RCW=${DEPLOY_DIR_IMAGE}/rcw/gateway_dk/${rcwimg} BL33=${DEPLOY_DIR_IMAGE}/${UBOOT_BINARY}
         cp ${S}/build/${PLATFORM}/release/bl2_${d}.pbl .
@@ -50,8 +50,8 @@ inherit deploy
 
 do_deploy() {
     install -d ${DEPLOYDIR}/atf/
-    install -m 644 ${S}/*.pbl ${DEPLOYDIR}/atf/
-    install -m 644 ${S}/fip.bin ${DEPLOYDIR}/atf/
+    install -m 0644 ${S}/*.pbl ${DEPLOYDIR}/atf/
+    install -m 0644 ${S}/fip.bin ${DEPLOYDIR}/atf/
 }
 
 addtask deploy after do_compile

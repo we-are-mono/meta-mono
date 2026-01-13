@@ -7,6 +7,15 @@ machine: gateway-dk
 distro: recovery
 
 repos:
+  meta-openembedded:
+    url: https://git.openembedded.org/meta-openembedded
+    branch: walnascar
+    path: sources/meta-openembedded
+    layers:
+      meta-oe:
+      meta-python:
+      meta-networking:
+
   meta-mono-bsp:
     path: ./meta-mono-bsp
 

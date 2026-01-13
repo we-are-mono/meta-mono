@@ -27,23 +27,19 @@
 			compatible = "fsl,fman-extended-args";
 			total-fifo-size = <0x3e500>;
 
-			/* Offline ports for CDX */
-			fman0_oh1-extended-args {
-				cell-index = <0x01>;
+			/* Offline ports for CDX - cell-index overridden for SDK compatibility:
+			 * fman0_oh_0x3 (port@83000) = cell-index 1 (SDK style)
+			 * fman0_oh_0x4 (port@84000) = cell-index 2 (SDK style)
+			 */
+			fman0_oh_0x3-extended-args {
+				cell-index = <0x01>;  /* matches port@83000 SDK cell-index */
 				compatible = "fsl,fman-port-op-extended-args";
 				fifo-size = <0x3200 0x00>;
 				buffer-layout = <0x60 0x40>;
 			};
 
-			fman0_oh2-extended-args {
-				cell-index = <0x02>;
-				compatible = "fsl,fman-port-op-extended-args";
-				fifo-size = <0x3200 0x00>;
-				buffer-layout = <0x60 0x40>;
-			};
-
-			fman0_oh3-extended-args {
-				cell-index = <0x03>;
+			fman0_oh_0x4-extended-args {
+				cell-index = <0x02>;  /* matches port@84000 SDK cell-index */
 				compatible = "fsl,fman-port-op-extended-args";
 				fifo-size = <0x900 0x00>;
 				buffer-layout = <0x60 0x40>;
@@ -199,7 +195,10 @@
 	/delete-property/ dma-coherent;
 
 	#include "qoriq-dpaa-eth.dtsi"
-	#include "qoriq-fman3-0-6oh.dtsi"
+	/* Note: We override cell-index values in &fman0 section to match
+	 * SDK driver expectations (0-5 instead of mainline 2-7).
+	 * Port@82000 with cell-index=0 becomes the HC port for PCD.
+	 */
 
 	pcie@3400000 {
 		/delete-property/ iommu-map;
@@ -308,17 +307,54 @@
 		phy-connection-type = "xgmii";
 	};
 
-	/* DPA Offline port bindings - required for CDX */
+	/* DPA Offline port bindings - required for CDX.
+	 * Use phandles fman0_oh_0x3 (port@83000) and fman0_oh_0x4 (port@84000).
+	 * Cell-index overridden to SDK-style (1 and 2) in port nodes above.
+	 */
 	dpa-fman0-oh@2 {
 		compatible = "fsl,dpa-oh";
 		fsl,qman-frame-queues-oh = <0x60 0x01 0x61 0x01>;
-		fsl,fman-oh-port = <&fman0_oh2>;
+		fsl,fman-oh-port = <&fman0_oh_0x3>;
 	};
 
 	dpa-fman0-oh@3 {
 		compatible = "fsl,dpa-oh";
 		fsl,qman-frame-queues-oh = <0x62 0x01 0x63 0x01>;
-		fsl,fman-oh-port = <&fman0_oh3>;
+		fsl,fman-oh-port = <&fman0_oh_0x4>;
+	};
+
+	/* Override OH port cell-index values for SDK driver compatibility.
+	 * SDK driver expects cell-index 0 for HC (Host Command/PCD) port.
+	 * Mainline qoriq-fman3-0.dtsi uses cell-index 2-7, but SDK needs 0-5.
+	 */
+	port@82000 {
+		cell-index = <0>;  /* HC port - required for PCD initialization */
+		compatible = "fsl,fman-port-oh";
+	};
+
+	port@83000 {
+		cell-index = <1>;
+		compatible = "fsl,fman-port-oh";
+	};
+
+	port@84000 {
+		cell-index = <2>;
+		compatible = "fsl,fman-port-oh";
+	};
+
+	port@85000 {
+		cell-index = <3>;
+		compatible = "fsl,fman-port-oh";
+	};
+
+	port@86000 {
+		cell-index = <4>;
+		compatible = "fsl,fman-port-oh";
+	};
+
+	port@87000 {
+		cell-index = <5>;
+		compatible = "fsl,fman-port-oh";
 	};
 };
 

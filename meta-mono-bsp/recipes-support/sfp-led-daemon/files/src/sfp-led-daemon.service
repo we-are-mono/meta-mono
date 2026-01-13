@@ -1,6 +1,7 @@
 [Unit]
 Description=SFP LED Control Daemon
-After=network.target sys-kernel-debug.mount
+After=systemd-udev-settle.service sys-kernel-debug.mount
+Wants=systemd-udev-settle.service
 Requires=sys-kernel-debug.mount
 
 [Service]

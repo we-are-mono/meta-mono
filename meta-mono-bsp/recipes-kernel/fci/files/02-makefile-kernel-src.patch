@@ -1,0 +1,27 @@
+From: Tomaz Zaman <tomaz@mono.si>
+Date: Mon, 12 Jan 2026 12:00:00 +0100
+Subject: [PATCH] fci: Support KERNEL_SRC and KBUILD_EXTRA_SYMBOLS for Yocto
+
+Yocto's module.bbclass passes KERNEL_SRC, not KERNEL_SOURCE.
+Add fallback to support both. Also pass through KBUILD_EXTRA_SYMBOLS
+for cross-module symbol dependencies (e.g., cdx).
+
+Upstream-Status: Inappropriate [build system compatibility]
+Signed-off-by: Tomaz Zaman <tomaz@mono.si>
+---
+--- a/Makefile
++++ b/Makefile
+@@ -1,4 +1,7 @@
+ TOP_DIR := $(shell pwd)
++
++# Support both KERNEL_SOURCE (original) and KERNEL_SRC (Yocto)
++KERNEL_SOURCE ?= $(KERNEL_SRC)
+ BOARD_ARCH?=arm
+
+ obj-m:=fci.o
+@@ -6,4 +9,4 @@
+ all: modules
+
+ modules clean modules_install:
+-	$(MAKE) -C $(KERNEL_SOURCE) ARCH=$(BOARD_ARCH) M=`pwd` $@
++	$(MAKE) -C $(KERNEL_SOURCE) ARCH=$(BOARD_ARCH) KBUILD_EXTRA_SYMBOLS="$(KBUILD_EXTRA_SYMBOLS)" M=`pwd` $@
