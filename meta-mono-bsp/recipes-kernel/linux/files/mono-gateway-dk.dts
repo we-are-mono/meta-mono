@@ -31,31 +31,29 @@
 		compatible = "gpio-leds";
 
 		/* SFP+ Port 0 LEDs - Activity/Link */
-		sfp0_link {
+		led_sfp0_link: sfp0_link {
 			label = "sfp0:link";
 			gpios = <&gpio2 17 GPIO_ACTIVE_HIGH>;
 			default-state = "off";
 		};
 
-		sfp0_activity {
+		led_sfp0_activity: sfp0_activity {
 			label = "sfp0:activity";
 			gpios = <&gpio2 18 GPIO_ACTIVE_HIGH>;
 			default-state = "off";
-			linux,default-trigger = "netdev";
 		};
 
 		/* SFP+ Port 1 LEDs - Activity/Link */
-		sfp1_link {
+		led_sfp1_link: sfp1_link {
 			label = "sfp1:link";
 			gpios = <&gpio2 15 GPIO_ACTIVE_HIGH>;
 			default-state = "off";
 		};
 
-		sfp1_activity {
+		led_sfp1_activity: sfp1_activity {
 			label = "sfp1:activity";
 			gpios = <&gpio2 16 GPIO_ACTIVE_HIGH>;
 			default-state = "off";
-			linux,default-trigger = "netdev";
 		};
 	};
 
@@ -67,6 +65,7 @@
 		mod-def0-gpios = <&gpio2 12 GPIO_ACTIVE_LOW>;
 		los-gpios = <&gpio2 11 GPIO_ACTIVE_HIGH>;
 		maximum-power-milliwatt = <3000>;
+		leds = <&led_sfp0_link>, <&led_sfp0_activity>;
 	};
 
 	/* SFP 2 */
@@ -77,7 +76,15 @@
 		mod-def0-gpios = <&gpio2 10 GPIO_ACTIVE_LOW>;
 		los-gpios = <&gpio2 9 GPIO_ACTIVE_HIGH>;
 		maximum-power-milliwatt = <3000>;
+		leds = <&led_sfp1_link>, <&led_sfp1_activity>;
 	};
+
+	/* SFP LED Controller */
+	sfp_led_controller: sfp-led-controller {
+		compatible = "mono,sfp-led";
+		sfp-ports = <&sfp_xfi0>, <&sfp_xfi1>;
+	};
+
 };
 
 &pcie3 {
