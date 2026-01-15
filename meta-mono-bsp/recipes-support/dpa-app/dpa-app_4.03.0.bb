@@ -6,12 +6,11 @@ LIC_FILES_CHKSUM = "file://${COMMON_LICENSE_DIR}/GPL-2.0-or-later;md5=fed5435554
 DEPENDS = "libcli fmc fmlib cdx libxml2"
 RDEPENDS:${PN} = "fmc fmlib libcli"
 
-SRC_URI = "git://github.com/we-are-mono/ASK.git;protocol=https;branch=master \
-           file://001-fix-port-info-bugs.patch;striplevel=2 \
+SRC_URI = "git://github.com/we-are-mono/ASK.git;protocol=https;branch=mono-patched \
            file://cdx_cfg.xml \
            file://dpa_app_wrapper \
            "
-SRCREV = "56855f3463018937b3fafdfd2fa80a673561bc95"
+SRCREV = "cac8275e43251e17afaeec2cc1b8384303b20df0"
 
 S = "${WORKDIR}/git/dpa_app-4.03.0"
 

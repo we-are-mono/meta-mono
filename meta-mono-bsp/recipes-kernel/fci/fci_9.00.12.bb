@@ -8,11 +8,8 @@ inherit module
 # Depends on cdx for symbol exports
 DEPENDS += "cdx"
 
-SRC_URI = "git://github.com/we-are-mono/ASK.git;protocol=https;branch=master \
-           file://01-kernel-5.6-proc-ops.patch \
-           file://02-makefile-kernel-src.patch \
-           "
-SRCREV = "56855f3463018937b3fafdfd2fa80a673561bc95"
+SRC_URI = "git://github.com/we-are-mono/ASK.git;protocol=https;branch=mono-patched"
+SRCREV = "cac8275e43251e17afaeec2cc1b8384303b20df0"
 
 S = "${WORKDIR}/git/fci-9.00.12"
 

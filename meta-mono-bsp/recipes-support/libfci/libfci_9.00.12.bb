@@ -3,10 +3,10 @@ DESCRIPTION = "Userspace library for communicating with the FCI kernel module"
 LICENSE = "GPL-2.0-or-later"
 LIC_FILES_CHKSUM = "file://${COMMON_LICENSE_DIR}/GPL-2.0-or-later;md5=fed54355545ffd980b814dab4a3b312c"
 
-SRC_URI = "git://github.com/we-are-mono/ASK.git;protocol=https;branch=master \
+SRC_URI = "git://github.com/we-are-mono/ASK.git;protocol=https;branch=mono-patched \
            file://README \
            "
-SRCREV = "56855f3463018937b3fafdfd2fa80a673561bc95"
+SRCREV = "cac8275e43251e17afaeec2cc1b8384303b20df0"
 
 S = "${WORKDIR}/git/fci-9.00.12/lib"
 

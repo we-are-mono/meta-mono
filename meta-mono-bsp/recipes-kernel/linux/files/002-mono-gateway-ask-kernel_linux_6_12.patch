@@ -1,21 +1,9 @@
-From: Tomaz Zaman <tzaman@zaman.io>
-Date: Mon, 12 Jan 2026 16:33:25 +0100
+From: Tomaz Zaman <tomaz@mono.si>
+Date: Thu, 15 Jan 2026 02:05:05 +0100
 Subject: [PATCH] ASK (Application Solutions Kit) network offload extensions
  for kernel 6.12
 
-Port of NXP LSDK 5.4.3 ASK features to kernel 6.12.y:
-- Fast path offloading for IPv4/IPv6
-- IPsec hardware acceleration
-- QoS and traffic shaping extensions
-- Bridge fast path hooks
-- DPAA WiFi integration hooks
-- Netfilter conntrack extensions
-- External hash table support (USE_ENHANCED_EHASH) for DDR-based hash tables
-
-Fixed: Route FM_PCD_HashTableSet to ExternalHashTableSet when USE_ENHANCED_EHASH
-is defined, avoiding MURAM exhaustion and nibble-0 mask restrictions.
-
-Upstream-Status: Inappropriate [NXP vendor-specific extension]
+Upstream-Status: Inappropriate [NXP ASK hardware offload extensions]
 Signed-off-by: Tomaz Zaman <tomaz@mono.si>
 
 diff --git a/Makefile b/Makefile
@@ -10896,6 +10884,70 @@ index 080a23e963b9..f8936fd2f2e0 100644
  	uint32_t fmbm_opc;		/**< O/H Performance Counters  */
  	uint32_t fmbm_opcp;		/**< O/H Performance Count Parameters */
  	uint32_t fmbm_occn;		/**< O/H Cycle Counter  */
+diff --git a/drivers/net/ethernet/freescale/sdk_fman/inc/stdlib_ext.h b/drivers/net/ethernet/freescale/sdk_fman/inc/stdlib_ext.h
+index 48615b7d0dff..937f8f7d6481 100644
+--- a/drivers/net/ethernet/freescale/sdk_fman/inc/stdlib_ext.h
++++ b/drivers/net/ethernet/freescale/sdk_fman/inc/stdlib_ext.h
+@@ -35,53 +35,18 @@
+ #include "stdarg_ext.h"
+ #include "std_ext.h"
+ 
++/*
++ * Note: strlen, strnlen, strcpy, strncpy, strtok are provided by
++ * <linux/string.h> in modern kernels. The kernel's FORTIFY_SOURCE
++ * implementation defines these as macros, so we cannot redeclare them.
++ */
++
+ /**
+  * atoi - convert a character to a int
+  * @s: The start of the string
+  */
+ int atoi(const char *s);
+ 
+-/**
+- * strnlen - Find the length of a length-limited string
+- * @s: The string to be sized
+- * @count: The maximum number of bytes to search
+- */
+-size_t strnlen(const char * s, size_t count);
+-
+-/**
+- * strlen - Find the length of a string
+- * @s: The string to be sized
+- */
+-size_t strlen(const char * s);
+-
+-/**
+- * strtok - Split a string into tokens
+- * @s: The string to be searched
+- * @ct: The characters to search for
+- *
+- * WARNING: strtok is deprecated, use strsep instead.
+- */
+-char * strtok(char * s,const char * ct);
+-
+-/**
+- * strncpy - Copy a length-limited, %NUL-terminated string
+- * @dest: Where to copy the string to
+- * @src: Where to copy the string from
+- * @count: The maximum number of bytes to copy
+- *
+- * Note that unlike userspace strncpy, this does not %NUL-pad the buffer.
+- * However, the result is not %NUL-terminated if the source exceeds
+- * @count bytes.
+- */
+-char * strncpy(char * dest,const char *src,size_t count);
+-
+-/**
+- * strcpy - Copy a %NUL terminated string
+- * @dest: Where to copy the string to
+- * @src: Where to copy the string from
+- */
+-char * strcpy(char * dest,const char *src);
+-
+ /**
+  * vsscanf - Unformat a buffer into a list of arguments
+  * @buf:    input buffer
 diff --git a/drivers/net/ethernet/freescale/sdk_fman/ls1043_dflags.h b/drivers/net/ethernet/freescale/sdk_fman/ls1043_dflags.h
 index 67d96367f075..1d85e6da7ea5 100644
 --- a/drivers/net/ethernet/freescale/sdk_fman/ls1043_dflags.h
@@ -11548,7 +11600,7 @@ index 8c677e254aff..b4505edeb111 100644
  void XX_Free(void *p)
  {
 diff --git a/drivers/net/ppp/ppp_generic.c b/drivers/net/ppp/ppp_generic.c
-index afc1566488b3..cfa01148b610 100644
+index afc1566488b3..37bef0ff8648 100644
 --- a/drivers/net/ppp/ppp_generic.c
 +++ b/drivers/net/ppp/ppp_generic.c
 @@ -54,6 +54,10 @@
@@ -11628,7 +11680,7 @@ index afc1566488b3..cfa01148b610 100644
 +#if defined(CONFIG_CPE_FAST_PATH)
 +	if ((ppp->dev) && (!ppp->closing)) {
 +		rtnl_lock();
-+		rtmsg_ifinfo(RTM_NEWLINK, ppp->dev, 0, GFP_KERNEL);
++		rtmsg_ifinfo(RTM_NEWLINK, ppp->dev, 0, GFP_KERNEL, 0, NULL);
 +		rtnl_unlock();
 +	}
 +#endif
@@ -11644,7 +11696,7 @@ index afc1566488b3..cfa01148b610 100644
 +#if defined(CONFIG_CPE_FAST_PATH)
 +		if ((ppp->dev) && (!ppp->closing)) {
 +			int lock_flag = rtnl_trylock();
-+			rtmsg_ifinfo(RTM_NEWLINK, ppp->dev, 0, GFP_KERNEL);
++			rtmsg_ifinfo(RTM_NEWLINK, ppp->dev, 0, GFP_KERNEL, 0, NULL);
 +			if (lock_flag)
 +				rtnl_unlock();
 +		}
@@ -12365,7 +12417,7 @@ index bd201278c55a..25c7870e2485 100644
  	IP_DEFRAG_VS_FWD,
  	IP_DEFRAG_AF_PACKET,
  	IP_DEFRAG_MACVLAN,
-+#ifdef CONFIG_CPE_TNL_4RD
++#ifdef CONFIG_CPE_4RD_TUNNEL
 +	IP_DEFRAG_IP6_TNL_4RD /* Used to support Post Fragmentation for 4o6 tunnels */
 +#endif
  };
@@ -13133,19 +13185,21 @@ index db7254d52d93..729d6ac8b11f 100644
  	RTM_NEWCHAIN = 100,
  #define RTM_NEWCHAIN RTM_NEWCHAIN
 diff --git a/net/Kconfig b/net/Kconfig
-index 5b3c54974d06..7c02d13c3fae 100644
+index 5b3c54974d06..44360d0d0901 100644
 --- a/net/Kconfig
 +++ b/net/Kconfig
-@@ -125,6 +125,21 @@ config INET
+@@ -125,6 +125,23 @@ config INET
  	  Short answer: say Y.
  
  if INET
 +
 +config CPE_FAST_PATH
-+		bool "Fast Path Processing offload"
-+		depends on ARCH_LAYERSCAPE
-+			help
-+		Support for Fast Path offload.
++	bool "Fast Path Processing offload"
++	depends on ARCH_LAYERSCAPE
++	depends on NETFILTER
++	select NF_CONNTRACK
++	help
++	  Support for Fast Path offload.
 +
 +config CPE_4RD_TUNNEL
 +	bool "4RD IPv6 Transition Tunnel Support"
@@ -14112,7 +14166,7 @@ index f0e5431c2d46..79fcee925ede 100644
  	skb_copy_hash(to, from);
  
 diff --git a/net/ipv6/ip6_tunnel.c b/net/ipv6/ip6_tunnel.c
-index 5350c9bb2319..7e874acef029 100644
+index 5350c9bb2319..325aa24b5d82 100644
 --- a/net/ipv6/ip6_tunnel.c
 +++ b/net/ipv6/ip6_tunnel.c
 @@ -19,6 +19,7 @@
@@ -14645,7 +14699,21 @@ index 5350c9bb2319..7e874acef029 100644
  
  /**
   * ip6_tnl_lookup - fetch tunnel matching the end-point addresses
-@@ -1196,10 +1698,27 @@ int ip6_tnl_xmit(struct sk_buff *skb, struct net_device *dev, __u8 dsfield,
+@@ -870,6 +1372,13 @@ static int __ip6_tnl_rcv(struct ip6_tnl *tunnel, struct sk_buff *skb,
+ 		}
+ 	}
+ 
++#ifdef CONFIG_CPE_4RD_TUNNEL
++	if (ip6_tnl_4rd_rcv_helper(skb, tunnel)) {
++		rcu_read_unlock();
++		goto drop;
++	}
++#endif
++
+ 	dev_sw_netstats_rx_add(tunnel->dev, skb->len);
+ 
+ 	skb_scrub_packet(skb, !net_eq(tunnel->net, dev_net(tunnel->dev)));
+@@ -1196,10 +1705,27 @@ int ip6_tnl_xmit(struct sk_buff *skb, struct net_device *dev, __u8 dsfield,
  		       IPV6_MIN_MTU : IPV4_MIN_MTU);
  
  	skb_dst_update_pmtu_no_confirm(skb, mtu);
@@ -14677,7 +14745,55 @@ index 5350c9bb2319..7e874acef029 100644
  	}
  
  	if (t->err_count > 0) {
-@@ -1636,6 +2155,10 @@ ip6_tnl_siocdevprivate(struct net_device *dev, struct ifreq *ifr,
+@@ -1398,6 +1924,12 @@ ipxip6_tnl_xmit(struct sk_buff *skb, struct net_device *dev,
+ 
+ 	skb_set_inner_ipproto(skb, protocol);
+ 
++#ifdef CONFIG_CPE_4RD_TUNNEL
++	if (protocol == IPPROTO_IPIP && t->ip4rd.prefix &&
++	    ip6_tnl_4rd_xmit_helper(skb, &fl6, t))
++		return -1;
++#endif
++
+ 	err = ip6_tnl_xmit(skb, dev, dsfield, &fl6, encap_limit, &mtu,
+ 			   protocol);
+ 	if (err != 0) {
+@@ -1432,6 +1964,10 @@ ip6_tnl_start_xmit(struct sk_buff *skb, struct net_device *dev)
+ 
+ 	switch (skb->protocol) {
+ 	case htons(ETH_P_IP):
++#ifdef CONFIG_CPE_4RD_TUNNEL
++		if (t->ip4rd.prefix && ip_defrag(dev_net(t->dev), skb, IP_DEFRAG_IP6_TNL_4RD))
++			return NETDEV_TX_OK;
++#endif
+ 		ipproto = IPPROTO_IPIP;
+ 		break;
+ 	case htons(ETH_P_IPV6):
+@@ -1523,6 +2059,13 @@ static void ip6_tnl_link_config(struct ip6_tnl *t)
+ 			WRITE_ONCE(dev->mtu, mtu);
+ 		}
+ 	}
++
++#ifdef CONFIG_CPE_4RD_TUNNEL
++	if (t->ip4rd.prefix) {
++		p->flags |= IP6_TNL_F_CAP_XMIT;
++		p->flags |= IP6_TNL_F_CAP_RCV;
++	}
++#endif
+ }
+ 
+ /**
+@@ -1546,6 +2089,9 @@ ip6_tnl_change(struct ip6_tnl *t, const struct __ip6_tnl_parm *p)
+ 	t->parms.link = p->link;
+ 	t->parms.proto = p->proto;
+ 	t->parms.fwmark = p->fwmark;
++#ifdef CONFIG_CPE_4RD_TUNNEL
++	ip6_tnl_4rd_update_parms(t);
++#endif
+ 	dst_cache_reset(&t->dst_cache);
+ 	ip6_tnl_link_config(t);
+ }
+@@ -1636,6 +2182,10 @@ ip6_tnl_siocdevprivate(struct net_device *dev, struct ifreq *ifr,
  	struct ip6_tnl *t = netdev_priv(dev);
  	struct net *net = t->net;
  	struct ip6_tnl_net *ip6n = net_generic(net, ip6_tnl_net_id);
@@ -14688,7 +14804,7 @@ index 5350c9bb2319..7e874acef029 100644
  
  	memset(&p1, 0, sizeof(p1));
  
-@@ -1716,9 +2239,120 @@ ip6_tnl_siocdevprivate(struct net_device *dev, struct ifreq *ifr,
+@@ -1716,9 +2266,120 @@ ip6_tnl_siocdevprivate(struct net_device *dev, struct ifreq *ifr,
  		err = 0;
  		unregister_netdevice(dev);
  		break;
@@ -14809,7 +14925,7 @@ index 5350c9bb2319..7e874acef029 100644
  	return err;
  }
  
-@@ -2313,9 +2947,24 @@ static int __init ip6_tunnel_init(void)
+@@ -2313,9 +2974,24 @@ static int __init ip6_tunnel_init(void)
  	if (!ipv6_mod_enabled())
  		return -EOPNOTSUPP;
  
@@ -14834,7 +14950,7 @@ index 5350c9bb2319..7e874acef029 100644
  
  	err = xfrm6_tunnel_register(&ip4ip6_handler, AF_INET);
  	if (err < 0) {
-@@ -2337,6 +2986,10 @@ static int __init ip6_tunnel_init(void)
+@@ -2337,6 +3013,10 @@ static int __init ip6_tunnel_init(void)
  		}
  	}
  
@@ -14845,7 +14961,7 @@ index 5350c9bb2319..7e874acef029 100644
  	err = rtnl_link_register(&ip6_link_ops);
  	if (err < 0)
  		goto rtnl_link_failed;
-@@ -2352,6 +3005,10 @@ static int __init ip6_tunnel_init(void)
+@@ -2352,6 +3032,10 @@ static int __init ip6_tunnel_init(void)
  	xfrm6_tunnel_deregister(&ip4ip6_handler, AF_INET);
  out_ip4ip6:
  	unregister_pernet_device(&ip6_tnl_net_ops);
@@ -14856,7 +14972,7 @@ index 5350c9bb2319..7e874acef029 100644
  out_pernet:
  	return err;
  }
-@@ -2362,6 +3019,9 @@ static int __init ip6_tunnel_init(void)
+@@ -2362,6 +3046,9 @@ static int __init ip6_tunnel_init(void)
  
  static void __exit ip6_tunnel_cleanup(void)
  {

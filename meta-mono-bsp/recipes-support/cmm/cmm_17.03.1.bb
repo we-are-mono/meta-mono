@@ -5,12 +5,11 @@ LIC_FILES_CHKSUM = "file://${COMMON_LICENSE_DIR}/GPL-2.0-or-later;md5=fed5435554
 
 DEPENDS = "libnetfilter-conntrack libfci libcli libpcap auto-bridge"
 
-SRC_URI = "git://github.com/we-are-mono/ASK.git;protocol=https;branch=master \
-           file://001-kernel-6.12-compat.patch;striplevel=2 \
+SRC_URI = "git://github.com/we-are-mono/ASK.git;protocol=https;branch=mono-patched \
            file://cmm.service \
            file://fastforward \
            "
-SRCREV = "56855f3463018937b3fafdfd2fa80a673561bc95"
+SRCREV = "cac8275e43251e17afaeec2cc1b8384303b20df0"
 
 S = "${WORKDIR}/git/cmm-17.03.1"
 
