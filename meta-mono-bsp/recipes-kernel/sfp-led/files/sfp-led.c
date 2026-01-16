@@ -124,19 +124,20 @@ struct sfp_led_priv {
 static struct net_device *sfp_led_find_netdev(struct device_node *sfp_np)
 {
 	struct net_device *dev, *found = NULL;
+	bool need_rtnl;
 
 	if (!sfp_np)
 		return NULL;
 
 	/*
-	 * RTNL protects the netdev list and allows sleeping, which is needed
-	 * for device tree operations (of_node_put can sleep if refcount hits
-	 * zero during cleanup).
-	 *
-	 * Callers (workqueue handlers, SFP callbacks) run in process context
-	 * without RTNL held.
+	 * RTNL protects for_each_netdev(). Called from two contexts:
+	 * - init_work (workqueue): RTNL not held, must acquire
+	 * - link_up callback: RTNL already held by SFP state machine
 	 */
-	rtnl_lock();
+	need_rtnl = !rtnl_is_locked();
+	if (need_rtnl)
+		rtnl_lock();
+
 	for_each_netdev(&init_net, dev) {
 		struct device *parent = dev->dev.parent;
 		struct device_node *dpaa_node, *mac_node, *sfp_ref;
@@ -161,7 +162,9 @@ static struct net_device *sfp_led_find_netdev(struct device_node *sfp_np)
 		}
 		of_node_put(sfp_ref);
 	}
-	rtnl_unlock();
+
+	if (need_rtnl)
+		rtnl_unlock();
 
 	return found;
 }
@@ -201,17 +204,11 @@ static void sfp_led_activity_work_handler(struct work_struct *work)
 		goto reschedule;
 
 	/*
-	 * Check if netdev is operational. We hold a reference (dev_hold),
-	 * so the device won't be freed, but it may be transitioning state.
-	 *
-	 * Note: There's an inherent TOCTOU race between this check and
-	 * dev_get_stats() - the device state could change. This is acceptable
-	 * because:
-	 *   1. dev_get_stats() is safe to call regardless of device state
-	 *   2. Worst case: one poll cycle (50ms) with stale/zero stats
-	 *   3. For LED indication, this transient inaccuracy is invisible
+	 * Only poll if the interface is up and SFP has signal.
+	 * Use has_signal (from SFP callbacks) rather than netif_carrier_ok()
+	 * since the MAC carrier state may not match the SFP's LOS GPIO.
 	 */
-	if (!netif_running(netdev) || !netif_carrier_ok(netdev))
+	if (!netif_running(netdev) || !READ_ONCE(port->has_signal))
 		goto reschedule;
 
 	dev_get_stats(netdev, &stats);
@@ -270,11 +267,9 @@ static void sfp_led_start_activity_polling(struct sfp_led_port *port)
 	port->last_tx_packets = 0;
 	port->last_rx_packets = 0;
 	port->activity_led_on = false;
+	sfp_led_set_activity_brightness(port, false);
 	WRITE_ONCE(port->activity_polling, true);
 	schedule_delayed_work(&port->activity_work, 0);
-
-	dev_dbg(port->priv->dev, "%s: activity polling started\n",
-		port->link_led_name);
 }
 
 static void sfp_led_stop_activity_polling(struct sfp_led_port *port)
@@ -322,10 +317,7 @@ static void sfp_led_init_work_handler(struct work_struct *work)
 				"%s: netdev not found after %d retries, port non-functional\n",
 				port->link_led_name, retries);
 			WRITE_ONCE(port->init_failed, true);
-			/*
-			 * Blink both LEDs to indicate error state.
-			 * User should check dmesg for details.
-			 */
+
 			sfp_led_set_link(port, true);
 			sfp_led_set_activity_brightness(port, true);
 			return;
@@ -337,30 +329,30 @@ static void sfp_led_init_work_handler(struct work_struct *work)
 		return;
 	}
 
-	carrier = netif_carrier_ok(netdev);
+	/*
+	 * Use has_signal which is set by link_up/link_down callbacks from
+	 * the SFP subsystem. This reflects the optical LOS (Loss of Signal)
+	 * GPIO state, not the MAC's carrier state.
+	 *
+	 * DO NOT use netif_carrier_ok() here - the MAC may report carrier
+	 * based on SERDES electrical signal from the SFP transceiver, even
+	 * when there's no optical signal (fiber not connected).
+	 */
+	carrier = READ_ONCE(port->has_signal);
 
 	if (carrier) {
-		WRITE_ONCE(port->has_signal, true);
-		dev_dbg(port->priv->dev, "%s: %s has carrier (link up)\n",
-			port->link_led_name, netdev->name);
-
 		sfp_led_set_link(port, true);
 		sfp_led_start_activity_polling(port);
 	} else {
-		WRITE_ONCE(port->has_signal, false);
-		dev_dbg(port->priv->dev, "%s: %s has no carrier\n",
-			port->link_led_name, netdev->name);
-
 		sfp_led_set_link(port, false);
 
-		/* Only set activity LED if no trigger is active */
+		/* Module present but no signal - activity LED solid ON */
 		if (port->activity_led && !port->activity_led->trigger)
 			sfp_led_set_activity_brightness(port, true);
 	}
 }
 
-/* SFP upstream callbacks - called from SFP state machine workqueue */
-
+/* SFP upstream callbacks - unconditionally called from SFP state machine workqueue */
 static void sfp_led_attach(void *priv, struct sfp_bus *bus) { }
 static void sfp_led_detach(void *priv, struct sfp_bus *bus) { }
 
@@ -426,7 +418,19 @@ static void sfp_led_link_up(void *priv)
 	}
 
 	sfp_led_set_link(port, true);
-	sfp_led_start_activity_polling(port);
+
+	if (netdev) {
+		sfp_led_start_activity_polling(port);
+	} else {
+		/*
+		 * Netdev not ready yet - reschedule init_work to retry.
+		 * This can happen when link_up is called very quickly after
+		 * module_insert, before the DPAA subsystem has registered
+		 * the netdev.
+		 */
+		schedule_delayed_work(&port->init_work,
+				      msecs_to_jiffies(SFP_LED_RETRY_DELAY_MS));
+	}
 
 	dev_dbg(port->priv->dev, "%s: SFP link up\n", port->link_led_name);
 }
@@ -559,6 +563,13 @@ static int sfp_led_register_port(struct sfp_led_priv *priv,
 
 	port->bus = bus;
 
+	/*
+	 * Tell the SFP state machine that our "device" is up so it can
+	 * proceed with link detection. Without this, the state machine
+	 * stays in DEV_DOWN state and never calls link_up/link_down.
+	 */
+	sfp_upstream_start(bus);
+
 	dev_info(priv->dev, "registered port %d: %pOFn (link=%s, activity=%s)\n",
 		 index, sfp_np, port->link_led_name, port->activity_led_name);
 
@@ -586,6 +597,7 @@ static void sfp_led_cleanup_port(struct sfp_led_port *port)
 
 	/* Unregister first - no more callbacks after this returns */
 	if (port->bus) {
+		sfp_upstream_stop(port->bus);
 		sfp_bus_del_upstream(port->bus);
 		sfp_bus_put(port->bus);
 		port->bus = NULL;
