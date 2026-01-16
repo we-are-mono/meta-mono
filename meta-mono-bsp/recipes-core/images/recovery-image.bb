@@ -26,6 +26,10 @@ IMAGE_FEATURES:remove = "package-management"
 # We want compressed version of initramfs
 IMAGE_FSTYPES = "cpio.gz"
 
+# Create static device nodes (console, null, etc.) so kernel can open
+# /dev/console before userspace mounts devtmpfs
+USE_DEVFS = "0"
+
 # Optional, but if we don't set it, it has machine in the name by default
 IMAGE_NAME = "${IMAGE_BASENAME}${IMAGE_NAME_SUFFIX}"
 

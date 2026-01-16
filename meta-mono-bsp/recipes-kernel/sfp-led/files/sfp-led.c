@@ -66,6 +66,7 @@
 #include <linux/workqueue.h>
 #include <linux/netdevice.h>
 #include <linux/rtnetlink.h>
+#include <linux/i2c.h>
 
 #define DRIVER_NAME "sfp-led"
 #define SFP_LED_NAME_SIZE 64
@@ -75,6 +76,11 @@
 #define SFP_LED_RETRY_DELAY_MS		500
 #define SFP_LED_ACTIVITY_INTERVAL_MS	50
 #define SFP_LED_MAX_INIT_RETRIES	10
+
+/* DS100DF410 retimer registers */
+#define DS100DF410_STATUS_REG		0x02
+#define DS100DF410_CDR_LOCK_BIT		BIT(3)
+#define DS100DF410_CHANNEL_REG		0xFF
 
 struct sfp_led_port {
 	struct sfp_led_priv *priv;        /* Back-pointer to parent */
@@ -100,12 +106,15 @@ struct sfp_led_port {
 	u64 last_rx_packets;
 	bool activity_polling;
 	bool activity_led_on;            /* Current state of activity LED */
+
+	int retimer_channel;             /* Retimer RX channel for CDR lock (-1 if none) */
 };
 
 struct sfp_led_priv {
 	struct device *dev;
 	int num_ports;		/* Array size (not all may be successfully registered) */
 	struct sfp_led_port *ports;
+	struct i2c_client *retimer;      /* Optional retimer for CDR lock status */
 };
 
 /*
@@ -167,6 +176,41 @@ static struct net_device *sfp_led_find_netdev(struct device_node *sfp_np)
 		rtnl_unlock();
 
 	return found;
+}
+
+/*
+ * Check if the retimer reports CDR lock for this port's RX channel.
+ * Returns true if CDR is locked (valid 10GbE signal), or if no retimer
+ * is configured (falls back to SFP LOS behavior).
+ */
+static bool sfp_led_retimer_has_lock(struct sfp_led_port *port)
+{
+	struct i2c_client *client = port->priv->retimer;
+	int ret;
+
+	if (!client || port->retimer_channel < 0)
+		return true;  /* No retimer - fall back to SFP LOS */
+
+	/* Select the RX channel for this port */
+	ret = i2c_smbus_write_byte_data(client, DS100DF410_CHANNEL_REG,
+					port->retimer_channel);
+	if (ret < 0) {
+		dev_warn_ratelimited(port->priv->dev,
+				     "%s: retimer channel select failed: %d\n",
+				     port->link_led_name, ret);
+		return true;  /* Assume link on I2C error */
+	}
+
+	/* Read CDR status register */
+	ret = i2c_smbus_read_byte_data(client, DS100DF410_STATUS_REG);
+	if (ret < 0) {
+		dev_warn_ratelimited(port->priv->dev,
+				     "%s: retimer status read failed: %d\n",
+				     port->link_led_name, ret);
+		return true;  /* Assume link on I2C error */
+	}
+
+	return !!(ret & DS100DF410_CDR_LOCK_BIT);
 }
 
 static void sfp_led_set_link(struct sfp_led_port *port, bool on)
@@ -330,15 +374,18 @@ static void sfp_led_init_work_handler(struct work_struct *work)
 	}
 
 	/*
-	 * Use has_signal which is set by link_up/link_down callbacks from
-	 * the SFP subsystem. This reflects the optical LOS (Loss of Signal)
-	 * GPIO state, not the MAC's carrier state.
+	 * Determine link state using both SFP LOS and retimer CDR lock.
 	 *
-	 * DO NOT use netif_carrier_ok() here - the MAC may report carrier
-	 * based on SERDES electrical signal from the SFP transceiver, even
-	 * when there's no optical signal (fiber not connected).
+	 * The SFP's has_signal (from LOS GPIO) may be unreliable on some
+	 * modules that report "signal present" even without fiber connected.
+	 * The retimer's CDR lock is authoritative - it only asserts when
+	 * there's a valid 10GbE signal pattern.
+	 *
+	 * If a retimer is configured, require CDR lock for link indication.
+	 * If no retimer, fall back to SFP LOS alone (sfp_led_retimer_has_lock
+	 * returns true when no retimer is configured).
 	 */
-	carrier = READ_ONCE(port->has_signal);
+	carrier = READ_ONCE(port->has_signal) && sfp_led_retimer_has_lock(port);
 
 	if (carrier) {
 		sfp_led_set_link(port, true);
@@ -396,6 +443,7 @@ static void sfp_led_link_up(void *priv)
 {
 	struct sfp_led_port *port = priv;
 	struct net_device *netdev;
+	bool cdr_locked;
 
 	might_sleep();
 
@@ -417,22 +465,45 @@ static void sfp_led_link_up(void *priv)
 		netdev = READ_ONCE(port->netdev);
 	}
 
-	sfp_led_set_link(port, true);
+	/*
+	 * Verify link with retimer CDR lock before indicating link up.
+	 * Some SFP modules report false link_up events when the LOS GPIO
+	 * doesn't work correctly. The retimer's CDR lock is authoritative.
+	 */
+	cdr_locked = sfp_led_retimer_has_lock(port);
 
-	if (netdev) {
-		sfp_led_start_activity_polling(port);
+	if (cdr_locked) {
+		sfp_led_set_link(port, true);
+
+		if (netdev) {
+			sfp_led_start_activity_polling(port);
+		} else {
+			/*
+			 * Netdev not ready yet - reschedule init_work to retry.
+			 * This can happen when link_up is called very quickly after
+			 * module_insert, before the DPAA subsystem has registered
+			 * the netdev.
+			 */
+			schedule_delayed_work(&port->init_work,
+					      msecs_to_jiffies(SFP_LED_RETRY_DELAY_MS));
+		}
+
+		dev_dbg(port->priv->dev, "%s: SFP link up (CDR locked)\n",
+			port->link_led_name);
 	} else {
 		/*
-		 * Netdev not ready yet - reschedule init_work to retry.
-		 * This can happen when link_up is called very quickly after
-		 * module_insert, before the DPAA subsystem has registered
-		 * the netdev.
+		 * SFP reports link but retimer has no CDR lock - this is a
+		 * false positive from a module with unreliable LOS reporting.
+		 * Keep activity LED solid to indicate module present.
 		 */
-		schedule_delayed_work(&port->init_work,
-				      msecs_to_jiffies(SFP_LED_RETRY_DELAY_MS));
-	}
+		sfp_led_set_link(port, false);
+		if (port->activity_led && !port->activity_led->trigger)
+			sfp_led_set_activity_brightness(port, true);
 
-	dev_dbg(port->priv->dev, "%s: SFP link up\n", port->link_led_name);
+		dev_dbg(port->priv->dev,
+			"%s: SFP link up ignored (no CDR lock)\n",
+			port->link_led_name);
+	}
 }
 
 static void sfp_led_link_down(void *priv)
@@ -632,8 +703,10 @@ static void sfp_led_cleanup_port(struct sfp_led_port *port)
 static int sfp_led_probe(struct platform_device *pdev)
 {
 	struct sfp_led_priv *priv;
-	struct device_node *np;
+	struct device_node *np, *retimer_np;
 	int count, i, ret, registered = 0;
+	u32 *retimer_channels = NULL;
+	int num_channels = 0;
 
 	priv = devm_kzalloc(&pdev->dev, sizeof(*priv), GFP_KERNEL);
 	if (!priv)
@@ -653,7 +726,51 @@ static int sfp_led_probe(struct platform_device *pdev)
 	if (!priv->ports)
 		return -ENOMEM;
 
+	/*
+	 * Parse optional retimer for CDR lock status.
+	 * If present, we use the retimer's CDR lock to verify link state
+	 * instead of relying solely on the SFP module's LOS GPIO.
+	 */
+	retimer_np = of_parse_phandle(pdev->dev.of_node, "retimer", 0);
+	if (retimer_np) {
+		struct i2c_client *client;
+
+		client = of_find_i2c_device_by_node(retimer_np);
+		of_node_put(retimer_np);
+
+		if (client) {
+			priv->retimer = client;
+
+			/* Read retimer channel mapping */
+			num_channels = of_property_count_u32_elems(
+				pdev->dev.of_node, "retimer-channels");
+			if (num_channels > 0) {
+				retimer_channels = devm_kcalloc(&pdev->dev,
+					num_channels, sizeof(u32), GFP_KERNEL);
+				if (retimer_channels) {
+					of_property_read_u32_array(
+						pdev->dev.of_node,
+						"retimer-channels",
+						retimer_channels, num_channels);
+				}
+			}
+
+			dev_info(&pdev->dev,
+				 "using retimer %s for CDR lock status\n",
+				 dev_name(&client->dev));
+		} else {
+			dev_warn(&pdev->dev,
+				 "retimer specified but I2C device not found\n");
+		}
+	}
+
 	for (i = 0; i < count; i++) {
+		/* Initialize retimer channel (-1 means no retimer) */
+		if (retimer_channels && i < num_channels)
+			priv->ports[i].retimer_channel = retimer_channels[i];
+		else
+			priv->ports[i].retimer_channel = -1;
+
 		np = of_parse_phandle(pdev->dev.of_node, "sfp-ports", i);
 		if (!np) {
 			dev_warn(&pdev->dev, "failed to parse sfp-ports[%d]\n", i);
@@ -668,6 +785,8 @@ static int sfp_led_probe(struct platform_device *pdev)
 
 	if (registered == 0) {
 		dev_err(&pdev->dev, "no SFP ports registered\n");
+		if (priv->retimer)
+			put_device(&priv->retimer->dev);
 		return -ENODEV;
 	}
 
@@ -683,6 +802,9 @@ static void sfp_led_remove(struct platform_device *pdev)
 
 	for (i = 0; i < priv->num_ports; i++)
 		sfp_led_cleanup_port(&priv->ports[i]);
+
+	if (priv->retimer)
+		put_device(&priv->retimer->dev);
 
 	dev_info(&pdev->dev, "unloaded\n");
 }
