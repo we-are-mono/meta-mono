@@ -8,7 +8,6 @@ RDEPENDS:${PN} = "fmc fmlib libcli"
 
 SRC_URI = "git://github.com/we-are-mono/ASK.git;protocol=https;branch=mono-patched \
            file://cdx_cfg.xml \
-           file://dpa_app_wrapper \
            "
 SRCREV = "cac8275e43251e17afaeec2cc1b8384303b20df0"
 

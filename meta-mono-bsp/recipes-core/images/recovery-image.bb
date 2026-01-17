@@ -11,7 +11,7 @@ IMAGE_INSTALL = "busybox base-files bash shadow kmod udev \
                 parted util-linux-fdisk util-linux-lsblk util-linux-blkid \
                 e2fsprogs e2fsprogs-resize2fs mmc-utils mtd-utils i2c-tools \
                 ethtool curl gzip tar \
-                fancontrol sfp-led status-led-daemon kernel-module-leds-lp5812 \
+                fancontrol sfp-led status-led kernel-module-leds-lp5812 \
                 "
 
 # This line ensures no root password is needed for login

@@ -5,7 +5,7 @@ LIC_FILES_CHKSUM = "file://${COMMON_LICENSE_DIR}/MIT;md5=0835ade698e0bcf8506ecda
 
 SRC_URI = " \
     file://status-led.sh \
-    file://S95status-led-daemon \
+    file://S95status-led \
 "
 
 S = "${WORKDIR}/sources"
@@ -16,10 +16,10 @@ do_install() {
     install -m 0755 ${UNPACKDIR}/status-led.sh  ${D}${bindir}/
 
     install -d ${D}${sysconfdir}/init.d
-    install -m 0755 ${UNPACKDIR}/S95status-led-daemon ${D}${sysconfdir}/init.d/
+    install -m 0755 ${UNPACKDIR}/S95status-led ${D}${sysconfdir}/init.d/
 
     install -d ${D}${sysconfdir}/rcS.d
-    ln -sf ../init.d/S95status-led-daemon ${D}${sysconfdir}/rcS.d/S95status-led-daemon
+    ln -sf ../init.d/S95status-led ${D}${sysconfdir}/rcS.d/S95status-led
 }
 
-FILES:${PN} = "${bindir}/status-led.sh ${sysconfdir}/init.d/S95status-led-daemon ${sysconfdir}/rcS.d/S95status-led-daemon"
+FILES:${PN} = "${bindir}/status-led.sh ${sysconfdir}/init.d/S95status-led ${sysconfdir}/rcS.d/S95status-led"
