@@ -1,11 +1,14 @@
 From: Tomaz Zaman <tomaz@mono.si>
-Date: Thu, 15 Jan 2026 02:05:05 +0100
-Subject: [PATCH] ASK (Application Solutions Kit) network offload extensions
- for kernel 6.12
+Date: Sat, 17 Jan 2026 15:30:46 +0100
+Subject: [PATCH] ASK fast path for kernel 6.12
 
-Upstream-Status: Inappropriate [NXP ASK hardware offload extensions]
+NXP Application Solutions Kit (ASK) extensions for hardware-accelerated
+packet processing on LS1046A. Includes fast-path offload, IPsec offload,
+and Frame Manager PCD extensions.
+
+Upstream-Status: Inappropriate [vendor-specific extension]
 Signed-off-by: Tomaz Zaman <tomaz@mono.si>
-
+---
 diff --git a/Makefile b/Makefile
 index 66ae67c52da8..a1d4113d3f65 100644
 --- a/Makefile
@@ -12410,7 +12413,7 @@ index 7cf21f8ce51b..b78e5077ff07 100644
  	sk_buff_data_t		tail;
  	sk_buff_data_t		end;
 diff --git a/include/net/ip.h b/include/net/ip.h
-index bd201278c55a..25c7870e2485 100644
+index bd201278c55a..aa6b07ff9304 100644
 --- a/include/net/ip.h
 +++ b/include/net/ip.h
 @@ -723,6 +723,9 @@ enum ip_defrag_users {
@@ -14166,7 +14169,7 @@ index f0e5431c2d46..79fcee925ede 100644
  	skb_copy_hash(to, from);
  
 diff --git a/net/ipv6/ip6_tunnel.c b/net/ipv6/ip6_tunnel.c
-index 5350c9bb2319..325aa24b5d82 100644
+index 5350c9bb2319..be965b07fea7 100644
 --- a/net/ipv6/ip6_tunnel.c
 +++ b/net/ipv6/ip6_tunnel.c
 @@ -19,6 +19,7 @@
@@ -17687,7 +17690,7 @@ index 841a60a6fbfe..041c92b56e38 100644
  		spin_lock(&x->lock);
  
 diff --git a/net/xfrm/xfrm_output.c b/net/xfrm/xfrm_output.c
-index a30538a980cc..6b63d54a4e51 100644
+index a30538a980cc..68da63335ac7 100644
 --- a/net/xfrm/xfrm_output.c
 +++ b/net/xfrm/xfrm_output.c
 @@ -67,6 +67,10 @@ static int xfrm4_transport_output(struct xfrm_state *x, struct sk_buff *skb)
@@ -17827,7 +17830,28 @@ index a30538a980cc..6b63d54a4e51 100644
  	kfree_skb(skb);
  out:
  	return err;
-@@ -909,10 +987,20 @@ static int xfrm6_extract_output(struct xfrm_state *x, struct sk_buff *skb)
+@@ -862,10 +940,20 @@ static int xfrm4_extract_output(struct xfrm_state *x, struct sk_buff *skb)
+ 	if (err)
+ 		return err;
+ 
++#if defined(CONFIG_INET_IPSEC_OFFLOAD) || defined(CONFIG_INET6_IPSEC_OFFLOAD)
++	if (skb->ipsec_offload == 0) {
++		XFRM_MODE_SKB_CB(skb)->protocol = ip_hdr(skb)->protocol;
++		xfrm4_extract_header(skb);
++		return 0;
++	} else {
++		return 0;
++	}
++#else
+ 	XFRM_MODE_SKB_CB(skb)->protocol = ip_hdr(skb)->protocol;
+ 
+ 	xfrm4_extract_header(skb);
+ 	return 0;
++#endif
+ }
+ 
+ #if IS_ENABLED(CONFIG_IPV6)
+@@ -909,10 +997,20 @@ static int xfrm6_extract_output(struct xfrm_state *x, struct sk_buff *skb)
  	if (err)
  		return err;
  

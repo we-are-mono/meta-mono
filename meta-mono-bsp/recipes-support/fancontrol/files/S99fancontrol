@@ -2,11 +2,11 @@
 
 case "$1" in
     start)
-        echo "Starting fancontrol..."
-        /usr/sbin/fancontrol &
+        echo "Starting fancontrol"
+        /usr/sbin/fancontrol > /dev/null 2>&1 &
         ;;
     stop)
-        echo "Stopping fancontrol..."
+        echo "Stopping fancontrol"
         killall fancontrol
         ;;
     restart)

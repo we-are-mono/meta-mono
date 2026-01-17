@@ -1,47 +1,42 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 /*
- * SFP LED Control Platform Driver
+ * SFP LED Control Platform Driver (Passive Monitor)
  *
- * Controls SFP port LEDs based on module presence and optical signal state.
- * Registers with the SFP bus to receive hotplug and link state events.
+ * Controls SFP port LEDs based on module presence and link state.
+ * This driver passively monitors I2C and netdev state without interfering
+ * with the SFP subsystem or MAC driver.
+ *
+ * Design principle:
+ *   This driver does NOT interact with the kernel's SFP state machine.
+ *   This avoids conflicts with MAC drivers that use fixed-link configuration
+ *   (like NXP DPAA SDK).
+ *
+ * Detection method:
+ *   - Module presence: Probe I2C EEPROM at 0x50
+ *   - Link state: Check netdev operstate (for DAC) or I2C DDM (for fiber)
+ *   - Activity: Poll netdev tx/rx packet counters
  *
  * LED behavior:
- *   - Link LED: ON when optical signal detected (carrier up)
- *   - Activity LED: Blinks on tx/rx traffic when link is up
- *                   Solid ON when module present but no link
- *                   OFF when no module inserted
+ *
+ *   State                      | Green (Link) | Orange (Activity)
+ *   ---------------------------|--------------|-------------------
+ *   No module                  | OFF          | OFF
+ *   Module present, no link    | OFF          | ON (solid)
+ *   Module present, link up    | ON           | Blinks on traffic
+ *
+ * Module type detection:
+ *   - Fiber SFP: Uses I2C DDM (A2h byte 110 LOS bit) for link detection
+ *   - DAC cable: Uses netdev operstate (DAC has no DDM support)
+ *   - Detection via A0h page bytes 3 and 8 copper compliance bits
  *
  * Device tree binding example:
  *
- *   // LED definitions (typically under gpio-leds node)
- *   leds {
- *       compatible = "gpio-leds";
- *
- *       led_sfp0_link: sfp0_link {
- *           label = "sfp0:link";
- *           gpios = <&gpio2 17 GPIO_ACTIVE_HIGH>;
- *           default-state = "off";
- *       };
- *
- *       led_sfp0_activity: sfp0_activity {
- *           label = "sfp0:activity";
- *           gpios = <&gpio2 18 GPIO_ACTIVE_HIGH>;
- *           default-state = "off";
- *       };
- *   };
- *
- *   // SFP cage definition - references LEDs via 'leds' property
- *   // Order: first LED = link, second LED = activity
  *   sfp0: sfp-0 {
  *       compatible = "sff,sfp";
  *       i2c-bus = <&sfp0_i2c>;
- *       mod-def0-gpios = <&gpio2 12 GPIO_ACTIVE_LOW>;
- *       los-gpios = <&gpio2 11 GPIO_ACTIVE_HIGH>;
- *       tx-disable-gpios = <&gpio2 14 GPIO_ACTIVE_HIGH>;
  *       leds = <&led_sfp0_link>, <&led_sfp0_activity>;
  *   };
  *
- *   // SFP LED controller - lists all SFP ports to manage
  *   sfp-led-controller {
  *       compatible = "mono,sfp-led";
  *       sfp-ports = <&sfp0>, <&sfp1>;
@@ -50,7 +45,6 @@
  *   // MAC node must reference SFP for netdev association
  *   &fman_mac {
  *       sfp = <&sfp0>;
- *       managed = "in-band-status";
  *   };
  *
  * Copyright 2026 Mono Technologies Inc.
@@ -59,34 +53,53 @@
 
 #include <linux/module.h>
 #include <linux/kernel.h>
+#include <linux/errno.h>
 #include <linux/of.h>
 #include <linux/platform_device.h>
-#include <linux/sfp.h>
 #include <linux/leds.h>
 #include <linux/workqueue.h>
 #include <linux/netdevice.h>
 #include <linux/rtnetlink.h>
 #include <linux/i2c.h>
+#include <linux/if.h>
 
 #define DRIVER_NAME "sfp-led"
 #define SFP_LED_NAME_SIZE 64
 
-/* Timing constants */
-#define SFP_LED_INIT_DELAY_MS		100
-#define SFP_LED_RETRY_DELAY_MS		500
-#define SFP_LED_ACTIVITY_INTERVAL_MS	50
-#define SFP_LED_MAX_INIT_RETRIES	10
+/* Polling interval in milliseconds */
+#define SFP_LED_POLL_INTERVAL_MS	100
+#define SFP_LED_NETDEV_RETRY_MS		1000
+#define SFP_LED_MAX_NETDEV_RETRIES	30
 
-/* DS100DF410 retimer registers */
-#define DS100DF410_STATUS_REG		0x02
-#define DS100DF410_CDR_LOCK_BIT		BIT(3)
-#define DS100DF410_CHANNEL_REG		0xFF
+/* SFP I2C addresses per SFP MSA */
+#define SFP_EEPROM_ADDR		0x50	/* A0h page - module ID/capabilities */
+#define SFP_DIAG_ADDR		0x51	/* A2h page - diagnostics/status */
+
+/* SFP A2h page registers */
+#define SFP_STATUS_CTRL_REG	110	/* Status/Control register */
+#define SFP_STATUS_LOS		BIT(1)	/* RX Loss of Signal */
+#define SFP_STATUS_TX_FAULT	BIT(2)	/* TX Fault */
+
+/* SFP A0h page - cable type detection (per SFP MSA) */
+#define SFP_PHYS_EXT_ID		1	/* Extended identifier */
+#define SFP_COMPLIANCE_3	3	/* 10G/1G Ethernet compliance */
+#define SFP_COMPLIANCE_8	8	/* SFP+ cable technology */
+#define SFP_8472_COMPLIANCE	94	/* SFF-8472 compliance (DDM support) */
+
+/* Byte 3 bits - 1G Ethernet copper compliance */
+#define SFP_IF_1X_COPPER_PASSIVE	BIT(0)
+#define SFP_IF_1X_COPPER_ACTIVE		BIT(1)
+
+/* Byte 8 bits - SFP+ cable technology */
+#define SFP_CT_PASSIVE		BIT(2)	/* Passive cable */
+#define SFP_CT_ACTIVE		BIT(3)	/* Active cable */
 
 struct sfp_led_port {
-	struct sfp_led_priv *priv;        /* Back-pointer to parent */
-	struct device_node *sfp_np;       /* SFP device node */
-	struct sfp_bus *bus;
+	struct sfp_led_priv *priv;
+	struct device_node *sfp_np;
+	struct i2c_adapter *i2c_adapter;	/* I2C bus for module detection */
 	struct net_device *netdev;
+	char netdev_name[IFNAMSIZ];
 
 	struct led_classdev *link_led;
 	struct led_classdev *activity_led;
@@ -94,27 +107,22 @@ struct sfp_led_port {
 	char link_led_name[SFP_LED_NAME_SIZE];
 	char activity_led_name[SFP_LED_NAME_SIZE];
 
-	bool module_present;
-	bool has_signal;
-	bool init_failed;              /* Set if netdev discovery exhausted retries */
+	struct delayed_work poll_work;
+	int netdev_retries;
 
-	struct delayed_work init_work;
-	int init_retries;
-
-	struct delayed_work activity_work;
+	/* Cached state for change detection */
+	bool last_module_present;
+	bool last_carrier;
+	bool is_dac;			/* True if DAC cable (no DDM support) */
 	u64 last_tx_packets;
 	u64 last_rx_packets;
-	bool activity_polling;
-	bool activity_led_on;            /* Current state of activity LED */
-
-	int retimer_channel;             /* Retimer RX channel for CDR lock (-1 if none) */
+	bool activity_led_on;
 };
 
 struct sfp_led_priv {
 	struct device *dev;
-	int num_ports;		/* Array size (not all may be successfully registered) */
+	int num_ports;
 	struct sfp_led_port *ports;
-	struct i2c_client *retimer;      /* Optional retimer for CDR lock status */
 };
 
 /*
@@ -123,12 +131,6 @@ struct sfp_led_priv {
  * DPAA device tree structure:
  *   fsldpaa/ethernet@8 (fsl,dpa-ethernet) -> fsl,fman-mac = <&enet6>
  *   fman0/ethernet@f0000 (enet6)          -> sfp = <&sfp_xfi0>
- *
- * Returns: net_device with incremented refcount, or NULL if not found.
- *          Caller must call dev_put() when done.
- *
- * Note: Only searches init_net namespace. Network namespace support is not
- * implemented as SFP hardware is typically not namespace-aware.
  */
 static struct net_device *sfp_led_find_netdev(struct device_node *sfp_np)
 {
@@ -138,11 +140,6 @@ static struct net_device *sfp_led_find_netdev(struct device_node *sfp_np)
 	if (!sfp_np)
 		return NULL;
 
-	/*
-	 * RTNL protects for_each_netdev(). Called from two contexts:
-	 * - init_work (workqueue): RTNL not held, must acquire
-	 * - link_up callback: RTNL already held by SFP state machine
-	 */
 	need_rtnl = !rtnl_is_locked();
 	if (need_rtnl)
 		rtnl_lock();
@@ -179,38 +176,166 @@ static struct net_device *sfp_led_find_netdev(struct device_node *sfp_np)
 }
 
 /*
- * Check if the retimer reports CDR lock for this port's RX channel.
- * Returns true if CDR is locked (valid 10GbE signal), or if no retimer
- * is configured (falls back to SFP LOS behavior).
+ * Detect SFP module presence by probing I2C EEPROM at address 0x50.
+ * All SFP/SFP+ modules have an EEPROM that responds to this address.
+ * Returns true if module is present, false otherwise.
  */
-static bool sfp_led_retimer_has_lock(struct sfp_led_port *port)
+static bool sfp_led_i2c_module_present(struct sfp_led_port *port)
 {
-	struct i2c_client *client = port->priv->retimer;
+	union i2c_smbus_data data;
 	int ret;
 
-	if (!client || port->retimer_channel < 0)
-		return true;  /* No retimer - fall back to SFP LOS */
+	if (!port->i2c_adapter)
+		return false;
 
-	/* Select the RX channel for this port */
-	ret = i2c_smbus_write_byte_data(client, DS100DF410_CHANNEL_REG,
-					port->retimer_channel);
+	/*
+	 * Try to read byte 0 from SFP EEPROM (identifier byte).
+	 * If the read succeeds, a module is present.
+	 */
+	ret = i2c_smbus_xfer(port->i2c_adapter, SFP_EEPROM_ADDR,
+			     0, I2C_SMBUS_READ, 0,
+			     I2C_SMBUS_BYTE_DATA, &data);
+
+	return ret >= 0;
+}
+
+static bool sfp_led_module_present(struct sfp_led_port *port)
+{
+	return sfp_led_i2c_module_present(port);
+}
+
+/*
+ * Detect if the SFP module is a DAC (Direct Attach Copper) cable.
+ * DAC cables don't have optical transceivers and don't support DDM.
+ * Detection via A0h page compliance bytes per SFP MSA:
+ *   - Byte 3 bits 0-1: 1G copper passive/active
+ *   - Byte 8 bits 2-3: SFP+ cable technology passive/active
+ * Returns true if DAC cable, false if fiber/optical module.
+ */
+static bool sfp_led_is_dac_cable(struct sfp_led_port *port)
+{
+	union i2c_smbus_data data;
+	int ret;
+	u8 byte3, byte8;
+	bool is_dac;
+
+	if (!port->i2c_adapter)
+		return false;  /* Can't detect, assume fiber */
+
+	/* Read byte 3 - 10G/1G Ethernet compliance */
+	ret = i2c_smbus_xfer(port->i2c_adapter, SFP_EEPROM_ADDR,
+			     0, I2C_SMBUS_READ, SFP_COMPLIANCE_3,
+			     I2C_SMBUS_BYTE_DATA, &data);
 	if (ret < 0) {
-		dev_warn_ratelimited(port->priv->dev,
-				     "%s: retimer channel select failed: %d\n",
-				     port->link_led_name, ret);
-		return true;  /* Assume link on I2C error */
+		dev_warn(port->priv->dev, "%s: failed to read A0h byte 3: %d\n",
+			 port->link_led_name, ret);
+		return false;
+	}
+	byte3 = data.byte;
+
+	/* Read byte 8 - SFP+ cable technology */
+	ret = i2c_smbus_xfer(port->i2c_adapter, SFP_EEPROM_ADDR,
+			     0, I2C_SMBUS_READ, SFP_COMPLIANCE_8,
+			     I2C_SMBUS_BYTE_DATA, &data);
+	if (ret < 0) {
+		dev_warn(port->priv->dev, "%s: failed to read A0h byte 8: %d\n",
+			 port->link_led_name, ret);
+		return false;
+	}
+	byte8 = data.byte;
+
+	/* Check copper compliance bits */
+	is_dac = (byte3 & (SFP_IF_1X_COPPER_PASSIVE | SFP_IF_1X_COPPER_ACTIVE)) ||
+		 (byte8 & (SFP_CT_PASSIVE | SFP_CT_ACTIVE));
+
+	dev_dbg(port->priv->dev, "%s: A0h byte3=0x%02x byte8=0x%02x -> %s\n",
+		 port->link_led_name, byte3, byte8,
+		 is_dac ? "DAC cable" : "fiber/optical");
+
+	return is_dac;
+}
+
+/*
+ * Read LOS (Loss of Signal) status from SFP module via I2C.
+ * SFP MSA defines status register at A2h (0x51), byte 110.
+ * Returns true if signal is lost, false if signal is present.
+ */
+static bool sfp_led_i2c_los(struct sfp_led_port *port)
+{
+	union i2c_smbus_data data;
+	int ret;
+	static int debug_count[2] = {0, 0};  /* Rate limit debug output */
+	int port_idx = (port == &port->priv->ports[0]) ? 0 : 1;
+
+	if (!port->i2c_adapter)
+		return true;  /* Assume no signal if can't check */
+
+	ret = i2c_smbus_xfer(port->i2c_adapter, SFP_DIAG_ADDR,
+			     0, I2C_SMBUS_READ, SFP_STATUS_CTRL_REG,
+			     I2C_SMBUS_BYTE_DATA, &data);
+
+	/* Debug: log every 50th read or on error */
+	if (ret < 0) {
+		if (debug_count[port_idx]++ % 50 == 0)
+			dev_dbg(port->priv->dev, "%s: A2h read failed: %d (no DDM?)\n",
+				 port->link_led_name, ret);
+		return true;  /* Error reading - assume no signal */
 	}
 
-	/* Read CDR status register */
-	ret = i2c_smbus_read_byte_data(client, DS100DF410_STATUS_REG);
-	if (ret < 0) {
-		dev_warn_ratelimited(port->priv->dev,
-				     "%s: retimer status read failed: %d\n",
-				     port->link_led_name, ret);
-		return true;  /* Assume link on I2C error */
+	/* Debug: log status byte periodically */
+	if (debug_count[port_idx]++ % 50 == 0)
+		dev_dbg(port->priv->dev, "%s: A2h[110]=0x%02x LOS=%d\n",
+			 port->link_led_name, data.byte,
+			 (data.byte & SFP_STATUS_LOS) ? 1 : 0);
+
+	return (data.byte & SFP_STATUS_LOS) != 0;
+}
+
+/*
+ * Check if interface has operational link.
+ * For DAC cables with DPAA fixed-link, get_link() is unreliable.
+ * Use operstate which accurately reflects actual link status.
+ */
+static bool sfp_led_has_operational_link(struct net_device *netdev)
+{
+	/*
+	 * operstate reflects actual link status:
+	 * - IF_OPER_UP: interface is up and link is established
+	 * - IF_OPER_DOWN: interface is down or no link
+	 * This is what ethtool uses for "Link detected" field.
+	 */
+	return netdev->operstate == IF_OPER_UP;
+}
+
+/*
+ * Check if we have signal/link.
+ * For fiber modules: I2C DDM status register (A2h byte 110 LOS bit)
+ * For DAC cables: operstate (DAC has no DDM support)
+ * Returns true if link/signal is present.
+ */
+static bool sfp_led_has_signal(struct sfp_led_port *port)
+{
+	/*
+	 * DAC cables don't have optical transceivers and don't support DDM.
+	 * The A2h page reads return 0xff which looks like LOS=1.
+	 * For DAC, check operstate which accurately reflects link status,
+	 * unlike get_link()/carrier which may be stale with fixed-link config.
+	 */
+	if (port->is_dac) {
+		if (port->netdev)
+			return sfp_led_has_operational_link(port->netdev);
+		return false;
 	}
 
-	return !!(ret & DS100DF410_CDR_LOCK_BIT);
+	/* Fiber: Use I2C DDM status register (most fiber SFPs support DDM) */
+	if (port->i2c_adapter)
+		return !sfp_led_i2c_los(port);
+
+	/* Last resort: check operstate */
+	if (port->netdev)
+		return sfp_led_has_operational_link(port->netdev);
+
+	return false;
 }
 
 static void sfp_led_set_link(struct sfp_led_port *port, bool on)
@@ -222,370 +347,169 @@ static void sfp_led_set_link(struct sfp_led_port *port, bool on)
 			   on ? port->link_led->max_brightness : LED_OFF);
 }
 
-static void sfp_led_set_activity_brightness(struct sfp_led_port *port, bool on)
+static void sfp_led_set_activity(struct sfp_led_port *port, bool on)
 {
 	if (!port->activity_led)
+		return;
+
+	/* Don't override if user has configured a trigger */
+	if (port->activity_led->trigger)
 		return;
 
 	led_set_brightness(port->activity_led,
 			   on ? port->activity_led->max_brightness : LED_OFF);
 }
 
-static void sfp_led_activity_work_handler(struct work_struct *work)
+static void sfp_led_poll_work_handler(struct work_struct *work)
 {
 	struct sfp_led_port *port = container_of(work, struct sfp_led_port,
-						 activity_work.work);
-	struct rtnl_link_stats64 stats;
+						 poll_work.work);
 	struct net_device *netdev;
-	u64 new_tx, new_rx;
+	bool module_present, carrier;
+	struct rtnl_link_stats64 stats;
 	bool had_activity;
 
-	if (!READ_ONCE(port->activity_polling))
-		return;
+	/* Check module presence via I2C */
+	module_present = sfp_led_module_present(port);
 
-	netdev = READ_ONCE(port->netdev);
-	if (!netdev)
+	/* Handle module state changes */
+	if (module_present != port->last_module_present) {
+		port->last_module_present = module_present;
+
+		if (!module_present) {
+			/* Module removed - turn off both LEDs and reset state */
+			sfp_led_set_link(port, false);
+			sfp_led_set_activity(port, false);
+			port->last_carrier = false;
+			port->is_dac = false;
+			dev_dbg(port->priv->dev, "%s: module removed\n",
+				port->link_led_name);
+		} else {
+			/* Module inserted - detect cable type */
+			port->is_dac = sfp_led_is_dac_cable(port);
+			/* Set initial state: module present, no link yet */
+			sfp_led_set_link(port, false);
+			sfp_led_set_activity(port, true);
+			dev_dbg(port->priv->dev, "%s: module inserted (%s)\n",
+				port->link_led_name,
+				port->is_dac ? "DAC" : "fiber");
+		}
+	}
+
+	if (!module_present)
 		goto reschedule;
 
-	/*
-	 * Only poll if the interface is up and SFP has signal.
-	 * Use has_signal (from SFP callbacks) rather than netif_carrier_ok()
-	 * since the MAC carrier state may not match the SFP's LOS GPIO.
-	 */
-	if (!netif_running(netdev) || !READ_ONCE(port->has_signal))
+	/* Try to find netdev if we don't have one yet */
+	netdev = READ_ONCE(port->netdev);
+	if (!netdev) {
+		netdev = sfp_led_find_netdev(port->sfp_np);
+		if (netdev) {
+			if (cmpxchg(&port->netdev, NULL, netdev) != NULL) {
+				dev_put(netdev);
+			} else {
+				strscpy(port->netdev_name, netdev->name,
+					sizeof(port->netdev_name));
+				dev_dbg(port->priv->dev, "%s: found netdev %s\n",
+					port->link_led_name, netdev->name);
+			}
+		} else {
+			port->netdev_retries++;
+			if (port->netdev_retries < SFP_LED_MAX_NETDEV_RETRIES) {
+				/* Keep activity LED on to show module present */
+				sfp_led_set_activity(port, true);
+			}
+		}
+		netdev = READ_ONCE(port->netdev);
+	}
+
+	if (!netdev) {
+		/* No netdev yet - show module present only */
+		sfp_led_set_link(port, false);
+		sfp_led_set_activity(port, true);
+		goto reschedule;
+	}
+
+	/* Check signal/carrier state */
+	carrier = sfp_led_has_signal(port);
+
+	if (carrier != port->last_carrier) {
+		port->last_carrier = carrier;
+		sfp_led_set_link(port, carrier);
+
+		if (carrier) {
+			dev_dbg(port->priv->dev, "%s: link up\n",
+				port->link_led_name);
+			/* Turn off activity LED and reset counters on link up */
+			sfp_led_set_activity(port, false);
+			port->last_tx_packets = 0;
+			port->last_rx_packets = 0;
+			port->activity_led_on = false;
+		} else {
+			dev_dbg(port->priv->dev, "%s: link down\n",
+				port->link_led_name);
+			/* Module present but no link - solid activity LED */
+			sfp_led_set_activity(port, true);
+		}
+	}
+
+	if (!carrier)
+		goto reschedule;
+
+	/* Monitor activity when link is up */
+	if (!netif_running(netdev))
 		goto reschedule;
 
 	dev_get_stats(netdev, &stats);
-	new_tx = stats.tx_packets;
-	new_rx = stats.rx_packets;
 
-	had_activity = (new_tx != port->last_tx_packets ||
-			new_rx != port->last_rx_packets);
+	had_activity = (stats.tx_packets != port->last_tx_packets ||
+			stats.rx_packets != port->last_rx_packets);
 
 	if (had_activity) {
-		/*
-		 * Toggle LED state on activity. This creates a visible
-		 * blink pattern when there's continuous traffic.
-		 */
+		/* Toggle LED for visible blink */
 		port->activity_led_on = !port->activity_led_on;
-		led_set_brightness(port->activity_led,
-				   port->activity_led_on ?
-				   port->activity_led->max_brightness : LED_OFF);
-
-		port->last_tx_packets = new_tx;
-		port->last_rx_packets = new_rx;
+		sfp_led_set_activity(port, port->activity_led_on);
+		port->last_tx_packets = stats.tx_packets;
+		port->last_rx_packets = stats.rx_packets;
 	} else if (port->activity_led_on) {
-		/* No activity - ensure LED is off */
+		/* No activity - turn off */
 		port->activity_led_on = false;
-		led_set_brightness(port->activity_led, LED_OFF);
+		sfp_led_set_activity(port, false);
 	}
 
 reschedule:
-	schedule_delayed_work(&port->activity_work,
-			      msecs_to_jiffies(SFP_LED_ACTIVITY_INTERVAL_MS));
-}
-
-static void sfp_led_start_activity_polling(struct sfp_led_port *port)
-{
-	if (!port->activity_led || !READ_ONCE(port->netdev))
-		return;
-
-	/*
-	 * If user has configured an LED trigger (e.g., netdev via DT or sysfs),
-	 * defer to that trigger for activity indication. Our polling would
-	 * conflict with the trigger's control of the LED.
-	 *
-	 * User can configure the netdev trigger via sysfs:
-	 *   echo "eth0" > /sys/class/leds/<led>/device_name
-	 *   echo 1 > /sys/class/leds/<led>/tx
-	 *   echo 1 > /sys/class/leds/<led>/rx
-	 */
-	if (port->activity_led->trigger) {
-		dev_dbg(port->priv->dev,
-			"%s: trigger '%s' active, skipping polling\n",
-			port->activity_led_name,
-			port->activity_led->trigger->name);
-		return;
-	}
-
-	port->last_tx_packets = 0;
-	port->last_rx_packets = 0;
-	port->activity_led_on = false;
-	sfp_led_set_activity_brightness(port, false);
-	WRITE_ONCE(port->activity_polling, true);
-	schedule_delayed_work(&port->activity_work, 0);
-}
-
-static void sfp_led_stop_activity_polling(struct sfp_led_port *port)
-{
-	WRITE_ONCE(port->activity_polling, false);
-	cancel_delayed_work_sync(&port->activity_work);
-
-	dev_dbg(port->priv->dev, "%s: activity polling stopped\n",
-		port->link_led_name);
-}
-
-static void sfp_led_init_work_handler(struct work_struct *work)
-{
-	struct sfp_led_port *port = container_of(work, struct sfp_led_port,
-						 init_work.work);
-	struct net_device *netdev;
-	bool carrier;
-
-	if (!READ_ONCE(port->module_present))
-		return;
-
-	netdev = READ_ONCE(port->netdev);
-	if (!netdev) {
-		netdev = sfp_led_find_netdev(port->sfp_np);
-		if (netdev) {
-			if (cmpxchg(&port->netdev, NULL, netdev) != NULL)
-				dev_put(netdev);  /* Someone else won the race */
-			else
-				dev_dbg(port->priv->dev, "%s: found netdev %s\n",
-					port->link_led_name, netdev->name);
-		}
-		netdev = READ_ONCE(port->netdev);
-	}
-
-	if (!netdev) {
-		/*
-		 * Safe to use plain increment: this work handler is the only
-		 * writer, and any reset (in module_insert) happens only after
-		 * cancel_delayed_work_sync() has ensured we're not running.
-		 */
-		int retries = ++port->init_retries;
-
-		if (retries >= SFP_LED_MAX_INIT_RETRIES) {
-			dev_err(port->priv->dev,
-				"%s: netdev not found after %d retries, port non-functional\n",
-				port->link_led_name, retries);
-			WRITE_ONCE(port->init_failed, true);
-
-			sfp_led_set_link(port, true);
-			sfp_led_set_activity_brightness(port, true);
-			return;
-		}
-		dev_dbg(port->priv->dev, "%s: netdev not found, retry %d/%d\n",
-			port->link_led_name, retries, SFP_LED_MAX_INIT_RETRIES);
-		schedule_delayed_work(&port->init_work,
-				      msecs_to_jiffies(SFP_LED_RETRY_DELAY_MS));
-		return;
-	}
-
-	/*
-	 * Determine link state using both SFP LOS and retimer CDR lock.
-	 *
-	 * The SFP's has_signal (from LOS GPIO) may be unreliable on some
-	 * modules that report "signal present" even without fiber connected.
-	 * The retimer's CDR lock is authoritative - it only asserts when
-	 * there's a valid 10GbE signal pattern.
-	 *
-	 * If a retimer is configured, require CDR lock for link indication.
-	 * If no retimer, fall back to SFP LOS alone (sfp_led_retimer_has_lock
-	 * returns true when no retimer is configured).
-	 */
-	carrier = READ_ONCE(port->has_signal) && sfp_led_retimer_has_lock(port);
-
-	if (carrier) {
-		sfp_led_set_link(port, true);
-		sfp_led_start_activity_polling(port);
-	} else {
-		sfp_led_set_link(port, false);
-
-		/* Module present but no signal - activity LED solid ON */
-		if (port->activity_led && !port->activity_led->trigger)
-			sfp_led_set_activity_brightness(port, true);
-	}
-}
-
-/* SFP upstream callbacks - unconditionally called from SFP state machine workqueue */
-static void sfp_led_attach(void *priv, struct sfp_bus *bus) { }
-static void sfp_led_detach(void *priv, struct sfp_bus *bus) { }
-
-static int sfp_led_module_insert(void *priv, const struct sfp_eeprom_id *id)
-{
-	struct sfp_led_port *port = priv;
-
-	WRITE_ONCE(port->module_present, true);
-	WRITE_ONCE(port->has_signal, false);
-	WRITE_ONCE(port->init_failed, false);
-	port->init_retries = 0;  /* Safe: init_work was sync-cancelled in module_remove */
-
-	schedule_delayed_work(&port->init_work,
-			      msecs_to_jiffies(SFP_LED_INIT_DELAY_MS));
-
-	dev_dbg(port->priv->dev, "%s: SFP module inserted: %.16s\n",
-		port->link_led_name, id->base.vendor_name);
-
-	return 0;
-}
-
-static void sfp_led_module_remove(void *priv)
-{
-	struct sfp_led_port *port = priv;
-
-	might_sleep();
-
-	WRITE_ONCE(port->module_present, false);
-	WRITE_ONCE(port->has_signal, false);
-
-	cancel_delayed_work_sync(&port->init_work);
-	sfp_led_stop_activity_polling(port);
-
-	sfp_led_set_link(port, false);
-	sfp_led_set_activity_brightness(port, false);
-
-	dev_dbg(port->priv->dev, "%s: SFP module removed\n", port->link_led_name);
-}
-
-static void sfp_led_link_up(void *priv)
-{
-	struct sfp_led_port *port = priv;
-	struct net_device *netdev;
-	bool cdr_locked;
-
-	might_sleep();
-
-	WRITE_ONCE(port->has_signal, true);
-
-	cancel_delayed_work_sync(&port->init_work);
-
-	/* Ensure netdev is discovered - link_up may arrive before init_work completes */
-	netdev = READ_ONCE(port->netdev);
-	if (!netdev) {
-		netdev = sfp_led_find_netdev(port->sfp_np);
-		if (netdev) {
-			if (cmpxchg(&port->netdev, NULL, netdev) != NULL)
-				dev_put(netdev);  /* Someone else won the race */
-			else
-				dev_dbg(port->priv->dev, "%s: found netdev %s\n",
-					port->link_led_name, netdev->name);
-		}
-		netdev = READ_ONCE(port->netdev);
-	}
-
-	/*
-	 * Verify link with retimer CDR lock before indicating link up.
-	 * Some SFP modules report false link_up events when the LOS GPIO
-	 * doesn't work correctly. The retimer's CDR lock is authoritative.
-	 */
-	cdr_locked = sfp_led_retimer_has_lock(port);
-
-	if (cdr_locked) {
-		sfp_led_set_link(port, true);
-
-		if (netdev) {
-			sfp_led_start_activity_polling(port);
-		} else {
-			/*
-			 * Netdev not ready yet - reschedule init_work to retry.
-			 * This can happen when link_up is called very quickly after
-			 * module_insert, before the DPAA subsystem has registered
-			 * the netdev.
-			 */
-			schedule_delayed_work(&port->init_work,
-					      msecs_to_jiffies(SFP_LED_RETRY_DELAY_MS));
-		}
-
-		dev_dbg(port->priv->dev, "%s: SFP link up (CDR locked)\n",
-			port->link_led_name);
-	} else {
-		/*
-		 * SFP reports link but retimer has no CDR lock - this is a
-		 * false positive from a module with unreliable LOS reporting.
-		 * Keep activity LED solid to indicate module present.
-		 */
-		sfp_led_set_link(port, false);
-		if (port->activity_led && !port->activity_led->trigger)
-			sfp_led_set_activity_brightness(port, true);
-
-		dev_dbg(port->priv->dev,
-			"%s: SFP link up ignored (no CDR lock)\n",
-			port->link_led_name);
-	}
-}
-
-static void sfp_led_link_down(void *priv)
-{
-	struct sfp_led_port *port = priv;
-
-	might_sleep();
-
-	WRITE_ONCE(port->has_signal, false);
-
-	cancel_delayed_work_sync(&port->init_work);
-	sfp_led_stop_activity_polling(port);
-
-	sfp_led_set_link(port, false);
-
-	/*
-	 * Only set activity LED state if no trigger is active.
-	 * If user has configured a trigger (e.g., netdev), let it handle
-	 * the LED state - our direct control would conflict.
-	 */
-	if (port->activity_led && !port->activity_led->trigger) {
-		if (READ_ONCE(port->module_present))
-			sfp_led_set_activity_brightness(port, true);
-		else
-			sfp_led_set_activity_brightness(port, false);
-	}
-
-	dev_dbg(port->priv->dev, "%s: SFP link down\n", port->link_led_name);
-}
-
-static const struct sfp_upstream_ops sfp_led_upstream_ops = {
-	.attach = sfp_led_attach,
-	.detach = sfp_led_detach,
-	.module_insert = sfp_led_module_insert,
-	.module_remove = sfp_led_module_remove,
-	.link_up = sfp_led_link_up,
-	.link_down = sfp_led_link_down,
-};
-
-/*
- * Find the MAC node that references an SFP.
- */
-static struct device_node *sfp_led_find_mac_for_sfp(struct device_node *sfp_np)
-{
-	struct device_node *node;
-
-	for_each_node_with_property(node, "sfp") {
-		struct device_node *sfp_ref = of_parse_phandle(node, "sfp", 0);
-		bool matches = (sfp_ref == sfp_np);
-
-		of_node_put(sfp_ref);
-
-		if (matches)
-			return node;
-	}
-
-	return NULL;
+	schedule_delayed_work(&port->poll_work,
+			      msecs_to_jiffies(SFP_LED_POLL_INTERVAL_MS));
 }
 
 static int sfp_led_register_port(struct sfp_led_priv *priv,
 				 struct device_node *sfp_np, int index)
 {
 	struct sfp_led_port *port = &priv->ports[index];
-	struct device_node *mac_np;
-	struct sfp_bus *bus;
-	int ret;
+	struct device_node *i2c_np;
 
 	port->priv = priv;
-
-	mac_np = sfp_led_find_mac_for_sfp(sfp_np);
-	if (!mac_np) {
-		dev_warn(priv->dev, "port %d: no MAC references SFP %pOFn\n",
-			 index, sfp_np);
-		return -ENODEV;
-	}
-
-	INIT_DELAYED_WORK(&port->init_work, sfp_led_init_work_handler);
-	INIT_DELAYED_WORK(&port->activity_work, sfp_led_activity_work_handler);
-
 	port->sfp_np = sfp_np;
 	of_node_get(sfp_np);
 
+	/* Get I2C adapter for module detection */
+	i2c_np = of_parse_phandle(sfp_np, "i2c-bus", 0);
+	if (i2c_np) {
+		port->i2c_adapter = of_get_i2c_adapter_by_node(i2c_np);
+		of_node_put(i2c_np);
+	}
+
+	if (IS_ERR_OR_NULL(port->i2c_adapter)) {
+		int ret = PTR_ERR_OR_ZERO(port->i2c_adapter);
+
+		port->i2c_adapter = NULL;
+		if (ret != -EPROBE_DEFER)
+			dev_err(priv->dev, "port %d: i2c-bus not available\n", index);
+		of_node_put(sfp_np);
+		port->sfp_np = NULL;
+		return ret ? ret : -ENODEV;
+	}
+
+	/* Get LEDs */
 	port->link_led = of_led_get(sfp_np, 0);
 	if (IS_ERR(port->link_led)) {
 		dev_dbg(priv->dev, "port %d: link LED not in DT: %ld\n",
@@ -600,6 +524,7 @@ static int sfp_led_register_port(struct sfp_led_priv *priv,
 		port->activity_led = NULL;
 	}
 
+	/* Set LED names for logging */
 	if (port->link_led && port->link_led->name)
 		strscpy(port->link_led_name, port->link_led->name,
 			sizeof(port->link_led_name));
@@ -614,72 +539,27 @@ static int sfp_led_register_port(struct sfp_led_priv *priv,
 		snprintf(port->activity_led_name, sizeof(port->activity_led_name),
 			 "sfp%d:activity", index);
 
-	bus = sfp_bus_find_fwnode(of_fwnode_handle(mac_np));
-	of_node_put(mac_np);
+	/* Initialize work */
+	INIT_DELAYED_WORK(&port->poll_work, sfp_led_poll_work_handler);
 
-	if (IS_ERR_OR_NULL(bus)) {
-		ret = bus ? PTR_ERR(bus) : -ENODEV;
-		dev_err(priv->dev, "%s: failed to find SFP bus: %d\n",
-			port->link_led_name, ret);
-		goto err_put_leds;
-	}
+	/* Start polling */
+	schedule_delayed_work(&port->poll_work, 0);
 
-	ret = sfp_bus_add_upstream(bus, port, &sfp_led_upstream_ops);
-	if (ret) {
-		sfp_bus_put(bus);
-		dev_err(priv->dev, "%s: failed to register with SFP bus: %d\n",
-			port->link_led_name, ret);
-		goto err_put_leds;
-	}
-
-	port->bus = bus;
-
-	/*
-	 * Tell the SFP state machine that our "device" is up so it can
-	 * proceed with link detection. Without this, the state machine
-	 * stays in DEV_DOWN state and never calls link_up/link_down.
-	 */
-	sfp_upstream_start(bus);
-
-	dev_info(priv->dev, "registered port %d: %pOFn (link=%s, activity=%s)\n",
-		 index, sfp_np, port->link_led_name, port->activity_led_name);
+	dev_dbg(priv->dev, "registered port %d: %pOFn (link=%s, activity=%s)\n",
+		index, sfp_np, port->link_led_name, port->activity_led_name);
 
 	return 0;
-
-err_put_leds:
-	if (port->activity_led) {
-		led_put(port->activity_led);
-		port->activity_led = NULL;
-	}
-	if (port->link_led) {
-		led_put(port->link_led);
-		port->link_led = NULL;
-	}
-	of_node_put(sfp_np);
-	port->sfp_np = NULL;
-	return ret;
 }
 
 static void sfp_led_cleanup_port(struct sfp_led_port *port)
 {
-	/* Skip ports that failed registration (sfp_np is NULL for uninitialized slots) */
 	if (!port->sfp_np)
 		return;
 
-	/* Unregister first - no more callbacks after this returns */
-	if (port->bus) {
-		sfp_upstream_stop(port->bus);
-		sfp_bus_del_upstream(port->bus);
-		sfp_bus_put(port->bus);
-		port->bus = NULL;
-	}
-
-	/* Flush any work that was already scheduled by callbacks */
-	cancel_delayed_work_sync(&port->init_work);
-	cancel_delayed_work_sync(&port->activity_work);
+	cancel_delayed_work_sync(&port->poll_work);
 
 	sfp_led_set_link(port, false);
-	sfp_led_set_activity_brightness(port, false);
+	sfp_led_set_activity(port, false);
 
 	if (port->activity_led) {
 		led_put(port->activity_led);
@@ -696,6 +576,11 @@ static void sfp_led_cleanup_port(struct sfp_led_port *port)
 		port->netdev = NULL;
 	}
 
+	if (port->i2c_adapter) {
+		i2c_put_adapter(port->i2c_adapter);
+		port->i2c_adapter = NULL;
+	}
+
 	of_node_put(port->sfp_np);
 	port->sfp_np = NULL;
 }
@@ -703,10 +588,8 @@ static void sfp_led_cleanup_port(struct sfp_led_port *port)
 static int sfp_led_probe(struct platform_device *pdev)
 {
 	struct sfp_led_priv *priv;
-	struct device_node *np, *retimer_np;
-	int count, i, ret, registered = 0;
-	u32 *retimer_channels = NULL;
-	int num_channels = 0;
+	struct device_node *np;
+	int count, i, registered = 0;
 
 	priv = devm_kzalloc(&pdev->dev, sizeof(*priv), GFP_KERNEL);
 	if (!priv)
@@ -726,72 +609,27 @@ static int sfp_led_probe(struct platform_device *pdev)
 	if (!priv->ports)
 		return -ENOMEM;
 
-	/*
-	 * Parse optional retimer for CDR lock status.
-	 * If present, we use the retimer's CDR lock to verify link state
-	 * instead of relying solely on the SFP module's LOS GPIO.
-	 */
-	retimer_np = of_parse_phandle(pdev->dev.of_node, "retimer", 0);
-	if (retimer_np) {
-		struct i2c_client *client;
-
-		client = of_find_i2c_device_by_node(retimer_np);
-		of_node_put(retimer_np);
-
-		if (client) {
-			priv->retimer = client;
-
-			/* Read retimer channel mapping */
-			num_channels = of_property_count_u32_elems(
-				pdev->dev.of_node, "retimer-channels");
-			if (num_channels > 0) {
-				retimer_channels = devm_kcalloc(&pdev->dev,
-					num_channels, sizeof(u32), GFP_KERNEL);
-				if (retimer_channels) {
-					of_property_read_u32_array(
-						pdev->dev.of_node,
-						"retimer-channels",
-						retimer_channels, num_channels);
-				}
-			}
-
-			dev_info(&pdev->dev,
-				 "using retimer %s for CDR lock status\n",
-				 dev_name(&client->dev));
-		} else {
-			dev_warn(&pdev->dev,
-				 "retimer specified but I2C device not found\n");
-		}
-	}
+	priv->num_ports = count;
 
 	for (i = 0; i < count; i++) {
-		/* Initialize retimer channel (-1 means no retimer) */
-		if (retimer_channels && i < num_channels)
-			priv->ports[i].retimer_channel = retimer_channels[i];
-		else
-			priv->ports[i].retimer_channel = -1;
-
 		np = of_parse_phandle(pdev->dev.of_node, "sfp-ports", i);
 		if (!np) {
 			dev_warn(&pdev->dev, "failed to parse sfp-ports[%d]\n", i);
 			continue;
 		}
 
-		ret = sfp_led_register_port(priv, np, i);
-		of_node_put(np);
-		if (ret == 0)
+		if (sfp_led_register_port(priv, np, i) == 0)
 			registered++;
+
+		of_node_put(np);
 	}
 
 	if (registered == 0) {
 		dev_err(&pdev->dev, "no SFP ports registered\n");
-		if (priv->retimer)
-			put_device(&priv->retimer->dev);
 		return -ENODEV;
 	}
 
-	priv->num_ports = count;
-	dev_info(&pdev->dev, "loaded (%d ports)\n", registered);
+	dev_dbg(&pdev->dev, "loaded (passive monitor, %d ports)\n", registered);
 	return 0;
 }
 
@@ -803,10 +641,7 @@ static void sfp_led_remove(struct platform_device *pdev)
 	for (i = 0; i < priv->num_ports; i++)
 		sfp_led_cleanup_port(&priv->ports[i]);
 
-	if (priv->retimer)
-		put_device(&priv->retimer->dev);
-
-	dev_info(&pdev->dev, "unloaded\n");
+	dev_dbg(&pdev->dev, "unloaded\n");
 }
 
 static const struct of_device_id sfp_led_of_match[] = {
@@ -826,5 +661,5 @@ static struct platform_driver sfp_led_driver = {
 module_platform_driver(sfp_led_driver);
 
 MODULE_AUTHOR("Tomaz Zaman <tomaz@mono.si>");
-MODULE_DESCRIPTION("SFP LED Control Platform Driver");
+MODULE_DESCRIPTION("SFP LED Control Platform Driver (Passive Monitor)");
 MODULE_LICENSE("GPL");

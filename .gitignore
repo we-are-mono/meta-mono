@@ -16,3 +16,6 @@ downloads/
 *.bak
 *.tmp
 .DS_Store
+
+# Proprietary ASK firmware override
+meta-mono-bsp/recipes-dpaa/fm-ucode/fm-ucode_git.bbappend
