@@ -21,6 +21,7 @@ SRC_URI = "${LINUX_QORIQ_SRC};branch=${LINUX_QORIQ_BRANCH} \
            file://mono-gateway-dk-usdpaa-xg-only.dts \
            file://001-hwmon-ina2xx-Add-INA234-support.patch \
            file://002-mono-gateway-ask-kernel_linux_6_12.patch \
+           file://003-fman-respect-ethernet-aliases.patch \
           "
 # Latest lf-6.12.y as of 2026-01-11
 SRCREV = "df24f9428e38740256a410b983003a478e72a7c0"

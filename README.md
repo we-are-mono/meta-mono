@@ -72,6 +72,8 @@ Breaking down a tag like `mt-6.12.49-2.2.0`:
 - **6.12.49** - Linux kernel version (major.minor.patch)
 - **2.2.0** - NXP SDK release the branch is based on
 
+The exception to this apprach is this repository, because it's not derived from NXP's work, so we use master for development, but we also tag stable versions to correspond with what other components use for releases.
+
 ---
 
 > **Warning: Frame Manager Microcode**
