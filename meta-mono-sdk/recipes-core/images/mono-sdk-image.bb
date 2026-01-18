@@ -90,7 +90,7 @@ IMAGE_INSTALL:append = " \
 IMAGE_INSTALL:append = " \
     fancontrol \
     sfp-led \
-    status-led-daemon \
+    status-led \
     kernel-module-leds-lp5812 \
     "
 

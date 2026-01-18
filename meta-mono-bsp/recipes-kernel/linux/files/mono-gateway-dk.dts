@@ -135,10 +135,12 @@
 
 &usb1 {
 	status = "disabled";
+	disable-over-current;
 };
 
 &usb2 {
 	status = "disabled";
+	disable-over-current;
 };
 
 &dspi {
@@ -332,12 +334,16 @@
 			#address-cells = <1>;
 			#size-cells = <0>;
 			reg = <2>;
-			
 
 			rtc@53 {
 				compatible = "nxp,pcf2131";
 				reg = <0x53>;
 				status = "okay";
+			};
+
+			typec: hd3ss3220@47 {
+				compatible = "ti,hd3ss3220";
+				reg = <0x47>;
 			};
 		};
 
@@ -402,6 +408,11 @@
 			compatible = "fixed-partitions";
 			#address-cells = <1>;
 			#size-cells = <1>;
+
+			partition@flash {
+				label = "flash";
+				reg = <0x0 0x4000000>;
+			};
 
 			partition@0 {
 				label = "rcw-bl2";

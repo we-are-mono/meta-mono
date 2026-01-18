@@ -5,8 +5,8 @@ LIC_FILES_CHKSUM = "file://docs/license.rst;md5=83b7626b8c7a37263c6a58af8d19bee1
 DEPENDS = "u-boot-tools-native u-boot rcw"
 do_compile[depends] += "u-boot:do_deploy rcw:do_deploy"
 
-SRC_URI = "git://github.com/we-are-mono/atf;protocol=https;branch=mt-6.12.34-2.1.0"
-SRCREV = "177e43c3ef9315bea37de6603a020e343171eead"
+SRC_URI = "git://github.com/we-are-mono/atf;protocol=https;branch=mt-6.12.y"
+SRCREV = "80a4fbc4d79b16549a2bad4e3532899ce7de4cef"
 
 S = "${WORKDIR}/git"
 
