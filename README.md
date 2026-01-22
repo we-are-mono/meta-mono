@@ -49,6 +49,22 @@ kas shell distro/mono-sdk.yaml
 bitbake mono-sdk-image
 ```
 
+## NOR Flash Memory Map
+
+The 32MB NOR flash image layout:
+
+| Offset | Hex | Component |
+|--------|-----|-----------|
+| 0 | 0x000000 | RCW + BL2 |
+| 1MB | 0x100000 | ATF FIP (BL31 + U-Boot) |
+| 3MB | 0x300000 | U-Boot Environment |
+| 4MB | 0x400000 | FMAN Microcode |
+| 5MB | 0x500000 | Device Tree |
+| 6MB | 0x600000 | Unallocated |
+| 10MB | 0xA00000 | Kernel + Initramfs |
+
+The eMMC memory map is nearly identical, but RCW+BL2 starts at 4KB offset to accommodate the MBR partition table at the beginning.
+
 ## Production Sources
 
 Current Yocto release: **Walnascar** (Yocto 5.1)
