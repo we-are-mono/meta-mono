@@ -46,7 +46,6 @@ do_compile() {
 do_install() {
     install -d ${D}${bindir}
     install -m 0755 ${B}/dpa_app ${D}${bindir}/
-    install -m 0755 ${UNPACKDIR}/dpa_app_wrapper ${D}${bindir}/
 
     # Install XML configuration files from source
     install -d ${D}${sysconfdir}

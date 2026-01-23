@@ -7,7 +7,7 @@ inherit image
 
 # Keep it minimal - just BusyBox and essential packages that should be
 # sufficient for a rescue system; Basic networking, partitioning and compression.
-IMAGE_INSTALL = "busybox base-files bash shadow kmod udev \
+IMAGE_INSTALL = "busybox base-files resolv-conf-static bash shadow kmod udev \
                 parted util-linux-fdisk util-linux-lsblk util-linux-blkid \
                 e2fsprogs e2fsprogs-resize2fs mmc-utils mtd-utils i2c-tools \
                 ethtool curl gzip tar \

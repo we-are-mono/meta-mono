@@ -39,7 +39,7 @@ Build firmware (NOR flash image):
 
 ```bash
 kas shell distro/recovery.yaml
-bitbake firmware
+bitbake firmware-image
 ```
 
 Build SDK image (eMMC development image):
@@ -48,6 +48,25 @@ Build SDK image (eMMC development image):
 kas shell distro/mono-sdk.yaml
 bitbake mono-sdk-image
 ```
+
+## Cross-Compiling with the SDK Toolchain
+
+To build applications for the Gateway outside of Yocto, generate and install the SDK toolchain:
+
+```bash
+kas shell kas/mono-sdk.yaml -c "bitbake mono-sdk-image -c populate_sdk"
+./build/tmp/deploy/sdk/oecore-mono-sdk-image-x86_64-cortexa72-gateway-dk-toolchain-nodistro.0.sh
+```
+
+The installer will prompt for an installation directory (default: `/usr/local/oecore-x86_64`).
+
+Before running `configure`, `make`, or any build commands, source the environment setup script:
+
+```bash
+source /usr/local/oecore-x86_64/environment-setup-cortexa72-oe-linux
+```
+
+This configures `CC`, `CXX`, `CFLAGS`, `LDFLAGS`, and other variables for cross-compilation targeting the Gateway's ARM Cortex-A72 processor.
 
 ## NOR Flash Memory Map
 

@@ -10,9 +10,10 @@ S = "${WORKDIR}/git/fci-9.00.12/lib"
 
 inherit autotools pkgconfig
 
-# Copy README and clean leftover build files before autoreconf runs
+# Clean leftover build files before autoreconf runs
 do_configure:prepend() {
-    cp ${UNPACKDIR}/README ${S}/
+    # Create empty README required by automake
+    touch ${S}/README
     # Clean any leftover build files from git repo
     if [ -f ${S}/Makefile ]; then
         cd ${S} && make distclean || true
