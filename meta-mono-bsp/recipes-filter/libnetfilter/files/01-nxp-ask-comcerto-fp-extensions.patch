@@ -1,5 +1,5 @@
-From: Tomaz Zaman <tomaz@mono.si>
-Date: Tue, 13 Jan 2026 13:02:01 +0100
+From: Tomaz Zaman <tzaman@zaman.io>
+Date: Sat, 24 Jan 2026 00:17:21 +0100
 Subject: [PATCH] NXP ASK extensions for Comcerto fast path
 
 Adds support for:
@@ -13,9 +13,29 @@ Adds support for:
 These extensions enable CMM daemon integration with ASK hardware offloading
 on NXP Layerscape processors.
 
+Note: CTA attribute ordering matches kernel 6.12 nfnetlink_conntrack.h:
+  CTA_LAYERSCAPE_FP_ORIG, CTA_LAYERSCAPE_FP_REPLY, CTA_QOSCONNMARK, CTA_QOSCONNMARK_PAD
+
 Upstream-Status: Inappropriate [NXP vendor extension]
 Signed-off-by: Tomaz Zaman <tomaz@mono.si>
 ---
+ include/internal/internal.h                   |   1 +
+ include/internal/object.h                     |  12 ++
+ .../libnetfilter_conntrack.h                  |  17 ++
+ .../linux_nf_conntrack_common.h               |  10 +-
+ .../linux_nfnetlink_conntrack.h               |  18 +++
+ src/conntrack/api.c                           |  50 ++++++
+ src/conntrack/build_mnl.c                     |  21 +++
+ src/conntrack/compare.c                       |  14 +-
+ src/conntrack/copy.c                          |   9 ++
+ src/conntrack/getter.c                        |  80 ++++++++++
+ src/conntrack/parse_mnl.c                     | 151 ++++++++++++++++++
+ src/conntrack/setter.c                        |   9 ++
+ src/conntrack/snprintf_default.c              |  13 ++
+ src/conntrack/snprintf_xml.c                  |   6 +
+ src/main.c                                    |   3 +
+ 15 files changed, 412 insertions(+), 2 deletions(-)
+
 diff --git a/include/internal/internal.h b/include/internal/internal.h
 index 7cd7c44..2b544cd 100644
 --- a/include/internal/internal.h
@@ -122,21 +142,22 @@ index 131ca25..73953fa 100644
  
  /* Connection tracking event types */
 diff --git a/include/libnetfilter_conntrack/linux_nfnetlink_conntrack.h b/include/libnetfilter_conntrack/linux_nfnetlink_conntrack.h
-index b8ffe02..ef9d450 100644
+index b8ffe02..418870a 100644
 --- a/include/libnetfilter_conntrack/linux_nfnetlink_conntrack.h
 +++ b/include/libnetfilter_conntrack/linux_nfnetlink_conntrack.h
-@@ -60,6 +60,10 @@ enum ctattr_type {
+@@ -60,6 +60,11 @@ enum ctattr_type {
  	CTA_SYNPROXY,
  	CTA_FILTER,
  	CTA_STATUS_MASK,
-+	/* NXP ASK: QoS and Layerscape fast path attributes - order must match kernel! */
-+	CTA_QOSCONNMARK,
++	/* NXP ASK: Layerscape fast path attributes - order must match kernel! */
 +	CTA_LAYERSCAPE_FP_ORIG,
 +	CTA_LAYERSCAPE_FP_REPLY,
++	CTA_QOSCONNMARK,
++	CTA_QOSCONNMARK_PAD,
  	__CTA_MAX
  };
  #define CTA_MAX (__CTA_MAX - 1)
-@@ -238,6 +242,19 @@ enum ctattr_help {
+@@ -238,6 +243,19 @@ enum ctattr_help {
  };
  #define CTA_HELP_MAX (__CTA_HELP_MAX - 1)
  

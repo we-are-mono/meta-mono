@@ -1607,10 +1607,19 @@ static ctl_table abm_sysctl_table[] =
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(3,13,0)
 static int __net_init abm_net_init(struct net *net)
 {
+	/*
+	 * Only register sysctls for init_net. The sysctl data points to
+	 * module global variables, which is only safe for the initial
+	 * network namespace. Non-init namespaces would trigger the
+	 * kernel's ensure_safe_net_sysctl() check in kernel 6.x.
+	 */
+	if (!net_eq(net, &init_net))
+		return 0;
+
 	abm_sysctl_hdr = register_net_sysctl(net, "net/abm", abm_sysctl_table);
-	if (!abm_sysctl_hdr)
-	{
+	if (!abm_sysctl_hdr) {
 		printk(KERN_ERR "%s():: Auto bridge module sysctl init failed:\n", __func__);
+		return -ENOMEM;
 	}
 
 	return 0;
@@ -1618,6 +1627,9 @@ static int __net_init abm_net_init(struct net *net)
 
 static void __net_exit abm_net_exit(struct net *net)
 {
+	if (!net_eq(net, &init_net))
+		return;
+
 	if (abm_sysctl_hdr == NULL)
 		return;
 
@@ -1740,4 +1752,3 @@ static void abm_exit(void)
 
 module_init(abm_init);
 module_exit(abm_exit);
-
