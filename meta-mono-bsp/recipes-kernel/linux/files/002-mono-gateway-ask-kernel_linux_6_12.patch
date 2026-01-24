@@ -17153,7 +17153,7 @@ index 8c677e254aff..b4505edeb111 100644
  void XX_Free(void *p)
  {
 diff --git a/drivers/net/ppp/ppp_generic.c b/drivers/net/ppp/ppp_generic.c
-index afc1566488b3..fc9213d2b615 100644
+index afc1566488b3..52ffb64c16de 100644
 --- a/drivers/net/ppp/ppp_generic.c
 +++ b/drivers/net/ppp/ppp_generic.c
 @@ -54,6 +54,10 @@
@@ -17174,7 +17174,7 @@ index afc1566488b3..fc9213d2b615 100644
 +#if defined(CONFIG_CPE_FAST_PATH)
 +	if ((ppp->dev) && (!ppp->closing)) {
 +		rtnl_lock();
-+		rtmsg_ifinfo(RTM_NEWLINK, ppp->dev, 0, GFP_KERNEL);
++		rtmsg_ifinfo(RTM_NEWLINK, ppp->dev, 0, GFP_KERNEL, 0, NULL);
 +		rtnl_unlock();
 +	}
 +#endif
@@ -17849,7 +17849,7 @@ index fc641b50f129..2b1f63e79be8 100644
  {
  	__u16 v = (__force __u16)val;
 diff --git a/include/linux/skbuff.h b/include/linux/skbuff.h
-index 7cf21f8ce51b..1b1389915b53 100644
+index 7cf21f8ce51b..a5aaed9677f5 100644
 --- a/include/linux/skbuff.h
 +++ b/include/linux/skbuff.h
 @@ -1034,6 +1034,13 @@ struct sk_buff {
@@ -17874,8 +17874,8 @@ index 7cf21f8ce51b..1b1389915b53 100644
 +	__u64			qosmark;
 +#endif
 +#if defined(CONFIG_INET_IPSEC_OFFLOAD) || defined(CONFIG_INET6_IPSEC_OFFLOAD)
-+	__u8			ipsec_offload:1,
-+				ipsec_xfrm_dir:1;
++	__u16			ipsec_offload;
++	__u16			ipsec_xfrm_dir;
 +#endif
 +
  	union {
@@ -18635,10 +18635,10 @@ index db7254d52d93..729d6ac8b11f 100644
  	RTM_NEWCHAIN = 100,
  #define RTM_NEWCHAIN RTM_NEWCHAIN
 diff --git a/net/Kconfig b/net/Kconfig
-index 5b3c54974d06..54b8375a00a4 100644
+index 5b3c54974d06..f41e7658b445 100644
 --- a/net/Kconfig
 +++ b/net/Kconfig
-@@ -125,6 +125,13 @@ config INET
+@@ -125,6 +125,15 @@ config INET
  	  Short answer: say Y.
  
  if INET
@@ -18646,6 +18646,8 @@ index 5b3c54974d06..54b8375a00a4 100644
 +config CPE_FAST_PATH
 +	bool "Fast Path Processing offload"
 +	depends on ARCH_LAYERSCAPE
++	depends on NETFILTER
++	select NF_CONNTRACK
 +	help
 +	  Support for Fast Path offload.
 +
@@ -19475,7 +19477,7 @@ index f0e5431c2d46..87fe154cd7ea 100644
  	skb_copy_hash(to, from);
  
 diff --git a/net/ipv6/ip6_tunnel.c b/net/ipv6/ip6_tunnel.c
-index 5350c9bb2319..91b7e154f010 100644
+index 5350c9bb2319..a377c01624d8 100644
 --- a/net/ipv6/ip6_tunnel.c
 +++ b/net/ipv6/ip6_tunnel.c
 @@ -19,6 +19,7 @@
@@ -20003,7 +20005,19 @@ index 5350c9bb2319..91b7e154f010 100644
  
  /**
   * ip6_tnl_lookup - fetch tunnel matching the end-point addresses
-@@ -1196,10 +1698,27 @@ int ip6_tnl_xmit(struct sk_buff *skb, struct net_device *dev, __u8 dsfield,
+@@ -870,6 +1372,11 @@ static int __ip6_tnl_rcv(struct ip6_tnl *tunnel, struct sk_buff *skb,
+ 		}
+ 	}
+ 
++#ifdef CONFIG_CPE_4RD_TUNNEL
++	if (ip6_tnl_4rd_rcv_helper(skb, tunnel))
++		goto drop;
++#endif
++
+ 	dev_sw_netstats_rx_add(tunnel->dev, skb->len);
+ 
+ 	skb_scrub_packet(skb, !net_eq(tunnel->net, dev_net(tunnel->dev)));
+@@ -1196,10 +1703,27 @@ int ip6_tnl_xmit(struct sk_buff *skb, struct net_device *dev, __u8 dsfield,
  		       IPV6_MIN_MTU : IPV4_MIN_MTU);
  
  	skb_dst_update_pmtu_no_confirm(skb, mtu);
@@ -20035,7 +20049,31 @@ index 5350c9bb2319..91b7e154f010 100644
  	}
  
  	if (t->err_count > 0) {
-@@ -1636,6 +2155,10 @@ ip6_tnl_siocdevprivate(struct net_device *dev, struct ifreq *ifr,
+@@ -1398,6 +1922,12 @@ ipxip6_tnl_xmit(struct sk_buff *skb, struct net_device *dev,
+ 
+ 	skb_set_inner_ipproto(skb, protocol);
+ 
++#ifdef CONFIG_CPE_4RD_TUNNEL
++	if (protocol == IPPROTO_IPIP &&
++	    t->ip4rd.prefix && ip6_tnl_4rd_xmit_helper(skb, &fl6, t))
++		return -1;
++#endif
++
+ 	err = ip6_tnl_xmit(skb, dev, dsfield, &fl6, encap_limit, &mtu,
+ 			   protocol);
+ 	if (err != 0) {
+@@ -1432,6 +1962,10 @@ ip6_tnl_start_xmit(struct sk_buff *skb, struct net_device *dev)
+ 
+ 	switch (skb->protocol) {
+ 	case htons(ETH_P_IP):
++#ifdef CONFIG_CPE_4RD_TUNNEL
++		if (t->ip4rd.prefix && ip_defrag(skb, IP_DEFRAG_IP6_TNL_4RD))
++			return NETDEV_TX_OK;
++#endif
+ 		ipproto = IPPROTO_IPIP;
+ 		break;
+ 	case htons(ETH_P_IPV6):
+@@ -1636,6 +2170,10 @@ ip6_tnl_siocdevprivate(struct net_device *dev, struct ifreq *ifr,
  	struct ip6_tnl *t = netdev_priv(dev);
  	struct net *net = t->net;
  	struct ip6_tnl_net *ip6n = net_generic(net, ip6_tnl_net_id);
@@ -20046,7 +20084,7 @@ index 5350c9bb2319..91b7e154f010 100644
  
  	memset(&p1, 0, sizeof(p1));
  
-@@ -1716,9 +2239,120 @@ ip6_tnl_siocdevprivate(struct net_device *dev, struct ifreq *ifr,
+@@ -1716,9 +2254,120 @@ ip6_tnl_siocdevprivate(struct net_device *dev, struct ifreq *ifr,
  		err = 0;
  		unregister_netdevice(dev);
  		break;
@@ -20167,7 +20205,7 @@ index 5350c9bb2319..91b7e154f010 100644
  	return err;
  }
  
-@@ -2313,9 +2947,24 @@ static int __init ip6_tunnel_init(void)
+@@ -2313,9 +2962,24 @@ static int __init ip6_tunnel_init(void)
  	if (!ipv6_mod_enabled())
  		return -EOPNOTSUPP;
  
@@ -20192,7 +20230,7 @@ index 5350c9bb2319..91b7e154f010 100644
  
  	err = xfrm6_tunnel_register(&ip4ip6_handler, AF_INET);
  	if (err < 0) {
-@@ -2352,6 +3001,10 @@ static int __init ip6_tunnel_init(void)
+@@ -2352,6 +3016,10 @@ static int __init ip6_tunnel_init(void)
  	xfrm6_tunnel_deregister(&ip4ip6_handler, AF_INET);
  out_ip4ip6:
  	unregister_pernet_device(&ip6_tnl_net_ops);
