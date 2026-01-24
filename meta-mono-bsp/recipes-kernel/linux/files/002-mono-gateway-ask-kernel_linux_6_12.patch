@@ -1,14 +1,24 @@
-From: Tomaz Zaman <tomaz@mono.si>
-Date: Sat, 23 Jan 2026 21:30:46 +0100
-Subject: [PATCH] ASK fast path for kernel 6.12
+From: Tomaz Zaman <tzaman@zaman.io>
+Date: Sat, 24 Jan 2026 02:17:11 +0100
+Subject: [PATCH] ASK: Port NXP ASK kernel modifications to Linux 6.12
 
-NXP Application Solutions Kit (ASK) extensions for hardware-accelerated
-packet processing on LS1046A. Includes fast-path offload, IPsec offload,
-and Frame Manager PCD extensions.
+This patch ports the NXP Advanced Switching Kit (ASK) modifications
+to the Linux 6.12 kernel. The ASK provides hardware-accelerated packet
+processing for Layerscape platforms including:
 
-Upstream-Status: Inappropriate [vendor-specific extension]
+- DPAA (Data Path Acceleration Architecture) ethernet driver enhancements
+- Frame Manager (FMan) SDK driver modifications
+- QBMan (Queue/Buffer Manager) driver updates
+- IPsec offload support for both IPv4 and IPv6
+- Netfilter QoS marking extensions
+- Bridge and network core modifications for fast path
+
+Removed dead code guarded by CONFIG_CPE_NATT which was never defined
+in any Kconfig file.
+
+Upstream-Status: Inappropriate [NXP vendor kernel modifications]
 Signed-off-by: Tomaz Zaman <tomaz@mono.si>
----
+
 diff --git a/Makefile b/Makefile
 index 66ae67c52da8..a1d4113d3f65 100644
 --- a/Makefile
@@ -18046,24 +18056,8 @@ index 3255a199ef60..ab98025206df 100644
  #define TCP_RTO_MAX	((unsigned)(120*HZ))
  #define TCP_RTO_MIN	((unsigned)(HZ/5))
  #define TCP_TIMEOUT_MIN	(2U) /* Min timeout for TCP timers in jiffies */
-diff --git a/include/net/udp.h b/include/net/udp.h
-index 0b2e3a5e01d8..b3b0e4cbcb40 100644
---- a/include/net/udp.h
-+++ b/include/net/udp.h
-@@ -297,6 +297,11 @@ int udp_lib_getsockopt(struct sock *sk, int level, int optname,
- int udp_lib_setsockopt(struct sock *sk, int level, int optname,
- 		       sockptr_t optval, unsigned int optlen,
- 		       int (*push_pending_frames)(struct sock *));
-+#ifdef CONFIG_CPE_NATT
-+int		udp6_lib_setsockopt(struct sock *sk, int level, int optname,
-+					sockptr_t optval, unsigned int optlen,
-+					int (*push_pending_frames)(struct sock *));
-+#endif
- struct sock *udp4_lib_lookup(const struct net *net, __be32 saddr, __be16 sport,
- 			     __be32 daddr, __be16 dport, int dif);
- struct sock *__udp4_lib_lookup(const struct net *net, __be32 saddr,
 diff --git a/include/net/xfrm.h b/include/net/xfrm.h
-index 1484dd15a369..7ce30dc6e453 100644
+index 1484dd15a369..6a0225dbaf4f 100644
 --- a/include/net/xfrm.h
 +++ b/include/net/xfrm.h
 @@ -183,6 +183,12 @@ struct xfrm_state {
@@ -18105,7 +18099,7 @@ index 1484dd15a369..7ce30dc6e453 100644
  
  /* callback structure passed from either netlink or pfkey */
  struct km_event {
-@@ -1114,6 +1132,47 @@ struct sec_path {
+@@ -1114,6 +1132,35 @@ struct sec_path {
  
  struct sec_path *secpath_set(struct sk_buff *skb);
  
@@ -18136,18 +18130,6 @@ index 1484dd15a369..7ce30dc6e453 100644
 +		kfree(sh);
 +	}
 +}
-+#endif
-+
-+
-+#ifdef CONFIG_CPE_NATT
-+/* NAT-T changes Start */
-+static inline int xfrm6_udp_encap_rcv(struct sock *sk, struct sk_buff *skb)
-+{
-+	/* should not happen */
-+	kfree_skb(skb);
-+	return 0;
-+}
-+/* NAT-T changes End */
 +#endif
 +
  static inline void
@@ -19422,30 +19404,6 @@ index 1c9c686d9522..396a081a12b9 100644
  config INET6_IPCOMP
  	tristate "IPv6: IPComp transformation"
  	select INET6_XFRM_TUNNEL
-diff --git a/net/ipv6/esp6.c b/net/ipv6/esp6.c
-index 62d17d7f6d9a..2cd8c70d9a7b 100644
---- a/net/ipv6/esp6.c
-+++ b/net/ipv6/esp6.c
-@@ -648,6 +648,9 @@ static int esp6_output(struct xfrm_state *x, struct sk_buff *skb)
- 	int alen;
- 	int blksize;
- 	struct ip_esp_hdr *esph;
-+#ifdef CONFIG_CPE_NATT
-+	struct udphdr *uh=NULL;
-+#endif
- 	struct crypto_aead *aead;
- 	struct esp_info esp;
- 
-@@ -736,6 +739,9 @@ static inline int esp_remove_trailer(struct sk_buff *skb)
- 
- int esp6_input_done2(struct sk_buff *skb, int err)
- {
-+#ifdef CONFIG_CPE_NATT
-+	struct ipv6hdr *ipv6h;
-+#endif
- 	struct xfrm_state *x = xfrm_input_state(skb);
- 	struct xfrm_offload *xo = xfrm_offload(skb);
- 	struct crypto_aead *aead = x->data;
 diff --git a/net/ipv6/ip6_output.c b/net/ipv6/ip6_output.c
 index f0e5431c2d46..87fe154cd7ea 100644
 --- a/net/ipv6/ip6_output.c
@@ -20352,17 +20310,14 @@ index 3c15a0ae228e..338f3d6674c3 100644
  
  		if (packet_is_spoofed(skb, iph, tunnel)) {
 diff --git a/net/ipv6/udp.c b/net/ipv6/udp.c
-index 57e38e5e4be9..a473ad53f94a 100644
+index 57e38e5e4be9..7d0137e59362 100644
 --- a/net/ipv6/udp.c
 +++ b/net/ipv6/udp.c
-@@ -784,7 +784,9 @@ static int udpv6_queue_rcv_one_skb(struct sock *sk, struct sk_buff *skb)
+@@ -784,7 +784,6 @@ static int udpv6_queue_rcv_one_skb(struct sock *sk, struct sk_buff *skb)
  
  		/* FALLTHROUGH -- it's a UDP Packet */
  	}
 -
-+	/* CONFIG_CPE_NATT change
-+	* kernel had this support changes above. So not adding
-+	* change from 4.1 kernel to here. */
  	/*
  	 * UDP-Lite specific tests, ignored on UDP sockets (see net/ipv4/udp.c).
  	 */

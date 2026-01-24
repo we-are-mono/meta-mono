@@ -232,6 +232,69 @@ default:
 
 ---
 
+## Issue #10: CONFIG_CPE_NATT Dead Code Removal
+
+**Status**: FIXED
+
+**Files**:
+- `sources/linux/net/ipv6/udp.c`
+- `sources/linux/net/ipv6/esp6.c`
+- `sources/linux/include/net/udp.h`
+
+**Problem**: The original NXP 5.4 ASK patch contained code guarded by `#ifdef CONFIG_CPE_NATT` for IPv6 NAT-T (NAT Traversal) support. However, `CONFIG_CPE_NATT` was **never defined** in any Kconfig file - making all this code dead/unreachable.
+
+**Discovery**: During a comprehensive comparison of the 999 (5.4) and 002 (6.12) patches, we found:
+- 16 occurrences of `CONFIG_CPE_NATT` in the original 999 patch
+- No `config CPE_NATT` definition in any Kconfig file
+- This included ~100 lines of IPv6 NAT-T functions that were never compilable
+
+**Dead code locations in 999 patch**:
+- `net/ipv6/xfrm6_input.c` - `xfrm6_rcv_encap()` and `xfrm6_udp_encap_rcv()` (~100 lines)
+- `net/ipv6/esp6.c` - unused variable declarations
+- `net/ipv6/udp.c` - comments referencing the feature
+- `include/net/udp.h` - unused function declaration
+
+**Fix**: Removed all CONFIG_CPE_NATT dead code from the 002 patch:
+
+1. `net/ipv6/udp.c` - removed comment block:
+```c
+// Removed:
+/* CONFIG_CPE_NATT change
+* kernel had this support changes above. So not adding
+* change from 4.1 kernel to here. */
+```
+
+2. `net/ipv6/esp6.c` - removed unused variables:
+```c
+// Removed from esp6_output():
+#ifdef CONFIG_CPE_NATT
+	struct udphdr *uh=NULL;
+#endif
+
+// Removed from esp6_input_done2():
+#ifdef CONFIG_CPE_NATT
+	struct ipv6hdr *ipv6h;
+#endif
+```
+
+3. `include/net/udp.h` - removed unused declaration:
+```c
+// Removed:
+#ifdef CONFIG_CPE_NATT
+int		udp6_lib_setsockopt(struct sock *sk, int level, int optname,
+				sockptr_t optval, unsigned int optlen,
+				int (*push_pending_frames)(struct sock *));
+#endif
+```
+
+**Note on IPSec offload**: The xfrm4/xfrm6 extract_output bypass code (guarded by `CONFIG_INET_IPSEC_OFFLOAD`) was already present in `net/xfrm/xfrm_output.c` - in kernel 6.12 these functions were consolidated into a single file.
+
+**Verification**: `grep "#ifdef CONFIG_CPE_NATT" 002-*.patch` returns no matches.
+
+**Lesson learned**: When porting vendor patches, verify that all config options used in `#ifdef` guards are actually defined somewhere. Dead code adds maintenance burden and confusion.
+
+---
+
 ## Summary
 
 | Issue | Description | Status |
@@ -245,5 +308,6 @@ default:
 | #7 | RX Checksum Offload Breaking TCP | FIXED |
 | #8 | Missing qosconnmark functions | FIXED |
 | #9 | FM ioctl error spam from isatty() | FIXED |
+| #10 | CONFIG_CPE_NATT dead code removal | FIXED |
 
 All critical issues for basic ASK functionality have been resolved. The SDK image now supports hardware-accelerated networking with working TCP/UDP traffic and QoS marking.
