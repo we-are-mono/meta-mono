@@ -47,6 +47,12 @@ do_install:append() {
     # Install configuration file
     install -d ${D}${sysconfdir}/config
     install -m 0644 ${UNPACKDIR}/fastforward ${D}${sysconfdir}/config/fastforward
+
+    # Install development headers for packages that depend on libcmm
+    install -d ${D}${includedir}
+    install -m 0644 ${S}/src/libcmm.h ${D}${includedir}/
+    install -m 0644 ${S}/src/cmmd.h ${D}${includedir}/
+    install -m 0644 ${S}/src/fpp.h ${D}${includedir}/
 }
 
 SYSTEMD_SERVICE:${PN} = "cmm.service"

@@ -111,6 +111,9 @@ IMAGE_INSTALL:append = " \
     cmm \
     dpa-app \
     libcli \
+    ppp \
+    rp-pppoe \
+    rp-pppoe-relay \
     "
 
 # Networking (Ethernet, WiFi, Bluetooth)
