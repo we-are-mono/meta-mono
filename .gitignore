@@ -5,6 +5,7 @@ sources
 
 # Developer-specific local config
 site.conf
+tools/config.yaml
 
 # Yocto outputs (in case someone builds elsewhere)
 tmp/
@@ -16,6 +17,10 @@ downloads/
 *.bak
 *.tmp
 .DS_Store
+
+# Python
+__pycache__/
+*.pyc
 
 # Proprietary ASK firmware override
 meta-mono-bsp/recipes-dpaa/fm-ucode/fm-ucode_git.bbappend
