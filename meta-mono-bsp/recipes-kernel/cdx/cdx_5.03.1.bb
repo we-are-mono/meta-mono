@@ -39,6 +39,4 @@ FILES:${PN}-dev += "${includedir}/cdx/Module.symvers ${includedir}/cdx/cdx_ioctl
 # Module.symvers contains build paths - this is expected and unavoidable
 INSANE_SKIP:${PN}-dev += "buildpaths"
 
-RPROVIDES:${PN} += "kernel-module-cdx"
-
 COMPATIBLE_MACHINE = "(ls1043a|ls1046a|qoriq)"
