@@ -26,8 +26,6 @@ do_install() {
     install -m 0644 ${S}/include/auto_bridge.h ${D}${includedir}/
 }
 
-RPROVIDES:${PN} += "kernel-module-auto-bridge"
-
 # Separate -dev package for the header
 ALLOW_EMPTY:${PN}-dev = "1"
 

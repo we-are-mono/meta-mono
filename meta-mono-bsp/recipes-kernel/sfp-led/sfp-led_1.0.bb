@@ -32,4 +32,3 @@ do_install:append() {
 }
 
 FILES:${PN} += "${@bb.utils.contains('DISTRO_FEATURES', 'systemd', '${sysconfdir}/modules-load.d/sfp-led.conf', '${sysconfdir}/init.d/S99sfp-led ${sysconfdir}/rcS.d/S99sfp-led', d)}"
-RPROVIDES:${PN} += "kernel-module-sfp-led"

@@ -91,7 +91,7 @@ IMAGE_INSTALL:append = " \
     fancontrol \
     sfp-led \
     status-led \
-    kernel-module-leds-lp5812 \
+    lp5812-driver \
     "
 
 # NXP/Freescale specific packages
@@ -104,9 +104,9 @@ IMAGE_INSTALL:append = " \
 
 # ASK (Application Software Kit) fast path offloading
 IMAGE_INSTALL:append = " \
-    kernel-module-cdx \
-    kernel-module-auto-bridge \
-    kernel-module-fci \
+    cdx \
+    auto-bridge \
+    fci \
     libfci \
     cmm \
     dpa-app \

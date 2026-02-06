@@ -21,4 +21,3 @@ do_install:append() {
 }
 
 FILES:${PN} += "${sysconfdir}/modules-load.d/leds-lp5812.conf"
-RPROVIDES:${PN} += "kernel-module-leds-lp5812"

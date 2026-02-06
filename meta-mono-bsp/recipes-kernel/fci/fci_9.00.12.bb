@@ -28,6 +28,4 @@ do_install() {
     install -m 0644 ${B}/fci.ko ${D}${nonarch_base_libdir}/modules/${KERNEL_VERSION}/extra/
 }
 
-RPROVIDES:${PN} += "kernel-module-fci"
-
 COMPATIBLE_MACHINE = "(ls1043a|ls1046a|qoriq)"
