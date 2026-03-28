@@ -10,9 +10,13 @@ stdin=serial@21c0500
 stdout=serial@21c0500
 
 kernel_addr=0xA00000
-fdt_addr=0x500000
+kernel_blk=0x5000
 kernel_size=0x1600000
+kernel_blkcnt=0xB000
+fdt_addr=0x500000
+fdt_blk=0x2800
 fdt_size=0x100000
+fdt_blkcnt=0x800
 
 fdt_addr_r=0x88000000
 kernel_addr_r=0x82000000
@@ -30,14 +34,14 @@ bootargs_console=console=ttyS0,115200 earlycon=uart8250,mmio,0x21c0500 mtdparts=
 bootcmd=run emmc || run recovery
 bootdelay=5
 
+opnsense=load mmc 0:1 ${kernel_addr_r} kernel.img; load mmc 0:1 ${fdt_addr_r} dtb/mono-gateway-dk.dtb; booti 0x82000000 - 0x88000000
+
 emmc=setenv bootargs "${bootargs_console} root=/dev/mmcblk0p1 rw rootwait rootfstype=ext4 ${bootargs_hwtest}"; \
     ext4load mmc 0:1 ${kernel_addr_r} /boot/Image.gz && \
     ext4load mmc 0:1 ${fdt_addr_r} /boot/mono-gateway-dk-sdk.dtb && \
     booti ${kernel_addr_r} - ${fdt_addr_r} || \
     ext4load mmc 0:1 ${kernel_addr_r} /boot/kernel.itb && \
     bootm ${kernel_addr_r}
-
-recovery=setenv bootargs "${bootargs_console} rw rootwait quiet ${bootargs_hwtest}"; sf probe 0:0; sf read ${kernel_addr_r} ${kernel_addr} ${kernel_size}; sf read ${fdt_addr_r} ${fdt_addr} ${fdt_size}; booti ${kernel_addr_r} - ${fdt_addr_r}
 
 ethact=fm1-mac5
 ethprime=fm1-mac5

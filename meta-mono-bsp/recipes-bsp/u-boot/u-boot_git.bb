@@ -6,6 +6,8 @@ DEPENDS = "bison-native flex-native dtc-native bc-native u-boot-tools-native"
 
 SRC_URI = "git://github.com/we-are-mono/u-boot;protocol=https;branch=mt-6.12.y \
            file://environment.txt \
+           file://environment-qspi.txt \
+           file://environment-emmc.txt \
           "
 SRCREV = "9f13d11658f696d4d1b4f76fa88264c52bd2e7c2"
 
@@ -28,7 +30,9 @@ do_compile() {
 
     oe_runmake ${UBOOT_MACHINE}
     oe_runmake ${EXTRA_OEMAKE}
-    mkenvimage -s 0x2000 -o ${B}/u-boot.env ${UNPACKDIR}/environment.txt
+    # Build per-boottype environments (common base + boottype-specific recovery command)
+    cat ${UNPACKDIR}/environment.txt ${UNPACKDIR}/environment-qspi.txt | mkenvimage -s 0x2000 -o ${B}/u-boot-qspi.env -
+    cat ${UNPACKDIR}/environment.txt ${UNPACKDIR}/environment-emmc.txt | mkenvimage -s 0x2000 -o ${B}/u-boot-emmc.env -
 }
 
 do_deploy() {
@@ -36,8 +40,11 @@ do_deploy() {
     install -m 0644 ${B}/u-boot.bin ${DEPLOYDIR}/u-boot-${MACHINE}-${PV}-${PR}.bin
     ln -sf u-boot-${MACHINE}-${PV}-${PR}.bin ${DEPLOYDIR}/u-boot.bin
 
-    install -m 0644 ${B}/u-boot.env ${DEPLOYDIR}/uboot-${MACHINE}-${PV}-${PR}.env
-    ln -sf uboot-${MACHINE}-${PV}-${PR}.env ${DEPLOYDIR}/u-boot.env
+    install -m 0644 ${B}/u-boot-qspi.env ${DEPLOYDIR}/uboot-qspi-${MACHINE}-${PV}-${PR}.env
+    ln -sf uboot-qspi-${MACHINE}-${PV}-${PR}.env ${DEPLOYDIR}/u-boot-qspi.env
+
+    install -m 0644 ${B}/u-boot-emmc.env ${DEPLOYDIR}/uboot-emmc-${MACHINE}-${PV}-${PR}.env
+    ln -sf uboot-emmc-${MACHINE}-${PV}-${PR}.env ${DEPLOYDIR}/u-boot-emmc.env
 }
 
 addtask deploy after do_compile

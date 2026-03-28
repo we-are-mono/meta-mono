@@ -30,7 +30,7 @@ do_compile() {
 
         dd if=${DEPLOY_DIR_IMAGE}/atf/bl2_${d}.pbl of=${WORKDIR}/firmware-${d}.bin bs=1 seek=${BL2_OFFSET} conv=notrunc
         dd if=${DEPLOY_DIR_IMAGE}/atf/fip.bin of=${WORKDIR}/firmware-${d}.bin bs=1 seek=1048576 conv=notrunc
-        dd if=${DEPLOY_DIR_IMAGE}/u-boot.env of=${WORKDIR}/firmware-${d}.bin bs=1 seek=3145728 conv=notrunc
+        dd if=${DEPLOY_DIR_IMAGE}/u-boot-${d}.env of=${WORKDIR}/firmware-${d}.bin bs=1 seek=3145728 conv=notrunc
         dd if=${DEPLOY_DIR_IMAGE}/${FMAN_UCODE} of=${WORKDIR}/firmware-${d}.bin bs=1 seek=4194304 conv=notrunc
         dd if=${DEPLOY_DIR_IMAGE}/mono-gateway-dk-sdk.dtb of=${WORKDIR}/firmware-${d}.bin bs=1 seek=5242880 conv=notrunc
         dd if=${DEPLOY_DIR_IMAGE}/Image.gz-initramfs-${MACHINE}.bin of=${WORKDIR}/firmware-${d}.bin bs=1 seek=10485760 conv=notrunc

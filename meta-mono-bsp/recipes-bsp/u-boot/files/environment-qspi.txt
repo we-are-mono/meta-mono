@@ -1,0 +1,1 @@
+recovery=setenv bootargs "${bootargs_console} rw rootwait quiet ${bootargs_hwtest}"; sf probe 0:0; sf read ${kernel_addr_r} ${kernel_addr} ${kernel_size}; sf read ${fdt_addr_r} ${fdt_addr} ${fdt_size}; booti ${kernel_addr_r} - ${fdt_addr_r}
