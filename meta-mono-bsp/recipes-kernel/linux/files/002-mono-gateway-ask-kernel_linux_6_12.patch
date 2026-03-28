@@ -18767,13 +18767,14 @@ index 642b8ccaae8e..f140ac15f68b 100644
  	fdb_add_hw_addr(br, addr);
  	fdb_notify(br, fdb, RTM_NEWNEIGH, true);
  	return 0;
-@@ -567,6 +590,16 @@ void br_fdb_cleanup(struct work_struct *work)
+@@ -567,6 +590,17 @@ void br_fdb_cleanup(struct work_struct *work)
  			continue;
  		}
- 
+
 +#if defined(CONFIG_CPE_FAST_PATH)
 +		spin_lock(&br_fdb_cb_lock);
-+		if(br_fdb_can_expire && !(*br_fdb_can_expire)(f->key.addr.addr, READ_ONCE(f->dst)->dev)){
++		if (br_fdb_can_expire && f->dst &&
++		    !(*br_fdb_can_expire)(f->key.addr.addr, f->dst->dev)) {
 +			f->updated = jiffies;
 +			spin_unlock(&br_fdb_cb_lock);
 +			continue;

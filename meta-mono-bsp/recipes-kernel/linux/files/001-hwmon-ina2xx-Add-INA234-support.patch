@@ -38,9 +38,9 @@ index xxxxxxxx..xxxxxxxx 100644
 +		.config_default = INA226_CONFIG_DEFAULT,
 +		.calibration_value = 2048,
 +		.shunt_div = 400,
-+		.bus_voltage_shift = 0,
-+		.bus_voltage_lsb = 1600,
-+		.power_lsb_factor = 25,
++		.bus_voltage_shift = 4,
++		.bus_voltage_lsb = 25600,
++		.power_lsb_factor = 32,
 +	},
  };
  
