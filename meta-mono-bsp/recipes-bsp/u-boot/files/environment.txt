@@ -38,7 +38,7 @@ opnsense=load mmc 0:1 ${kernel_addr_r} kernel.img; load mmc 0:1 ${fdt_addr_r} dt
 
 emmc=setenv bootargs "${bootargs_console} root=/dev/mmcblk0p1 rw rootwait rootfstype=ext4 ${bootargs_hwtest}"; \
     ext4load mmc 0:1 ${kernel_addr_r} /boot/Image.gz && \
-    ext4load mmc 0:1 ${fdt_addr_r} /boot/mono-gateway-dk-sdk.dtb && \
+    ext4load mmc 0:1 ${fdt_addr_r} /boot/mono-gateway-dk.dtb && \
     booti ${kernel_addr_r} - ${fdt_addr_r} || \
     ext4load mmc 0:1 ${kernel_addr_r} /boot/kernel.itb && \
     bootm ${kernel_addr_r}

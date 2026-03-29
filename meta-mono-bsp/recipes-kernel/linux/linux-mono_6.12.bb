@@ -17,7 +17,6 @@ LINUX_QORIQ_SRC = "git://github.com/nxp-qoriq/linux.git;protocol=https"
 SRC_URI = "${LINUX_QORIQ_SRC};branch=${LINUX_QORIQ_BRANCH} \
            file://defconfig \
            file://mono-gateway-dk.dts \
-           file://mono-gateway-dk-sdk.dts \
            file://mono-gateway-dk-usdpaa-xg-only.dts \
            file://001-hwmon-ina2xx-Add-INA234-support.patch \
            file://002-mono-gateway-ask-kernel_linux_6_12.patch \
