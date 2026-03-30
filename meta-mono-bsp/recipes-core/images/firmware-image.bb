@@ -2,7 +2,7 @@ DESCRIPTION = "Combines RCW+BL2, ATF+U-Boot, environment, FMAN ucode, kernel + i
 LICENSE = "MIT"
 LIC_FILES_CHKSUM = "file://${COMMON_LICENSE_DIR}/MIT;md5=0835ade698e0bcf8506ecda2f7b4f302"
 
-DEPENDS += "atf fm-ucode virtual/kernel recovery-image util-linux-native"
+DEPENDS += "atf fm-ucode virtual/kernel recovery-image util-linux-native openssl-native"
 do_compile[depends] += "atf:do_deploy"
 do_compile[depends] += "fm-ucode:do_deploy"
 do_compile[depends] += "virtual/kernel:do_deploy"
@@ -16,6 +16,12 @@ S = "${WORKDIR}/src"
 
 # BOOTTYPE can be overridden on command line
 BOOTTYPE ?= "qspi emmc"
+
+# Firmware signing key (ECDSA P-256). Set these to enable image signing.
+# If FIRMWARE_SIGNING_KEY is not set or the file doesn't exist, the build
+# produces unsigned images.
+FIRMWARE_SIGNING_KEY ?= ""
+FIRMWARE_SIGNING_PUBKEY ?= ""
 
 do_compile() {
     for d in ${BOOTTYPE}; do
@@ -52,13 +58,38 @@ do_compile() {
 }
 
 
+do_sign() {
+    if [ -z "${FIRMWARE_SIGNING_KEY}" ] || [ ! -f "${FIRMWARE_SIGNING_KEY}" ]; then
+        bbnote "Firmware signing key not configured, skipping image signing"
+        return 0
+    fi
+
+    for d in ${BOOTTYPE}; do
+        openssl dgst -sha256 -sign "${FIRMWARE_SIGNING_KEY}" \
+            -out ${WORKDIR}/firmware-${d}.bin.sig \
+            ${WORKDIR}/firmware-${d}.bin
+        bbnote "Signed firmware-${d}.bin"
+    done
+}
+
+addtask sign after do_compile before do_deploy
+
 do_deploy() {
     install -d ${DEPLOYDIR}
 
     for d in ${BOOTTYPE}; do
         install -m 0644 ${WORKDIR}/firmware-${d}.bin ${DEPLOYDIR}/firmware-${d}-${MACHINE}.bin
         ln -sf firmware-${d}-${MACHINE}.bin ${DEPLOYDIR}/firmware-${d}.bin
+
+        if [ -f ${WORKDIR}/firmware-${d}.bin.sig ]; then
+            install -m 0644 ${WORKDIR}/firmware-${d}.bin.sig ${DEPLOYDIR}/firmware-${d}-${MACHINE}.bin.sig
+            ln -sf firmware-${d}-${MACHINE}.bin.sig ${DEPLOYDIR}/firmware-${d}.bin.sig
+        fi
     done
+
+    if [ -n "${FIRMWARE_SIGNING_PUBKEY}" ] && [ -f "${FIRMWARE_SIGNING_PUBKEY}" ]; then
+        install -m 0644 "${FIRMWARE_SIGNING_PUBKEY}" ${DEPLOYDIR}/firmware-signing.pub
+    fi
 }
 
-addtask deploy after do_compile before do_build
+addtask deploy after do_sign before do_build
