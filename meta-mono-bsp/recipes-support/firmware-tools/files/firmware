@@ -1,0 +1,217 @@
+#!/bin/bash
+#
+# firmware - Firmware management utility for Mono Gateway Development Kit
+#
+
+set -euo pipefail
+
+FIRMWARE_URL="https://firmware.mono.si"
+PUBKEY="/etc/firmware/firmware-signing.pub"
+DOWNLOAD_DIR="/tmp/firmware-update"
+ENV_SIZE=8192  # 0x2000 bytes
+ENV_OFFSET=3145728  # 0x300000
+
+# MTD partitions (QSPI)
+MTD_FLASH="/dev/mtd0"    # Entire NOR flash
+MTD_ENV="/dev/mtd2"      # U-Boot environment
+
+# eMMC device
+EMMC_DEV="/dev/mmcblk0"
+
+die() {
+    echo "ERROR: $*" >&2
+    exit 1
+}
+
+warn() {
+    echo "WARNING: $*" >&2
+}
+
+info() {
+    echo ":: $*"
+}
+
+# Auto-detect MAC address from the first ethernet interface with one assigned
+detect_mac() {
+    local mac
+    mac=$(ip -o link show | grep -m1 'ether' | sed 's|.*ether \([^ ]*\).*|\1|')
+    if [ -z "$mac" ]; then
+        die "Could not auto-detect MAC address. Ensure a network interface is available."
+    fi
+    echo "$mac"
+}
+
+# Check that networking is functional
+check_network() {
+    if ! ip route show default &>/dev/null || [ -z "$(ip route show default)" ]; then
+        die "No default route configured. Set up networking first:\n  ip link set <iface> up\n  ip addr add <ip>/<mask> dev <iface>\n  ip route add default via <gateway> dev <iface>"
+    fi
+}
+
+cmd_update() {
+    local medium="qspi"
+
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --qspi) medium="qspi"; shift ;;
+            --emmc) medium="emmc"; shift ;;
+            *) die "Unknown option: $1" ;;
+        esac
+    done
+
+    echo ""
+    echo "╔═════════════════════════════════════════════════════════╗"
+    echo "║                    FIRMWARE UPDATE                      ║"
+    echo "╠═════════════════════════════════════════════════════════╣"
+    echo "║  This process will update the $medium firmware.            ║"
+    echo "║                                                         ║"
+    echo "║  DO NOT power off or interrupt the device during the    ║"
+    echo "║  update. Doing so may result in an unrecoverable state  ║"
+    echo "║  requiring a hardware programmer to fix.                ║"
+    echo "║                                                         ║"
+    echo "║  For full documentation, visit: https://docs.mono.si/   ║"
+    echo "╚═════════════════════════════════════════════════════════╝"
+    echo ""
+    read -rp "Type 'yes' to proceed: " confirm
+    if [ "$confirm" != "yes" ]; then
+        echo "Aborted."
+        exit 0
+    fi
+
+    check_network
+
+    local mac
+    mac=$(detect_mac)
+    info "Using MAC address: $mac"
+
+    # Download firmware and signature
+    mkdir -p "$DOWNLOAD_DIR"
+    local fw_file="firmware-${medium}.bin"
+    local sig_file="firmware-${medium}.bin.sig"
+
+    info "Downloading firmware image..."
+    curl -kfS -u "mono:${mac}" -o "${DOWNLOAD_DIR}/${fw_file}" "${FIRMWARE_URL}/${fw_file}" || \
+        die "Failed to download firmware image"
+
+    info "Downloading signature..."
+    curl -kfS -u "mono:${mac}" -o "${DOWNLOAD_DIR}/${sig_file}" "${FIRMWARE_URL}/${sig_file}" || \
+        die "Failed to download signature"
+
+    # Verify signature
+    if [ -f "$PUBKEY" ]; then
+        info "Verifying firmware signature..."
+        if ! openssl dgst -sha256 -verify "$PUBKEY" \
+                -signature "${DOWNLOAD_DIR}/${sig_file}" \
+                "${DOWNLOAD_DIR}/${fw_file}" >/dev/null 2>&1; then
+            rm -rf "$DOWNLOAD_DIR"
+            die "Signature verification FAILED. The firmware image may be corrupted or tampered with."
+        fi
+        info "Signature verified OK"
+    else
+        warn "Public key not found at $PUBKEY, skipping signature verification"
+    fi
+
+    # Back up U-Boot environment
+    info "Backing up U-Boot environment..."
+    if [ "$medium" = "qspi" ]; then
+        dd if="$MTD_ENV" of="${DOWNLOAD_DIR}/uboot-env.bin" bs=$ENV_SIZE count=1 2>/dev/null || \
+            die "Failed to back up U-Boot environment from $MTD_ENV"
+    else
+        dd if="$EMMC_DEV" of="${DOWNLOAD_DIR}/uboot-env.bin" bs=1 skip=$ENV_OFFSET count=$ENV_SIZE 2>/dev/null || \
+            die "Failed to back up U-Boot environment from $EMMC_DEV"
+    fi
+    info "Environment backed up"
+
+    # Flash firmware
+    info "Flashing firmware to $medium (do not interrupt)..."
+    if [ "$medium" = "qspi" ]; then
+        flashcp -v "${DOWNLOAD_DIR}/${fw_file}" "$MTD_FLASH" || \
+            die "Flash failed!"
+    else
+        dd if="${DOWNLOAD_DIR}/${fw_file}" of="$EMMC_DEV" bs=4096 skip=1 seek=1 || \
+            die "Flash failed!"
+    fi
+    info "Firmware flashed"
+
+    # Restore U-Boot environment
+    info "Restoring U-Boot environment..."
+    if [ "$medium" = "qspi" ]; then
+        flashcp "${DOWNLOAD_DIR}/uboot-env.bin" "$MTD_ENV" || \
+            die "Failed to restore U-Boot environment"
+    else
+        dd if="${DOWNLOAD_DIR}/uboot-env.bin" of="$EMMC_DEV" bs=1 seek=$ENV_OFFSET || \
+            die "Failed to restore U-Boot environment"
+    fi
+    info "Environment restored"
+
+    # Clean up
+    rm -rf "$DOWNLOAD_DIR"
+
+    echo ""
+    info "Firmware update complete. Reboot to use the new firmware."
+}
+
+cmd_backup() {
+    local medium="qspi"
+
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --qspi) medium="qspi"; shift ;;
+            --emmc) medium="emmc"; shift ;;
+            *) die "Unknown option: $1" ;;
+        esac
+    done
+
+    local backup_file="/tmp/firmware-${medium}-backup.bin"
+
+    info "Backing up $medium firmware..."
+    if [ "$medium" = "qspi" ]; then
+        dd if="$MTD_FLASH" of="$backup_file" 2>/dev/null || \
+            die "Failed to read from $MTD_FLASH"
+    else
+        dd if="$EMMC_DEV" of="$backup_file" bs=1M count=32 2>/dev/null || \
+            die "Failed to read from $EMMC_DEV"
+    fi
+
+    local size
+    size=$(stat -c%s "$backup_file")
+    info "Backup saved to $backup_file ($((size / 1024 / 1024)) MB)"
+}
+
+cmd_version() {
+    local version="unknown"
+    if [ -f /etc/firmware/version ]; then
+        version=$(cat /etc/firmware/version)
+    fi
+    echo "Mono Gateway Firmware v${version}"
+}
+
+cmd_help() {
+    echo "Usage: firmware <command> [options]"
+    echo ""
+    echo "Commands:"
+    echo "  update    Download, verify, and flash firmware"
+    echo "  backup    Back up current firmware to /tmp"
+    echo "  version   Show firmware and storage info"
+    echo "  help      Show this help message"
+    echo ""
+    echo "Options:"
+    echo "  --qspi    Target QSPI NOR flash (default)"
+    echo "  --emmc    Target eMMC storage"
+    echo ""
+    echo "Examples:"
+    echo "  firmware update           Update QSPI firmware"
+    echo "  firmware update --emmc    Update eMMC firmware"
+    echo "  firmware backup --emmc    Back up eMMC firmware"
+    echo ""
+    echo "Documentation: https://docs.mono.si/"
+}
+
+# Main dispatch
+case "${1:-help}" in
+    update)  shift; cmd_update "$@" ;;
+    backup)  shift; cmd_backup "$@" ;;
+    version) cmd_version ;;
+    help|--help|-h) cmd_help ;;
+    *) die "Unknown command: $1. Run 'firmware help' for usage." ;;
+esac
