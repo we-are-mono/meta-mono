@@ -93,19 +93,6 @@ index 4b1bcf53f7ac..1669e0d267e3 100644
  
  /*
   * IPSec ESP Datapath Protocol Override Register (DPOVRD)
-diff --git a/drivers/net/ethernet/freescale/enetc/enetc.h b/drivers/net/ethernet/freescale/enetc/enetc.h
-index 70f1c59434c3..c81d22a11df7 100644
---- a/drivers/net/ethernet/freescale/enetc/enetc.h
-+++ b/drivers/net/ethernet/freescale/enetc/enetc.h
-@@ -741,7 +741,7 @@ static inline void enetc4_clear_flower_list(struct enetc_si *si)
- }
- #endif
- 
--#if IS_ENABLED(CONFIG_TSN)
-+#if IS_ENABLED(CONFIG_TSN) && IS_ENABLED(CONFIG_FSL_ENETC_QOS)
- 
- void enetc_tsn_pf_init(struct net_device *netdev, struct pci_dev *pdev);
- void enetc_tsn_pf_deinit(struct net_device *netdev);
 diff --git a/drivers/net/ethernet/freescale/sdk_dpaa/Kconfig b/drivers/net/ethernet/freescale/sdk_dpaa/Kconfig
 index bb6693e2d702..a14b325f2b4b 100644
 --- a/drivers/net/ethernet/freescale/sdk_dpaa/Kconfig
