@@ -1,1 +1,0 @@
-add_vpp_plugin(sfp_led SOURCES sfp_led_plugin.c)

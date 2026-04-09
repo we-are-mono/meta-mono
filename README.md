@@ -2,11 +2,6 @@
 
 Yocto layer for the Mono Gateway development kit, an LS1046A-based device with 3 gigabit ports and 2 10-gigabit SFP+ ports.
 
-## Layers
-
-- **meta-mono-bsp** - BSP layer that builds the firmware image, flashed to NOR flash or eMMC (with 32MB padding)
-- **meta-mono-sdk** - SDK layer that builds a complete development image for exploring device internals, developing networking applications, or experimentation
-
 ## Prerequisites
 
 Install dependencies (Debian/Ubuntu):
@@ -25,7 +20,7 @@ Clone the repository:
 
 ```bash
 git clone https://github.com/we-are-mono/meta-mono.git
-cd meta-mono/kas
+cd meta-mono
 ```
 
 Configure your build environment:
@@ -35,38 +30,31 @@ cp site.example.conf site.conf
 # Edit site.conf - ensure DL_DIR and SSTATE_DIR exist with proper permissions
 ```
 
-Build firmware (NOR flash image):
+Build recovery and firmware images:
 
 ```bash
-kas shell distro/recovery.yaml
-bitbake firmware-image
+kas build
 ```
 
-Build SDK image (eMMC development image):
+This uses `.config.yaml` (the kas default) which builds both `recovery-image` (BusyBox initramfs) and `firmware-image` (NOR/eMMC flash images).
+
+## Flashing
+
+### NOR Flash (QSPI)
+
+From U-Boot or a running system, write the firmware image to NOR:
 
 ```bash
-kas shell distro/mono-sdk.yaml
-bitbake mono-sdk-image
+dd if=firmware-qspi.bin of=/dev/mtd0
 ```
 
-## Cross-Compiling with the SDK Toolchain
+### eMMC
 
-To build applications for the Gateway outside of Yocto, generate and install the SDK toolchain:
+When writing to eMMC, skip the first 4KB to preserve the partition table:
 
 ```bash
-kas shell kas/mono-sdk.yaml -c "bitbake mono-sdk-image -c populate_sdk"
-./build/tmp/deploy/sdk/oecore-mono-sdk-image-x86_64-cortexa72-gateway-dk-toolchain-nodistro.0.sh
+dd if=firmware-emmc.bin of=/dev/mmcblk0 bs=512 skip=8 seek=8
 ```
-
-The installer will prompt for an installation directory (default: `/usr/local/oecore-x86_64`).
-
-Before running `configure`, `make`, or any build commands, source the environment setup script:
-
-```bash
-source /usr/local/oecore-x86_64/environment-setup-cortexa72-oe-linux
-```
-
-This configures `CC`, `CXX`, `CFLAGS`, `LDFLAGS`, and other variables for cross-compilation targeting the Gateway's ARM Cortex-A72 processor.
 
 ## NOR Flash Memory Map
 
@@ -82,7 +70,7 @@ The 32MB NOR flash image layout:
 | 6MB | 0x600000 | Unallocated |
 | 10MB | 0xA00000 | Kernel + Initramfs |
 
-The eMMC memory map is nearly identical, but RCW+BL2 starts at 4KB offset to accommodate the MBR partition table at the beginning.
+The eMMC memory map is identical, but RCW+BL2 starts at a 4KB offset because the CPU boots from that offset on eMMC to avoid the partition table region.
 
 ## Production Sources
 
@@ -94,6 +82,7 @@ Current Yocto release: **Walnascar** (Yocto 5.1)
 | [u-boot](https://github.com/we-are-mono/u-boot) | `mt-6.12.49-2.2.0` |
 | [atf](https://github.com/we-are-mono/atf) | `mt-6.12.49-2.2.0` |
 | [linux](https://github.com/nxp-qoriq/linux) | `lf-6.12.49-2.2.0` |
+
 
 ## Versioning Scheme
 
@@ -107,17 +96,17 @@ Breaking down a tag like `mt-6.12.49-2.2.0`:
 - **6.12.49** - Linux kernel version (major.minor.patch)
 - **2.2.0** - NXP SDK release the branch is based on
 
-The exception to this apprach is this repository, because it's not derived from NXP's work, so we use master for development, but we also tag stable versions to correspond with what other components use for releases.
+Firmware images follow CalVer: `YYYY.MM.N` (e.g., `2026.03.1`), set via `FIRMWARE_VERSION` in `conf/machine/gateway-dk.conf`.
 
 ---
 
 > **Warning: Frame Manager Microcode**
 >
-> All devices ship with a special build of Frame Manager microcode (fman-ucode) pre-flashed at offset `0x400000` (4MB) on NOR flash. This microcode includes NXP's ASK (Application Solutions Kit) which enables hardware packet acceleration and offloading.
+> All devices ship with a special build of Frame Manager microcode (fman-ucode) pre-flashed at offset `0x400000` (4MB) on NOR flash.
 >
-> Because this binary is proprietary to NXP, we cannot distribute it via GitHub. The [default recipe](meta-mono-bsp/recipes-dpaa/fm-ucode/fm-ucode_git.bb) builds a version **without hardware offloading support**, which you can flash onto eMMC for learning purposes.
+> Because this binary is proprietary to NXP, we cannot distribute it via GitHub. The [default recipe](recipes-dpaa/fm-ucode/fm-ucode_git.bb) builds a generic version.
 >
-> **Before flashing new firmware, back up the 4-5MB region from your NOR flash to preserve the ASK-enabled microcode:**
+> **Before flashing new firmware, back up the 4-5MB region from your NOR flash to preserve your microcode:**
 > ```bash
 > dd if=/dev/mtd4 of=/tmp/fman-ucode-backup.bin
 > ```

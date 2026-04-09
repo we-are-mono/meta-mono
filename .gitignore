@@ -23,4 +23,4 @@ __pycache__/
 *.pyc
 
 # Proprietary ASK firmware override
-meta-mono-bsp/recipes-dpaa/fm-ucode/fm-ucode_git.bbappend
+recipes-dpaa/fm-ucode/fm-ucode_git.bbappend

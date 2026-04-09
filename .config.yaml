@@ -1,0 +1,40 @@
+header:
+  version: 11
+
+machine: gateway-dk
+distro: recovery
+
+repos:
+  bitbake:
+    url: https://git.openembedded.org/bitbake
+    branch: "2.12"
+    path: sources/bitbake
+    layers:
+      .: "disabled"
+
+  openembedded-core:
+    url: https://git.openembedded.org/openembedded-core
+    branch: walnascar
+    path: sources/openembedded-core
+    layers:
+      meta:
+
+  meta-openembedded:
+    url: https://git.openembedded.org/meta-openembedded
+    branch: walnascar
+    path: sources/meta-openembedded
+    layers:
+      meta-oe:
+      meta-python:
+      meta-networking:
+
+  meta-mono:
+    path: .
+
+target:
+  - recovery-image
+  - firmware-image
+
+local_conf_header:
+  site: |
+    require ${TOPDIR}/../site.conf
