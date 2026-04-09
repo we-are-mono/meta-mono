@@ -2,6 +2,7 @@
 build
 sources
 .kas_shell_history
+bitbake-cookerdaemon.log
 
 # Developer-specific local config
 site.conf
