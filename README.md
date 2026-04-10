@@ -36,7 +36,7 @@ Build recovery and firmware images:
 kas build
 ```
 
-This uses `.config.yaml` (the kas default) which builds both `recovery-image` (BusyBox initramfs) and `firmware-image` (NOR/eMMC flash images).
+This uses `.config.yaml` (the kas default) which builds both `recovery-image` (BusyBox initramfs) and `firmware-image` (NOR/eMMC flash images). Build artifacts are placed in `./dist/`.
 
 ## Flashing
 
