@@ -1,6 +1,7 @@
 # KAS build artifacts
 build
 sources
+dist
 .kas_shell_history
 bitbake-cookerdaemon.log
 
