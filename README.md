@@ -40,37 +40,7 @@ This uses `.config.yaml` (the kas default) which builds both `recovery-image` (B
 
 ## Flashing
 
-The recovery image includes the `firmware` tool for over-the-air updates. If your device has a recent enough firmware, this is the recommended approach. For older version without the `firmware` command, use the manual method.
-
-### Using the firmware tool
-
-1. Flash eMMC first, then switch the DIP switch to boot from eMMC:
-
-```bash
-firmware update --emmc
-```
-
-2. After rebooting from eMMC, flash NOR:
-
-```bash
-firmware update --qspi
-```
-
-### Manual flashing (legacy)
-
-If the `firmware` command is not available on your device, download the firmware images and flash manually.
-
-**eMMC** — skip the first 4KB to preserve the partition table:
-
-```bash
-dd if=firmware-emmc.bin of=/dev/mmcblk0 bs=512 skip=8 seek=8
-```
-
-**NOR Flash (QSPI):**
-
-```bash
-flashcp firmware-qspi.bin /dev/mtd0
-```
+See [Flashing Firmware](https://docs.mono.si/gateway-development-kit/flashing-firmware) for instructions.
 
 ## NOR Flash Memory Map
 

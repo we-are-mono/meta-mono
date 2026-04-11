@@ -1,1 +1,1 @@
-recovery=setenv bootargs "${bootargs_console} rw rootwait quiet loglevel=0 ${bootargs_hwtest}"; mmc dev 0; mmc read ${kernel_addr_r} ${kernel_blk} ${kernel_blkcnt}; mmc read ${fdt_addr_r} ${fdt_blk} ${fdt_blkcnt}; booti ${kernel_addr_r} - ${fdt_addr_r}
+recovery=setenv bootargs "${bootargs_console} boot_medium=emmc rw rootwait quiet loglevel=0 ${bootargs_hwtest}"; mmc dev 0; mmc read ${kernel_addr_r} ${kernel_blk} ${kernel_blkcnt}; mmc read ${fdt_addr_r} ${fdt_blk} ${fdt_blkcnt}; booti ${kernel_addr_r} - ${fdt_addr_r}

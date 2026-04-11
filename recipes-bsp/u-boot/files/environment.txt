@@ -36,7 +36,7 @@ bootdelay=5
 
 opnsense=load mmc 0:1 ${kernel_addr_r} kernel.img; load mmc 0:1 ${fdt_addr_r} dtb/mono-gateway-dk.dtb; booti 0x82000000 - 0x88000000
 
-emmc=setenv bootargs "${bootargs_console} root=/dev/mmcblk0p1 rw rootwait rootfstype=ext4 ${bootargs_hwtest}"; \
+emmc=setenv bootargs "${bootargs_console} boot_medium=emmc root=/dev/mmcblk0p1 rw rootwait rootfstype=ext4 ${bootargs_hwtest}"; \
     ext4load mmc 0:1 ${kernel_addr_r} /boot/Image.gz && \
     ext4load mmc 0:1 ${fdt_addr_r} /boot/mono-gateway-dk.dtb && \
     booti ${kernel_addr_r} - ${fdt_addr_r} || \

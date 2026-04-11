@@ -23,12 +23,28 @@ die() {
     exit 1
 }
 
-warn() {
-    echo "WARNING: $*" >&2
-}
-
 info() {
     echo ":: $*"
+}
+
+# Detect boot medium from kernel command line (set by U-Boot)
+detect_boot_medium() {
+    local cmdline
+    cmdline=$(cat /proc/cmdline)
+    if [[ "$cmdline" =~ boot_medium=([a-z]+) ]]; then
+        echo "${BASH_REMATCH[1]}"
+    else
+        die "Cannot detect boot medium. U-Boot must pass boot_medium= on kernel command line."
+    fi
+}
+
+# Return the opposite medium
+target_medium() {
+    case "$1" in
+        qspi) echo "emmc" ;;
+        emmc) echo "qspi" ;;
+        *) die "Unknown boot medium: $1" ;;
+    esac
 }
 
 # Auto-detect MAC address from the first ethernet interface with one assigned
@@ -44,26 +60,30 @@ detect_mac() {
 # Check that networking is functional
 check_network() {
     if ! ip route show default &>/dev/null || [ -z "$(ip route show default)" ]; then
-        die "No default route configured. Set up networking first:\n  ip link set <iface> up\n  ip addr add <ip>/<mask> dev <iface>\n  ip route add default via <gateway> dev <iface>"
+        die "No default route configured. Set up networking first:
+  ip link set <iface> up
+  ip addr add <ip>/<mask> dev <iface>
+  ip route add default via <gateway> dev <iface>"
     fi
 }
 
-cmd_update() {
-    local medium="qspi"
+# Clean up on exit
+cleanup() {
+    rm -rf "$DOWNLOAD_DIR"
+}
 
-    while [ $# -gt 0 ]; do
-        case "$1" in
-            --qspi) medium="qspi"; shift ;;
-            --emmc) medium="emmc"; shift ;;
-            *) die "Unknown option: $1" ;;
-        esac
-    done
+cmd_update() {
+    local boot_medium target
+
+    boot_medium=$(detect_boot_medium)
+    target=$(target_medium "$boot_medium")
 
     echo ""
     echo "╔═════════════════════════════════════════════════════════╗"
     echo "║                    FIRMWARE UPDATE                      ║"
     echo "╠═════════════════════════════════════════════════════════╣"
-    echo "║  This process will update the $medium firmware.            ║"
+    echo "║  Booted from: ${boot_medium}                                      ║"
+    echo "║  Target:      ${target}                                      ║"
     echo "║                                                         ║"
     echo "║  DO NOT power off or interrupt the device during the    ║"
     echo "║  update. Doing so may result in an unrecoverable state  ║"
@@ -85,9 +105,10 @@ cmd_update() {
     info "Using MAC address: $mac"
 
     # Download firmware and signature
+    trap cleanup EXIT
     mkdir -p "$DOWNLOAD_DIR"
-    local fw_file="firmware-${medium}.bin"
-    local sig_file="firmware-${medium}.bin.sig"
+    local fw_file="firmware-${target}.bin"
+    local sig_file="firmware-${target}.bin.sig"
 
     info "Downloading firmware image..."
     curl -fS -u "mono:${mac}" -o "${DOWNLOAD_DIR}/${fw_file}" "${FIRMWARE_URL}/${fw_file}" || \
@@ -103,18 +124,16 @@ cmd_update() {
         if ! openssl dgst -sha256 -verify "$PUBKEY" \
                 -signature "${DOWNLOAD_DIR}/${sig_file}" \
                 "${DOWNLOAD_DIR}/${fw_file}" >/dev/null 2>&1; then
-            rm -rf "$DOWNLOAD_DIR"
             die "Signature verification FAILED. The firmware image may be corrupted or tampered with."
         fi
         info "Signature verified OK"
     else
-        rm -rf "$DOWNLOAD_DIR"
         die "Public key not found at $PUBKEY. Cannot verify firmware integrity."
     fi
 
-    # Back up U-Boot environment
-    info "Backing up U-Boot environment..."
-    if [ "$medium" = "qspi" ]; then
+    # Back up U-Boot environment from the target medium
+    info "Backing up U-Boot environment from ${target}..."
+    if [ "$target" = "qspi" ]; then
         dd if="$MTD_ENV" of="${DOWNLOAD_DIR}/uboot-env.bin" bs=$ENV_SIZE count=1 2>/dev/null || \
             die "Failed to back up U-Boot environment from $MTD_ENV"
     else
@@ -124,49 +143,41 @@ cmd_update() {
     info "Environment backed up"
 
     # Flash firmware
-    info "Flashing firmware to $medium (do not interrupt)..."
-    if [ "$medium" = "qspi" ]; then
+    info "Flashing firmware to ${target} (do not interrupt)..."
+    if [ "$target" = "qspi" ]; then
         flashcp -v "${DOWNLOAD_DIR}/${fw_file}" "$MTD_FLASH" || \
             die "Flash failed!"
     else
-        dd if="${DOWNLOAD_DIR}/${fw_file}" of="$EMMC_DEV" bs=4096 skip=1 seek=1 || \
+        dd if="${DOWNLOAD_DIR}/${fw_file}" of="$EMMC_DEV" bs=4096 skip=1 seek=1 conv=fsync || \
             die "Flash failed!"
     fi
     info "Firmware flashed"
 
     # Restore U-Boot environment
     info "Restoring U-Boot environment..."
-    if [ "$medium" = "qspi" ]; then
+    if [ "$target" = "qspi" ]; then
         flashcp "${DOWNLOAD_DIR}/uboot-env.bin" "$MTD_ENV" || \
             die "Failed to restore U-Boot environment"
     else
-        dd if="${DOWNLOAD_DIR}/uboot-env.bin" of="$EMMC_DEV" bs=1 seek=$ENV_OFFSET || \
+        dd if="${DOWNLOAD_DIR}/uboot-env.bin" of="$EMMC_DEV" bs=1 seek=$ENV_OFFSET conv=fsync || \
             die "Failed to restore U-Boot environment"
     fi
     info "Environment restored"
-
-    # Clean up
-    rm -rf "$DOWNLOAD_DIR"
 
     echo ""
     info "Firmware update complete. Reboot to use the new firmware."
 }
 
 cmd_backup() {
-    local medium="qspi"
+    local boot_medium target
 
-    while [ $# -gt 0 ]; do
-        case "$1" in
-            --qspi) medium="qspi"; shift ;;
-            --emmc) medium="emmc"; shift ;;
-            *) die "Unknown option: $1" ;;
-        esac
-    done
+    boot_medium=$(detect_boot_medium)
+    target=$(target_medium "$boot_medium")
 
-    local backup_file="/tmp/firmware-${medium}-backup.bin"
+    local backup_file="/tmp/firmware-${target}-backup.bin"
 
-    info "Backing up $medium firmware..."
-    if [ "$medium" = "qspi" ]; then
+    info "Booted from ${boot_medium}, backing up ${target} firmware..."
+    if [ "$target" = "qspi" ]; then
         dd if="$MTD_FLASH" of="$backup_file" 2>/dev/null || \
             die "Failed to read from $MTD_FLASH"
     else
@@ -188,22 +199,20 @@ cmd_version() {
 }
 
 cmd_help() {
-    echo "Usage: firmware <command> [options]"
+    echo "Usage: firmware <command>"
     echo ""
     echo "Commands:"
-    echo "  update    Download, verify, and flash firmware"
-    echo "  backup    Back up current firmware to /tmp"
-    echo "  version   Show firmware and storage info"
+    echo "  update    Download, verify, and flash firmware to the inactive medium"
+    echo "  backup    Back up the inactive medium's firmware to /tmp"
+    echo "  version   Show firmware version"
     echo "  help      Show this help message"
     echo ""
-    echo "Options:"
-    echo "  --qspi    Target QSPI NOR flash (default)"
-    echo "  --emmc    Target eMMC storage"
+    echo "The tool auto-detects which medium the device booted from and"
+    echo "always targets the other one (qspi <-> emmc)."
     echo ""
     echo "Examples:"
-    echo "  firmware update           Update QSPI firmware"
-    echo "  firmware update --emmc    Update eMMC firmware"
-    echo "  firmware backup --emmc    Back up eMMC firmware"
+    echo "  firmware update     Update the inactive medium"
+    echo "  firmware backup     Back up the inactive medium"
     echo ""
     echo "Documentation: https://docs.mono.si/"
 }
