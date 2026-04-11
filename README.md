@@ -1,6 +1,6 @@
-# Mono Gateway Yocto Layer
+# Mono Gateway Firmware
 
-Yocto layer for the Mono Gateway development kit, an LS1046A-based device with 3 gigabit ports and 2 10-gigabit SFP+ ports.
+Official firmware build system for the Mono Gateway development kit, an LS1046A-based device with 3 gigabit ports and 2 10-gigabit SFP+ ports. Contains [Yocto](https://www.yoctoproject.org/) recipes and configuration to build the complete firmware from source.
 
 ## Prerequisites
 
@@ -40,20 +40,36 @@ This uses `.config.yaml` (the kas default) which builds both `recovery-image` (B
 
 ## Flashing
 
-### NOR Flash (QSPI)
+The recovery image includes the `firmware` tool for over-the-air updates. If your device has a recent enough firmware, this is the recommended approach. For older version without the `firmware` command, use the manual method.
 
-From U-Boot or a running system, write the firmware image to NOR:
+### Using the firmware tool
+
+1. Flash eMMC first, then switch the DIP switch to boot from eMMC:
 
 ```bash
-dd if=firmware-qspi.bin of=/dev/mtd0
+firmware update --emmc
 ```
 
-### eMMC
+2. After rebooting from eMMC, flash NOR:
 
-When writing to eMMC, skip the first 4KB to preserve the partition table:
+```bash
+firmware update --qspi
+```
+
+### Manual flashing (legacy)
+
+If the `firmware` command is not available on your device, download the firmware images and flash manually.
+
+**eMMC** — skip the first 4KB to preserve the partition table:
 
 ```bash
 dd if=firmware-emmc.bin of=/dev/mmcblk0 bs=512 skip=8 seek=8
+```
+
+**NOR Flash (QSPI):**
+
+```bash
+flashcp firmware-qspi.bin /dev/mtd0
 ```
 
 ## NOR Flash Memory Map

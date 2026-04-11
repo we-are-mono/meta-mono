@@ -90,11 +90,11 @@ cmd_update() {
     local sig_file="firmware-${medium}.bin.sig"
 
     info "Downloading firmware image..."
-    curl -kfS -u "mono:${mac}" -o "${DOWNLOAD_DIR}/${fw_file}" "${FIRMWARE_URL}/${fw_file}" || \
+    curl -fS -u "mono:${mac}" -o "${DOWNLOAD_DIR}/${fw_file}" "${FIRMWARE_URL}/${fw_file}" || \
         die "Failed to download firmware image"
 
     info "Downloading signature..."
-    curl -kfS -u "mono:${mac}" -o "${DOWNLOAD_DIR}/${sig_file}" "${FIRMWARE_URL}/${sig_file}" || \
+    curl -fS -u "mono:${mac}" -o "${DOWNLOAD_DIR}/${sig_file}" "${FIRMWARE_URL}/${sig_file}" || \
         die "Failed to download signature"
 
     # Verify signature
@@ -108,7 +108,8 @@ cmd_update() {
         fi
         info "Signature verified OK"
     else
-        warn "Public key not found at $PUBKEY, skipping signature verification"
+        rm -rf "$DOWNLOAD_DIR"
+        die "Public key not found at $PUBKEY. Cannot verify firmware integrity."
     fi
 
     # Back up U-Boot environment

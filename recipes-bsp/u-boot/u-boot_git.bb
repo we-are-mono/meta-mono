@@ -2,6 +2,8 @@ SUMMARY = "U-Boot for Mono Gateway board"
 LICENSE = "GPL-2.0-or-later"
 LIC_FILES_CHKSUM = "file://Licenses/gpl-2.0.txt;md5=b234ee4d69f5fce4486a80fdaf4a4263"
 
+COMPATIBLE_MACHINE = "gateway-dk"
+
 DEPENDS = "bison-native flex-native dtc-native bc-native u-boot-tools-native"
 
 SRC_URI = "git://github.com/we-are-mono/u-boot;protocol=https;branch=mt-6.12.y \

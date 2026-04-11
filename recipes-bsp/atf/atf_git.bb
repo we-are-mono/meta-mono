@@ -2,6 +2,8 @@ SUMMARY = "ARM Trusted Firmware for Mono Gateway board"
 LICENSE = "BSD-3-Clause"
 LIC_FILES_CHKSUM = "file://docs/license.rst;md5=83b7626b8c7a37263c6a58af8d19bee1"
 
+COMPATIBLE_MACHINE = "gateway-dk"
+
 DEPENDS = "u-boot-tools-native u-boot rcw"
 do_compile[depends] += "u-boot:do_deploy rcw:do_deploy"
 

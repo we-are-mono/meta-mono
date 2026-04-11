@@ -2,6 +2,8 @@ SUMMARY = "Reset Configuration Word for Mono Gateway board"
 LICENSE = "BSD-3-Clause"
 LIC_FILES_CHKSUM = "file://LICENSE;md5=44a0d0fad189770cc022af4ac6262cbe"
 
+COMPATIBLE_MACHINE = "gateway-dk"
+
 DEPENDS = "tcl-native"
 
 SRC_URI = "git://github.com/we-are-mono/rcw;protocol=https;branch=mt-6.12.y"

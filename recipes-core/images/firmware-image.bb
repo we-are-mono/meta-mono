@@ -25,22 +25,22 @@ FIRMWARE_SIGNING_PUBKEY ?= ""
 
 do_compile() {
     for d in ${BOOTTYPE}; do
-        # Create 32MB firmware image
-        dd if=/dev/zero of=${WORKDIR}/firmware-${d}.bin bs=1 count=33554432
+        # Create 32MB firmware image (zero-filled)
+        truncate -s 32M ${WORKDIR}/firmware-${d}.bin
 
         # On eMMC the CPU boots from a 4KB offset to avoid the partition table region
         if [ "$d" = "emmc" ]; then
-            BL2_OFFSET=4096
+            BL2_SEEK=4
         else
-            BL2_OFFSET=0
+            BL2_SEEK=0
         fi
 
-        dd if=${DEPLOY_DIR_IMAGE}/atf/bl2_${d}.pbl of=${WORKDIR}/firmware-${d}.bin bs=1 seek=${BL2_OFFSET} conv=notrunc
-        dd if=${DEPLOY_DIR_IMAGE}/atf/fip.bin of=${WORKDIR}/firmware-${d}.bin bs=1 seek=1048576 conv=notrunc
-        dd if=${DEPLOY_DIR_IMAGE}/u-boot-${d}.env of=${WORKDIR}/firmware-${d}.bin bs=1 seek=3145728 conv=notrunc
-        dd if=${DEPLOY_DIR_IMAGE}/${FMAN_UCODE} of=${WORKDIR}/firmware-${d}.bin bs=1 seek=4194304 conv=notrunc
-        dd if=${DEPLOY_DIR_IMAGE}/mono-gateway-dk.dtb of=${WORKDIR}/firmware-${d}.bin bs=1 seek=5242880 conv=notrunc
-        dd if=${DEPLOY_DIR_IMAGE}/Image.gz-initramfs-${MACHINE}.bin of=${WORKDIR}/firmware-${d}.bin bs=1 seek=10485760 conv=notrunc
+        dd if=${DEPLOY_DIR_IMAGE}/atf/bl2_${d}.pbl of=${WORKDIR}/firmware-${d}.bin bs=1K seek=${BL2_SEEK} conv=notrunc
+        dd if=${DEPLOY_DIR_IMAGE}/atf/fip.bin of=${WORKDIR}/firmware-${d}.bin bs=1K seek=1024 conv=notrunc
+        dd if=${DEPLOY_DIR_IMAGE}/u-boot-${d}.env of=${WORKDIR}/firmware-${d}.bin bs=1K seek=3072 conv=notrunc
+        dd if=${DEPLOY_DIR_IMAGE}/${FMAN_UCODE} of=${WORKDIR}/firmware-${d}.bin bs=1K seek=4096 conv=notrunc
+        dd if=${DEPLOY_DIR_IMAGE}/mono-gateway-dk.dtb of=${WORKDIR}/firmware-${d}.bin bs=1K seek=5120 conv=notrunc
+        dd if=${DEPLOY_DIR_IMAGE}/Image.gz-initramfs-${MACHINE}.bin of=${WORKDIR}/firmware-${d}.bin bs=1K seek=10240 conv=notrunc
     done
 }
 
