@@ -67,7 +67,6 @@
 		mod-def0-gpios = <&gpio2 12 GPIO_ACTIVE_LOW>;
 		los-gpios = <&gpio2 11 GPIO_ACTIVE_HIGH>;
 		maximum-power-milliwatt = <3000>;
-		leds = <&led_sfp0_link>, <&led_sfp0_activity>;
 	};
 
 	/* SFP 2 */
@@ -78,13 +77,20 @@
 		mod-def0-gpios = <&gpio2 10 GPIO_ACTIVE_LOW>;
 		los-gpios = <&gpio2 9 GPIO_ACTIVE_HIGH>;
 		maximum-power-milliwatt = <3000>;
-		leds = <&led_sfp1_link>, <&led_sfp1_activity>;
 	};
 
 	/* SFP LED Controller */
 	sfp_led_controller: sfp-led-controller {
 		compatible = "mono,sfp-led";
-		sfp-ports = <&sfp_xfi0>, <&sfp_xfi1>;
+
+		port@0 {
+			sfp = <&sfp_xfi0>;
+			leds = <&led_sfp0_link>, <&led_sfp0_activity>;
+		};
+		port@1 {
+			sfp = <&sfp_xfi1>;
+			leds = <&led_sfp1_link>, <&led_sfp1_activity>;
+		};
 	};
 
 	/* Boot memory regions for SDK DPAA driver */
