@@ -107,8 +107,8 @@ cmd_update() {
     # Download firmware and signature
     trap cleanup EXIT
     mkdir -p "$DOWNLOAD_DIR"
-    local fw_file="firmware-${target}.bin"
-    local sig_file="firmware-${target}.bin.sig"
+    local fw_file="firmware-${target}-@MACHINE@.bin"
+    local sig_file="firmware-${target}-@MACHINE@.bin.sig"
 
     info "Downloading firmware image..."
     curl -fS -u "mono:${mac}" -o "${DOWNLOAD_DIR}/${fw_file}" "${FIRMWARE_URL}/${fw_file}" || \
@@ -148,8 +148,9 @@ cmd_update() {
         flashcp -v "${DOWNLOAD_DIR}/${fw_file}" "$MTD_FLASH" || \
             die "Flash failed!"
     else
-        dd if="${DOWNLOAD_DIR}/${fw_file}" of="$EMMC_DEV" bs=4096 skip=1 seek=1 conv=fsync || \
+        dd if="${DOWNLOAD_DIR}/${fw_file}" of="$EMMC_DEV" bs=4096 skip=1 seek=1 || \
             die "Flash failed!"
+        sync
     fi
     info "Firmware flashed"
 
@@ -159,8 +160,9 @@ cmd_update() {
         flashcp "${DOWNLOAD_DIR}/uboot-env.bin" "$MTD_ENV" || \
             die "Failed to restore U-Boot environment"
     else
-        dd if="${DOWNLOAD_DIR}/uboot-env.bin" of="$EMMC_DEV" bs=1 seek=$ENV_OFFSET conv=fsync || \
+        dd if="${DOWNLOAD_DIR}/uboot-env.bin" of="$EMMC_DEV" bs=1 seek=$ENV_OFFSET || \
             die "Failed to restore U-Boot environment"
+        sync
     fi
     info "Environment restored"
 

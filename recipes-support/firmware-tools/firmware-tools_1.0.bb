@@ -13,6 +13,7 @@ S = "${UNPACKDIR}"
 do_install() {
     install -d ${D}${sbindir}
     install -m 0755 ${UNPACKDIR}/firmware ${D}${sbindir}/firmware
+    sed -i 's/@MACHINE@/${MACHINE}/' ${D}${sbindir}/firmware
 
     install -d ${D}${sysconfdir}/firmware
     install -m 0644 ${UNPACKDIR}/firmware-signing.pub ${D}${sysconfdir}/firmware/firmware-signing.pub

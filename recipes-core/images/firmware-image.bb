@@ -66,11 +66,9 @@ do_deploy() {
 
     for d in ${BOOTTYPE}; do
         install -m 0644 ${WORKDIR}/firmware-${d}.bin ${DEPLOYDIR}/firmware-${d}-${MACHINE}.bin
-        ln -sf firmware-${d}-${MACHINE}.bin ${DEPLOYDIR}/firmware-${d}.bin
 
         if [ -f ${WORKDIR}/firmware-${d}.bin.sig ]; then
             install -m 0644 ${WORKDIR}/firmware-${d}.bin.sig ${DEPLOYDIR}/firmware-${d}-${MACHINE}.bin.sig
-            ln -sf firmware-${d}-${MACHINE}.bin.sig ${DEPLOYDIR}/firmware-${d}.bin.sig
         fi
     done
 
