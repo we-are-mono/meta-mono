@@ -170,7 +170,9 @@ cmd_update() {
     # Restore U-Boot environment
     info "Restoring U-Boot environment..."
     if [ "$target" = "qspi" ]; then
-        flashcp "${DOWNLOAD_DIR}/uboot-env.bin" "$MTD_ENV" || \
+        local mtd_env
+        mtd_env=$(find_mtd "uboot-env")
+        flashcp "${DOWNLOAD_DIR}/uboot-env.bin" "$mtd_env" || \
             die "Failed to restore U-Boot environment"
     else
         dd if="${DOWNLOAD_DIR}/uboot-env.bin" of="$EMMC_DEV" bs=1 seek=$ENV_OFFSET || \
@@ -193,8 +195,10 @@ cmd_backup() {
 
     info "Booted from ${boot_medium}, backing up ${target} firmware..."
     if [ "$target" = "qspi" ]; then
-        dd if="$MTD_FLASH" of="$backup_file" 2>/dev/null || \
-            die "Failed to read from $MTD_FLASH"
+        local mtd_flash
+        mtd_flash=$(find_mtd "flash")
+        dd if="$mtd_flash" of="$backup_file" 2>/dev/null || \
+            die "Failed to read from $mtd_flash"
     else
         dd if="$EMMC_DEV" of="$backup_file" bs=1M count=32 2>/dev/null || \
             die "Failed to read from $EMMC_DEV"
