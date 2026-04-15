@@ -10,7 +10,7 @@ inherit image
 IMAGE_INSTALL = "busybox base-files resolv-conf-static bash shadow kmod udev \
                 parted util-linux-fdisk util-linux-lsblk util-linux-blkid \
                 e2fsprogs e2fsprogs-resize2fs mmc-utils mtd-utils i2c-tools \
-                ethtool curl gzip tar firmware-tools \
+                ethtool curl gzip xz tar firmware-tools \
                 fancontrol sfp-led status-led lp5812-driver \
                 "
 

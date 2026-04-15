@@ -29,6 +29,12 @@
 		stdout-path = "serial0:115200n8";
 	};
 
+	gpio-poweroff {
+		compatible = "gpio-poweroff";
+		gpios = <&gpio2 21 GPIO_ACTIVE_HIGH>;
+		timeout-ms = <1000>;
+	};
+
 	leds {
 		compatible = "gpio-leds";
 

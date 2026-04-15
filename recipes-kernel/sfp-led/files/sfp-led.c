@@ -116,6 +116,7 @@ struct sfp_led_port {
 
 	struct delayed_work poll_work;
 	int netdev_retries;
+	int debug_count;		/* Rate limit debug output */
 
 	/* Cached state for change detection */
 	bool last_module_present;
@@ -142,14 +143,18 @@ struct sfp_led_priv {
 static struct net_device *sfp_led_find_netdev(struct device_node *sfp_np)
 {
 	struct net_device *dev, *found = NULL;
-	bool need_rtnl;
 
 	if (!sfp_np)
 		return NULL;
 
-	need_rtnl = !rtnl_is_locked();
-	if (need_rtnl)
-		rtnl_lock();
+	/*
+	 * Use rtnl_trylock to avoid deadlock: this is called from a
+	 * workqueue, and networking teardown can flush the system workqueue
+	 * while holding rtnl_lock. If we can't get the lock, the caller
+	 * will retry on the next poll cycle.
+	 */
+	if (!rtnl_trylock())
+		return NULL;
 
 	for_each_netdev(&init_net, dev) {
 		struct device *parent = dev->dev.parent;
@@ -176,8 +181,7 @@ static struct net_device *sfp_led_find_netdev(struct device_node *sfp_np)
 		of_node_put(sfp_ref);
 	}
 
-	if (need_rtnl)
-		rtnl_unlock();
+	rtnl_unlock();
 
 	return found;
 }
@@ -271,9 +275,6 @@ static bool sfp_led_i2c_los(struct sfp_led_port *port)
 {
 	union i2c_smbus_data data;
 	int ret;
-	static int debug_count[2] = {0, 0};  /* Rate limit debug output */
-	int port_idx = (port == &port->priv->ports[0]) ? 0 : 1;
-
 	if (!port->i2c_adapter)
 		return true;  /* Assume no signal if can't check */
 
@@ -283,14 +284,14 @@ static bool sfp_led_i2c_los(struct sfp_led_port *port)
 
 	/* Debug: log every 50th read or on error */
 	if (ret < 0) {
-		if (debug_count[port_idx]++ % 50 == 0)
+		if (port->debug_count++ % 50 == 0)
 			dev_dbg(port->priv->dev, "%s: A2h read failed: %d (no DDM?)\n",
 				 port->link_led_name, ret);
 		return true;  /* Error reading - assume no signal */
 	}
 
 	/* Debug: log status byte periodically */
-	if (debug_count[port_idx]++ % 50 == 0)
+	if (port->debug_count++ % 50 == 0)
 		dev_dbg(port->priv->dev, "%s: A2h[110]=0x%02x LOS=%d\n",
 			 port->link_led_name, data.byte,
 			 (data.byte & SFP_STATUS_LOS) ? 1 : 0);
@@ -494,15 +495,16 @@ static int sfp_led_register_port(struct sfp_led_priv *priv,
 	struct sfp_led_port *port = &priv->ports[index];
 	struct device_node *sfp_np, *i2c_np;
 
-	port->priv = priv;
-
 	/* Parse SFP node from port child node */
 	sfp_np = of_parse_phandle(port_np, "sfp", 0);
 	if (!sfp_np) {
 		dev_err(priv->dev, "port %d: missing sfp phandle\n", index);
 		return -ENODEV;
 	}
+
+	port->priv = priv;
 	port->sfp_np = sfp_np;
+	/* sfp_np has ref from of_parse_phandle — don't add of_node_get */
 
 	/* Get I2C adapter for module detection */
 	i2c_np = of_parse_phandle(sfp_np, "i2c-bus", 0);
@@ -612,7 +614,7 @@ static int sfp_led_probe(struct platform_device *pdev)
 	platform_set_drvdata(pdev, priv);
 
 	count = of_get_child_count(pdev->dev.of_node);
-	if (count <= 0) {
+	if (count == 0) {
 		dev_err(&pdev->dev, "no port child nodes specified\n");
 		return -ENODEV;
 	}

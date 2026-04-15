@@ -11,16 +11,25 @@ DOWNLOAD_DIR="/tmp/firmware-update"
 ENV_SIZE=8192  # 0x2000 bytes
 ENV_OFFSET=3145728  # 0x300000
 
-# MTD partitions (QSPI)
-MTD_FLASH="/dev/mtd0"    # Entire NOR flash
-MTD_ENV="/dev/mtd2"      # U-Boot environment
-
 # eMMC device
 EMMC_DEV="/dev/mmcblk0"
 
 die() {
     echo "ERROR: $*" >&2
     exit 1
+}
+
+# Find MTD device node by partition label (e.g. "rcw-bl2" -> "/dev/mtd0")
+find_mtd() {
+    local label="$1"
+    local sysdir
+    for sysdir in /sys/class/mtd/mtd[0-9]*/; do
+        if [ -f "${sysdir}name" ] && [ "$(cat "${sysdir}name")" = "$label" ]; then
+            echo "/dev/$(basename "$sysdir")"
+            return 0
+        fi
+    done
+    die "MTD partition '$label' not found"
 }
 
 info() {
@@ -134,8 +143,10 @@ cmd_update() {
     # Back up U-Boot environment from the target medium
     info "Backing up U-Boot environment from ${target}..."
     if [ "$target" = "qspi" ]; then
-        dd if="$MTD_ENV" of="${DOWNLOAD_DIR}/uboot-env.bin" bs=$ENV_SIZE count=1 2>/dev/null || \
-            die "Failed to back up U-Boot environment from $MTD_ENV"
+        local mtd_env
+        mtd_env=$(find_mtd "uboot-env")
+        dd if="$mtd_env" of="${DOWNLOAD_DIR}/uboot-env.bin" bs=$ENV_SIZE count=1 2>/dev/null || \
+            die "Failed to back up U-Boot environment from $mtd_env"
     else
         dd if="$EMMC_DEV" of="${DOWNLOAD_DIR}/uboot-env.bin" bs=1 skip=$ENV_OFFSET count=$ENV_SIZE 2>/dev/null || \
             die "Failed to back up U-Boot environment from $EMMC_DEV"
@@ -145,7 +156,9 @@ cmd_update() {
     # Flash firmware
     info "Flashing firmware to ${target} (do not interrupt)..."
     if [ "$target" = "qspi" ]; then
-        flashcp -v "${DOWNLOAD_DIR}/${fw_file}" "$MTD_FLASH" || \
+        local mtd_flash
+        mtd_flash=$(find_mtd "flash")
+        flashcp -v "${DOWNLOAD_DIR}/${fw_file}" "$mtd_flash" || \
             die "Flash failed!"
     else
         dd if="${DOWNLOAD_DIR}/${fw_file}" of="$EMMC_DEV" bs=4096 skip=1 seek=1 || \
