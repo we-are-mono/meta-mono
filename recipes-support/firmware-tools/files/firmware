@@ -243,7 +243,7 @@ fetch_via_usb() {
 }
 
 cmd_update() {
-    local boot_medium target source="net" from_path=""
+    local boot_medium target source="net" from_path="" preserve_env=0
 
     # Parse args
     while [ $# -gt 0 ]; do
@@ -251,6 +251,7 @@ cmd_update() {
             --usb) source="usb"; shift ;;
             --from) source="local"; from_path="${2:-}"; shift 2 ;;
             --from=*) source="local"; from_path="${1#--from=}"; shift ;;
+            --preserve-env) preserve_env=1; shift ;;
             -h|--help)
                 cmd_help
                 exit 0
@@ -266,13 +267,17 @@ cmd_update() {
     boot_medium=$(detect_boot_medium)
     target=$(target_medium "$boot_medium")
 
+    local env_label="no"
+    [ "$preserve_env" = 1 ] && env_label="yes"
+
     echo ""
     echo "╔═════════════════════════════════════════════════════════╗"
     echo "║                    FIRMWARE UPDATE                      ║"
     echo "╠═════════════════════════════════════════════════════════╣"
-    echo "║  Booted from: ${boot_medium}                                      ║"
-    echo "║  Target:      ${target}                                      ║"
-    echo "║  Source:      ${source}                                       ║"
+    printf "║  Booted from:   %-39s ║\n" "$boot_medium"
+    printf "║  Target:        %-39s ║\n" "$target"
+    printf "║  Source:        %-39s ║\n" "$source"
+    printf "║  Preserve env:  %-39s ║\n" "$env_label"
     echo "║                                                         ║"
     echo "║  DO NOT power off or interrupt the device during the    ║"
     echo "║  update. Doing so may result in an unrecoverable state  ║"
@@ -280,6 +285,12 @@ cmd_update() {
     echo "║                                                         ║"
     echo "║  For full documentation, visit: https://docs.mono.si/   ║"
     echo "╚═════════════════════════════════════════════════════════╝"
+    if [ "$preserve_env" = 0 ]; then
+        echo ""
+        echo "!! U-boot environment WILL NOT be preserved. Saved boot settings,"
+        echo "!! custom env vars, and boot counters will reset to defaults."
+        echo "!! Pass --preserve-env to keep them."
+    fi
     echo ""
     read -rp "Type 'yes' to proceed: " confirm
     if [ "$confirm" != "yes" ]; then
@@ -312,18 +323,20 @@ cmd_update() {
         die "Public key not found at $PUBKEY. Cannot verify firmware integrity."
     fi
 
-    # Back up U-Boot environment from the target medium
-    info "Backing up U-Boot environment from ${target}..."
-    if [ "$target" = "qspi" ]; then
-        local mtd_env
-        mtd_env=$(find_mtd "uboot-env")
-        dd if="$mtd_env" of="${DOWNLOAD_DIR}/uboot-env.bin" bs=$ENV_SIZE count=1 2>/dev/null || \
-            die "Failed to back up U-Boot environment from $mtd_env"
-    else
-        dd if="$EMMC_DEV" of="${DOWNLOAD_DIR}/uboot-env.bin" bs=1 skip=$ENV_OFFSET count=$ENV_SIZE 2>/dev/null || \
-            die "Failed to back up U-Boot environment from $EMMC_DEV"
+    # Back up U-Boot environment from the target medium (only if preserving)
+    if [ "$preserve_env" = 1 ]; then
+        info "Backing up U-Boot environment from ${target}..."
+        if [ "$target" = "qspi" ]; then
+            local mtd_env
+            mtd_env=$(find_mtd "uboot-env")
+            dd if="$mtd_env" of="${DOWNLOAD_DIR}/uboot-env.bin" bs=$ENV_SIZE count=1 2>/dev/null || \
+                die "Failed to back up U-Boot environment from $mtd_env"
+        else
+            dd if="$EMMC_DEV" of="${DOWNLOAD_DIR}/uboot-env.bin" bs=1 skip=$ENV_OFFSET count=$ENV_SIZE 2>/dev/null || \
+                die "Failed to back up U-Boot environment from $EMMC_DEV"
+        fi
+        info "Environment backed up"
     fi
-    info "Environment backed up"
 
     # Flash firmware
     info "Flashing firmware to ${target} (do not interrupt)..."
@@ -339,19 +352,23 @@ cmd_update() {
     fi
     info "Firmware flashed"
 
-    # Restore U-Boot environment
-    info "Restoring U-Boot environment..."
-    if [ "$target" = "qspi" ]; then
-        local mtd_env
-        mtd_env=$(find_mtd "uboot-env")
-        flashcp "${DOWNLOAD_DIR}/uboot-env.bin" "$mtd_env" || \
-            die "Failed to restore U-Boot environment"
+    # Restore U-Boot environment (only if we backed it up)
+    if [ "$preserve_env" = 1 ]; then
+        info "Restoring U-Boot environment..."
+        if [ "$target" = "qspi" ]; then
+            local mtd_env
+            mtd_env=$(find_mtd "uboot-env")
+            flashcp "${DOWNLOAD_DIR}/uboot-env.bin" "$mtd_env" || \
+                die "Failed to restore U-Boot environment"
+        else
+            dd if="${DOWNLOAD_DIR}/uboot-env.bin" of="$EMMC_DEV" bs=1 seek=$ENV_OFFSET || \
+                die "Failed to restore U-Boot environment"
+            sync
+        fi
+        info "Environment restored"
     else
-        dd if="${DOWNLOAD_DIR}/uboot-env.bin" of="$EMMC_DEV" bs=1 seek=$ENV_OFFSET || \
-            die "Failed to restore U-Boot environment"
-        sync
+        info "Skipped u-boot environment restore (--preserve-env not set)"
     fi
-    info "Environment restored"
 
     echo ""
     info "Firmware update complete. Reboot to use the new firmware."
@@ -398,10 +415,16 @@ cmd_help() {
     echo "  version         Show firmware version"
     echo "  help            Show this help message"
     echo ""
-    echo "update options (pick one source):"
+    echo "update options — source (pick one):"
     echo "  (none)          Download from ${FIRMWARE_URL} (requires network)"
     echo "  --usb           Find firmware on a plugged-in USB drive"
     echo "  --from PATH     Use a local directory containing the .bin and .sig"
+    echo ""
+    echo "update options — u-boot environment:"
+    echo "  (default)       Full rewrite: u-boot env resets to firmware defaults"
+    echo "  --preserve-env  Back up the current u-boot env before flashing and"
+    echo "                  restore it after (keeps saved boot settings, custom"
+    echo "                  env vars, boot counters)"
     echo ""
     echo "The tool auto-detects which medium the device booted from and"
     echo "always targets the other one (qspi <-> emmc)."
@@ -414,9 +437,10 @@ cmd_help() {
     echo "  one you booted from). FAT32, exFAT, and ext4 sticks all work."
     echo ""
     echo "Examples:"
-    echo "  firmware update                        Update over network"
+    echo "  firmware update                        Update over network (env wiped)"
     echo "  firmware update --usb                  Update from USB drive"
     echo "  firmware update --from /mnt/usb        Update from a mounted dir"
+    echo "  firmware update --usb --preserve-env   Update from USB, keep env"
     echo "  firmware backup                        Back up the inactive medium"
     echo ""
     echo "Documentation: https://docs.mono.si/"
