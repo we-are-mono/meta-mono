@@ -66,13 +66,19 @@ detect_mac() {
     echo "$mac"
 }
 
-# Check that networking is functional
+# Check that networking is functional. Accept either an IPv4 or IPv6 default
+# route — many deployments are IPv6-only (SLAAC) and curl can reach
+# firmware.mono.si over either family.
 check_network() {
-    if ! ip route show default &>/dev/null || [ -z "$(ip route show default)" ]; then
+    local v4 v6
+    v4=$(ip -4 route show default 2>/dev/null)
+    v6=$(ip -6 route show default 2>/dev/null)
+    if [ -z "$v4" ] && [ -z "$v6" ]; then
         die "No default route configured. Set up networking first:
   ip link set <iface> up
-  ip addr add <ip>/<mask> dev <iface>
-  ip route add default via <gateway> dev <iface>"
+  ip addr add <ip>/<mask> dev <iface>           # for IPv4
+  ip route add default via <gateway> dev <iface>
+or rely on IPv6 SLAAC autoconfiguration."
     fi
 }
 
