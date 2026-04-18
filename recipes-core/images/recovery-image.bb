@@ -14,7 +14,10 @@ IMAGE_INSTALL = "busybox base-files resolv-conf-static bash shadow kmod udev \
                 fancontrol sfp-led status-led lp5812-driver \
                 "
 
-# This line ensures no root password is needed for login
+# Empty root password is intentional: recovery is only reachable via
+# `run recovery` from the u-boot console, which itself requires UART
+# (physical) access. A password wouldn't add any security beyond what
+# physical access to the device already implies.
 IMAGE_FEATURES += "empty-root-password"
 
 # Strip locale, saves us ~3MB

@@ -19,9 +19,25 @@ BOOTTYPE ?= "qspi emmc"
 
 # Firmware signing key (ECDSA P-256). Set these to enable image signing.
 # If FIRMWARE_SIGNING_KEY is not set or the file doesn't exist, the build
-# produces unsigned images.
+# produces unsigned images. Set FIRMWARE_SIGNING_REQUIRED = "1" (typically
+# in site.conf) to make the build fail loudly instead of silently producing
+# an unsigned image.
 FIRMWARE_SIGNING_KEY ?= ""
 FIRMWARE_SIGNING_PUBKEY ?= ""
+FIRMWARE_SIGNING_REQUIRED ?= "0"
+
+python __anonymous() {
+    if d.getVar("FIRMWARE_SIGNING_REQUIRED") != "1":
+        return
+    key = d.getVar("FIRMWARE_SIGNING_KEY") or ""
+    pub = d.getVar("FIRMWARE_SIGNING_PUBKEY") or ""
+    if not key or not os.path.isfile(key):
+        bb.fatal("FIRMWARE_SIGNING_REQUIRED=1 but FIRMWARE_SIGNING_KEY is unset "
+                 "or missing (%r). Refusing to build an unsigned firmware image." % key)
+    if not pub or not os.path.isfile(pub):
+        bb.fatal("FIRMWARE_SIGNING_REQUIRED=1 but FIRMWARE_SIGNING_PUBKEY is unset "
+                 "or missing (%r). Devices need the pubkey to verify signatures." % pub)
+}
 
 do_compile() {
     for d in ${BOOTTYPE}; do
