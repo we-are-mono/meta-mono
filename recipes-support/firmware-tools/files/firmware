@@ -81,8 +81,181 @@ cleanup() {
     rm -rf "$DOWNLOAD_DIR"
 }
 
+# Fetch firmware + signature from the network using MAC-as-password basic auth.
+# Writes ${DOWNLOAD_DIR}/${fw_file} and ${DOWNLOAD_DIR}/${sig_file}.
+fetch_via_network() {
+    local fw_file="$1" sig_file="$2"
+
+    check_network
+
+    local mac
+    mac=$(detect_mac)
+    info "Using MAC address: $mac"
+
+    info "Downloading firmware image..."
+    curl -fS -u "mono:${mac}" -o "${DOWNLOAD_DIR}/${fw_file}" "${FIRMWARE_URL}/${fw_file}" || \
+        die "Failed to download firmware image"
+
+    info "Downloading signature..."
+    curl -fS -u "mono:${mac}" -o "${DOWNLOAD_DIR}/${sig_file}" "${FIRMWARE_URL}/${sig_file}" || \
+        die "Failed to download signature"
+}
+
+# Copy firmware + signature from a local directory.
+fetch_via_local() {
+    local src_dir="$1" fw_file="$2" sig_file="$3"
+
+    [ -d "$src_dir" ] || die "Source directory not found: $src_dir"
+    [ -f "${src_dir}/${fw_file}" ] || die "Firmware image not found: ${src_dir}/${fw_file}"
+    [ -f "${src_dir}/${sig_file}" ] || die "Signature not found: ${src_dir}/${sig_file} (must sit next to the .bin)"
+
+    info "Using firmware from: $src_dir"
+    cp "${src_dir}/${fw_file}" "${DOWNLOAD_DIR}/${fw_file}" || die "Failed to copy firmware"
+    cp "${src_dir}/${sig_file}" "${DOWNLOAD_DIR}/${sig_file}" || die "Failed to copy signature"
+}
+
+# Find a USB partition that contains the requested firmware files, mount it
+# read-only, copy the files into ${DOWNLOAD_DIR}, then unmount.
+# Refuses to proceed if the files are found on multiple partitions.
+fetch_via_usb() {
+    local fw_file="$1" sig_file="$2"
+    local mountpoint="/tmp/firmware-update-usb"
+    local matches=""
+    local partial=""   # locations where .bin exists but .sig doesn't (or vice versa)
+    local part fstype rel rels
+
+    info "Scanning USB drives for ${fw_file}..."
+
+    # Get list of USB partitions with a usable filesystem.
+    # lsblk -P gives KEY=VAL pairs; safe to eval-parse without word-splitting issues.
+    local usb_parts
+    usb_parts=$(lsblk -P -o NAME,TYPE,TRAN,FSTYPE 2>/dev/null) || \
+        die "lsblk failed (recovery image may be missing util-linux-lsblk)"
+
+    # Walk the device tree: find disks where TRAN=usb, then list their partitions.
+    local usb_disks
+    usb_disks=$(echo "$usb_parts" | awk -F'"' '/TYPE="disk".*TRAN="usb"/ {for(i=1;i<=NF;i++) if($i ~ /NAME=/) print $(i+1)}')
+    [ -n "$usb_disks" ] || die "No USB drives found. Plug in a USB stick (FAT32, exFAT, or ext4) containing ${fw_file} and ${sig_file}."
+
+    mkdir -p "$mountpoint"
+
+    # Ensure we always unmount on exit, even on failure
+    local _prev_trap
+    _prev_trap=$(trap -p EXIT | sed -e "s/^trap -- '//" -e "s/' EXIT$//")
+    trap "umount '$mountpoint' 2>/dev/null; ${_prev_trap}" EXIT
+
+    for disk in $usb_disks; do
+        # Enumerate partitions of this disk; if no partitions, the whole disk may be a fs.
+        local candidates
+        candidates=$(echo "$usb_parts" | awk -F'"' -v d="$disk" '
+            /TYPE="part"/ {
+                name=""; fstype=""
+                for(i=1;i<=NF;i++) {
+                    if($i ~ /NAME=/) name=$(i+1)
+                    if($i ~ /FSTYPE=/) fstype=$(i+1)
+                }
+                if (index(name, d) == 1 && fstype != "") print name
+            }')
+        # Fall back to whole-disk if no partitions matched
+        if [ -z "$candidates" ]; then
+            local disk_fs
+            disk_fs=$(echo "$usb_parts" | awk -F'"' -v d="$disk" '
+                /TYPE="disk"/ {
+                    name=""; fstype=""
+                    for(i=1;i<=NF;i++) {
+                        if($i ~ /NAME=/) name=$(i+1)
+                        if($i ~ /FSTYPE=/) fstype=$(i+1)
+                    }
+                    if (name == d && fstype != "") print name
+                }')
+            candidates="$disk_fs"
+        fi
+
+        for part in $candidates; do
+            info "Checking /dev/${part}..."
+            if ! mount -o ro "/dev/${part}" "$mountpoint" 2>/dev/null; then
+                info "  could not mount /dev/${part}, skipping"
+                continue
+            fi
+
+            # Look for the file pair in known locations.
+            # Track .bin-only and .sig-only locations separately so we can
+            # give a useful error if the user forgot one of the two files.
+            for rel in "" "firmware/" "Firmware/" "FIRMWARE/"; do
+                local has_bin=0 has_sig=0
+                [ -f "${mountpoint}/${rel}${fw_file}" ] && has_bin=1
+                [ -f "${mountpoint}/${rel}${sig_file}" ] && has_sig=1
+                if [ "$has_bin" = 1 ] && [ "$has_sig" = 1 ]; then
+                    matches="${matches}/dev/${part}:${rel}
+"
+                elif [ "$has_bin" = 1 ]; then
+                    partial="${partial}/dev/${part}:/${rel}${fw_file} (missing ${sig_file})
+"
+                elif [ "$has_sig" = 1 ]; then
+                    partial="${partial}/dev/${part}:/${rel}${sig_file} (missing ${fw_file})
+"
+                fi
+            done
+
+            umount "$mountpoint" 2>/dev/null || true
+        done
+    done
+
+    # Trim trailing newline and count matches
+    matches=$(echo "$matches" | sed '/^$/d')
+    local n_matches
+    n_matches=$(echo "$matches" | grep -c . || true)
+
+    if [ "$n_matches" -eq 0 ]; then
+        partial=$(echo "$partial" | sed '/^$/d')
+        if [ -n "$partial" ]; then
+            echo "ERROR: Found incomplete firmware on USB:" >&2
+            echo "$partial" | sed 's/^/  /' >&2
+            die "Both ${fw_file} and ${sig_file} must be in the same directory."
+        fi
+        die "No matching firmware found on any USB drive. Expected ${fw_file} and ${sig_file} at the root or in a 'firmware/' folder."
+    fi
+    if [ "$n_matches" -gt 1 ]; then
+        echo "ERROR: Multiple matching firmware images found:" >&2
+        echo "$matches" | sed 's/^/  /' >&2
+        die "Refusing to choose. Remove duplicates so exactly one location matches."
+    fi
+
+    # Exactly one match: parse "device:reldir" and copy
+    local match_dev match_rel
+    match_dev=$(echo "$matches" | cut -d: -f1)
+    match_rel=$(echo "$matches" | cut -d: -f2-)
+
+    info "Mounting $match_dev (read-only)..."
+    mount -o ro "$match_dev" "$mountpoint" || die "Failed to mount $match_dev"
+
+    info "Copying firmware from ${match_dev}:/${match_rel}..."
+    cp "${mountpoint}/${match_rel}${fw_file}" "${DOWNLOAD_DIR}/${fw_file}" || die "Failed to copy firmware"
+    cp "${mountpoint}/${match_rel}${sig_file}" "${DOWNLOAD_DIR}/${sig_file}" || die "Failed to copy signature"
+
+    umount "$mountpoint" 2>/dev/null || true
+}
+
 cmd_update() {
-    local boot_medium target
+    local boot_medium target source="net" from_path=""
+
+    # Parse args
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --usb) source="usb"; shift ;;
+            --from) source="local"; from_path="${2:-}"; shift 2 ;;
+            --from=*) source="local"; from_path="${1#--from=}"; shift ;;
+            -h|--help)
+                cmd_help
+                exit 0
+                ;;
+            *) die "Unknown option: $1. Run 'firmware help' for usage." ;;
+        esac
+    done
+
+    if [ "$source" = "local" ] && [ -z "$from_path" ]; then
+        die "--from requires a path (a directory containing the .bin and .sig)"
+    fi
 
     boot_medium=$(detect_boot_medium)
     target=$(target_medium "$boot_medium")
@@ -93,6 +266,7 @@ cmd_update() {
     echo "╠═════════════════════════════════════════════════════════╣"
     echo "║  Booted from: ${boot_medium}                                      ║"
     echo "║  Target:      ${target}                                      ║"
+    echo "║  Source:      ${source}                                       ║"
     echo "║                                                         ║"
     echo "║  DO NOT power off or interrupt the device during the    ║"
     echo "║  update. Doing so may result in an unrecoverable state  ║"
@@ -107,25 +281,17 @@ cmd_update() {
         exit 0
     fi
 
-    check_network
-
-    local mac
-    mac=$(detect_mac)
-    info "Using MAC address: $mac"
-
-    # Download firmware and signature
+    # Stage the firmware bytes via the chosen transport
     trap cleanup EXIT
     mkdir -p "$DOWNLOAD_DIR"
     local fw_file="firmware-${target}-@MACHINE@.bin"
     local sig_file="firmware-${target}-@MACHINE@.bin.sig"
 
-    info "Downloading firmware image..."
-    curl -fS -u "mono:${mac}" -o "${DOWNLOAD_DIR}/${fw_file}" "${FIRMWARE_URL}/${fw_file}" || \
-        die "Failed to download firmware image"
-
-    info "Downloading signature..."
-    curl -fS -u "mono:${mac}" -o "${DOWNLOAD_DIR}/${sig_file}" "${FIRMWARE_URL}/${sig_file}" || \
-        die "Failed to download signature"
+    case "$source" in
+        net)   fetch_via_network "$fw_file" "$sig_file" ;;
+        usb)   fetch_via_usb     "$fw_file" "$sig_file" ;;
+        local) fetch_via_local   "$from_path" "$fw_file" "$sig_file" ;;
+    esac
 
     # Verify signature
     if [ -f "$PUBKEY" ]; then
@@ -218,20 +384,34 @@ cmd_version() {
 }
 
 cmd_help() {
-    echo "Usage: firmware <command>"
+    echo "Usage: firmware <command> [options]"
     echo ""
     echo "Commands:"
-    echo "  update    Download, verify, and flash firmware to the inactive medium"
-    echo "  backup    Back up the inactive medium's firmware to /tmp"
-    echo "  version   Show firmware version"
-    echo "  help      Show this help message"
+    echo "  update [opts]   Verify and flash firmware to the inactive medium"
+    echo "  backup          Back up the inactive medium's firmware to /tmp"
+    echo "  version         Show firmware version"
+    echo "  help            Show this help message"
+    echo ""
+    echo "update options (pick one source):"
+    echo "  (none)          Download from ${FIRMWARE_URL} (requires network)"
+    echo "  --usb           Find firmware on a plugged-in USB drive"
+    echo "  --from PATH     Use a local directory containing the .bin and .sig"
     echo ""
     echo "The tool auto-detects which medium the device booted from and"
     echo "always targets the other one (qspi <-> emmc)."
     echo ""
+    echo "USB drive layout: place the firmware files at the drive root or in a"
+    echo "  'firmware/' folder. Filenames must match exactly:"
+    echo "    firmware-<target>-@MACHINE@.bin"
+    echo "    firmware-<target>-@MACHINE@.bin.sig"
+    echo "  where <target> is the medium being written (the opposite of the"
+    echo "  one you booted from). FAT32, exFAT, and ext4 sticks all work."
+    echo ""
     echo "Examples:"
-    echo "  firmware update     Update the inactive medium"
-    echo "  firmware backup     Back up the inactive medium"
+    echo "  firmware update                        Update over network"
+    echo "  firmware update --usb                  Update from USB drive"
+    echo "  firmware update --from /mnt/usb        Update from a mounted dir"
+    echo "  firmware backup                        Back up the inactive medium"
     echo ""
     echo "Documentation: https://docs.mono.si/"
 }

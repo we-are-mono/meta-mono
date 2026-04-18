@@ -42,7 +42,7 @@ do_compile() {
         esac
 
         make V=1 realclean
-        oe_runmake pbl fip PLAT=${PLATFORM} BOOT_MODE=${d} RCW=${DEPLOY_DIR_IMAGE}/rcw/gateway_dk/${rcwimg} BL33=${DEPLOY_DIR_IMAGE}/${UBOOT_BINARY}
+        oe_runmake pbl fip PLAT=${PLATFORM} BOOT_MODE=${d} DEBUG=0 LOG_LEVEL=20 RCW=${DEPLOY_DIR_IMAGE}/rcw/gateway_dk/${rcwimg} BL33=${DEPLOY_DIR_IMAGE}/${UBOOT_BINARY}
         cp ${S}/build/${PLATFORM}/release/bl2_${d}.pbl .
         cp ${S}/build/${PLATFORM}/release/fip.bin .
     done
