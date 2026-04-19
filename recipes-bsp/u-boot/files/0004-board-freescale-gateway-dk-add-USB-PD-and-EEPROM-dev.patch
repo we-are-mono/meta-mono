@@ -1,0 +1,1107 @@
+From b09f9a30704626f961e4d8bb35ef1085e596c6b2 Mon Sep 17 00:00:00 2001
+From: Tomaz Zaman <tomaz@mono.si>
+Date: Sun, 19 Apr 2026 15:24:27 +0200
+Subject: [PATCH 4/7] board: freescale: gateway-dk: add USB PD and EEPROM
+ device programming
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Adds the two heavier self-tests that not only probe their target but
+also program persistent state when needed:
+
+  - usbpd_controller.c (+ NVM_config_STUSB45.h):
+        STUSB4500 USB PD controller. Reads NVM via the FTP register
+        family (UM2650 §3), compares against the expected PDO
+        configuration, and reprograms if mismatched. The chip is
+        identified up-front via Device_ID register 0x2F.
+
+  - eeprom.c:
+        AT24CS32 board-info EEPROM (32 Kbit / 4 KB). Reads model,
+        serial, and per-port MAC addresses, and exposes them as
+        U-Boot environment variables (model, serial_number,
+        ethaddr..eth4addr). Also provides the 'program_eeprom'
+        u-boot command for factory provisioning.
+
+Both probe through the same setup_i2c_muxed_device() helper as the
+lighter tests in the previous patch, but their bodies are bigger
+because they do real device-programming work.
+
+Upstream-Status: Inappropriate [product-specific]
+
+Signed-off-by: Tomaz Zaman <tomaz@mono.si>
+---
+ .../gateway_dk/setup/NVM_config_STUSB45.h     |  12 +
+ board/freescale/gateway_dk/setup/eeprom.c     | 462 ++++++++++++++
+ .../gateway_dk/setup/usbpd_controller.c       | 568 ++++++++++++++++++
+ 3 files changed, 1042 insertions(+)
+ create mode 100644 board/freescale/gateway_dk/setup/NVM_config_STUSB45.h
+ create mode 100644 board/freescale/gateway_dk/setup/eeprom.c
+ create mode 100644 board/freescale/gateway_dk/setup/usbpd_controller.c
+
+diff --git a/board/freescale/gateway_dk/setup/NVM_config_STUSB45.h b/board/freescale/gateway_dk/setup/NVM_config_STUSB45.h
+new file mode 100644
+index 00000000000..4e0bb8ef961
+--- /dev/null
++++ b/board/freescale/gateway_dk/setup/NVM_config_STUSB45.h
+@@ -0,0 +1,12 @@
++#ifndef NVM_CONFIG_STUSB45_H
++#define NVM_CONFIG_STUSB45_H
++
++#include <stdint.h>
++
++static const uint8_t Sector0[8] = {0x00,0x00,0xB0,0xAB,0x00,0x45,0x00,0x00};
++static const uint8_t Sector1[8] = {0x10,0x40,0x9C,0x1C,0xFF,0x01,0x3C,0xDF};
++static const uint8_t Sector2[8] = {0x02,0x40,0x0F,0x00,0x32,0x00,0xFC,0xF1};
++static const uint8_t Sector3[8] = {0x00,0x19,0x56,0xAF,0xFB,0x75,0x5F,0x00};
++static const uint8_t Sector4[8] = {0x00,0x4B,0x90,0x21,0x43,0x00,0x40,0xFB};
++
++#endif
+\ No newline at end of file
+diff --git a/board/freescale/gateway_dk/setup/eeprom.c b/board/freescale/gateway_dk/setup/eeprom.c
+new file mode 100644
+index 00000000000..deb58f6ce7c
+--- /dev/null
++++ b/board/freescale/gateway_dk/setup/eeprom.c
+@@ -0,0 +1,462 @@
++/*
++ * U-Boot command to program EEPROM with board information
++ * EEPROM: AT24CS32 (32Kbit / 4KB, 32-byte pages)
++ * Usage: program_eeprom <model> <serial> <mac_base>
++ * Example: program_eeprom "Gateway Development Kit" "A2.B002" 02:4D:4F:4E:4F:01
++ */
++
++#include <config.h>
++#include <linux/delay.h>
++#include <stdio.h>
++#include <string.h>
++#include <vsprintf.h>
++#include <env.h>
++#include <dm.h>
++#include <i2c.h>
++#include <i2c_eeprom.h>
++#include <command.h>
++#include <exports.h>
++#include <asm/io.h>
++#include <linux/ctype.h>
++#include "hw_test.h"
++
++#define EEPROM_ADDR 0x50
++#define I2C_BUS 3
++
++#define GPIO3_BASE 0x02320000
++#define GPIO3_GPDIR 0x00
++#define GPIO3_GPDAT 0x08
++
++/* EEPROM Layout Offsets
++ * MAC addresses are stored in physical port order (left to right on board)
++ * Named by their FMAN MAC number for clarity
++ */
++#define OFFSET_MAGIC      0x0000
++#define OFFSET_VERSION    0x0004
++#define OFFSET_CRC        0x0006
++#define OFFSET_MODEL      0x0008
++#define OFFSET_SERIAL     0x0028
++#define OFFSET_MAC5       0x0068  /* fm1-mac5  - Physical port 0 (leftmost)  -> ethaddr  */
++#define OFFSET_MAC6       0x006E  /* fm1-mac6  - Physical port 1             -> eth1addr */
++#define OFFSET_MAC2       0x0074  /* fm1-mac2  - Physical port 2 (middle)    -> eth2addr */
++#define OFFSET_MAC9       0x007A  /* fm1-mac9  - Physical port 3             -> eth3addr */
++#define OFFSET_MAC10      0x0080  /* fm1-mac10 - Physical port 4 (rightmost) -> eth4addr */
++
++#define MODEL_SIZE          32
++#define SERIAL_SIZE         64
++#define MAC_COUNT           5
++
++/* Magic number "MAGC" */
++#define MAGIC_BYTE0         0x4D  // 'M'
++#define MAGIC_BYTE1         0x41  // 'A'
++#define MAGIC_BYTE2         0x47  // 'G'
++#define MAGIC_BYTE3         0x43  // 'C'
++
++/* CRC16-CCITT */
++static uint16_t crc16_ccitt(const uint8_t *data, size_t len)
++{
++	uint16_t crc = 0xFFFF;
++	size_t i, j;
++	
++	for (i = 0; i < len; i++) {
++		crc ^= (uint16_t)data[i] << 8;
++		for (j = 0; j < 8; j++) {
++			if (crc & 0x8000)
++				crc = (crc << 1) ^ 0x1021;
++			else
++				crc = crc << 1;
++		}
++	}
++	
++	return crc;
++}
++
++/* Parse MAC address string "XX:XX:XX:XX:XX:XX" to bytes */
++static int parse_mac(const char *str, uint8_t *mac)
++{
++	int i;
++	
++	for (i = 0; i < 6; i++) {
++		char byte_str[3];
++		byte_str[0] = str[i * 3];
++		byte_str[1] = str[i * 3 + 1];
++		byte_str[2] = '\0';
++		
++		if (!isxdigit(byte_str[0]) || !isxdigit(byte_str[1]))
++			return -1;
++		
++		mac[i] = simple_strtoul(byte_str, NULL, 16);
++		
++		if (i < 5 && str[i * 3 + 2] != ':')
++			return -1;
++	}
++	
++	return 0;
++}
++
++/* Increment MAC address by one */
++static void increment_mac(uint8_t *mac)
++{
++	int i;
++	
++	for (i = 5; i >= 0; i--) {
++		if (++mac[i] != 0)
++			break;
++	}
++}
++
++/* Unlock EEPROM by driving GPIO3_00 low */
++static void unlock_eeprom(void)
++{
++	u32 gpio_dir, gpio_dat;
++	
++	/* Read current values */
++	gpio_dir = in_be32((void *)(GPIO3_BASE + GPIO3_GPDIR));
++	gpio_dat = in_be32((void *)(GPIO3_BASE + GPIO3_GPDAT));
++	
++	/* Set GPIO3_00 as output (set bit 31) */
++	gpio_dir |= 0x80000000;
++	out_be32((void *)(GPIO3_BASE + GPIO3_GPDIR), gpio_dir);
++	
++	/* Drive GPIO3_00 low (clear bit 31) to unlock EEPROM */
++	gpio_dat &= ~0x80000000;
++	out_be32((void *)(GPIO3_BASE + GPIO3_GPDAT), gpio_dat);
++	
++	/* Read back to ensure write completed */
++	(void)in_be32((void *)(GPIO3_BASE + GPIO3_GPDAT));
++	
++	udelay(10000);
++}
++
++/* Lock EEPROM by driving GPIO3_00 high */
++static void lock_eeprom(void)
++{
++	u32 gpio_dat;
++	
++	/* Read current value */
++	gpio_dat = in_be32((void *)(GPIO3_BASE + GPIO3_GPDAT));
++	
++	/* Drive GPIO3_00 high (set bit 31) to lock EEPROM */
++	gpio_dat |= 0x80000000;
++	out_be32((void *)(GPIO3_BASE + GPIO3_GPDAT), gpio_dat);
++}
++
++/* Get EEPROM device */
++static int get_eeprom_device(struct udevice **devp)
++{
++	int ret;
++	
++	/* Try to get by device tree name first */
++	ret = uclass_get_device_by_name(UCLASS_I2C_EEPROM, "eeprom@50", devp);
++	if (ret == 0)
++		return 0;
++	
++	/* Fallback: get by bus and address */
++	ret = i2c_get_chip_for_busnum(I2C_BUS, EEPROM_ADDR, 2, devp);
++	return ret;
++}
++
++/* Test if EEPROM is programmed by checking magic number and load to environment */
++int test_eeprom(struct hw_test_ctx *ctx)
++{
++	struct udevice *eeprom_dev;
++	uint8_t magic_read[4];
++	uint8_t model_read[MODEL_SIZE];
++	uint8_t serial_read[SERIAL_SIZE];
++	uint8_t mac_read[6];
++	char mac_str[18];
++	int ret, i;
++	
++	/* Map EEPROM MAC offsets to U-Boot environment variables in physical port order
++	 * Physical layout (left to right on board):
++	 *   Port 0: fm1-mac5  -> ethaddr  (EEPROM OFFSET_MAC5)
++	 *   Port 1: fm1-mac6  -> eth1addr (EEPROM OFFSET_MAC6)
++	 *   Port 2: fm1-mac2  -> eth2addr (EEPROM OFFSET_MAC2)
++	 *   Port 3: fm1-mac9  -> eth3addr (EEPROM OFFSET_MAC9)
++	 *   Port 4: fm1-mac10 -> eth4addr (EEPROM OFFSET_MAC10)
++	 */
++	const char *mac_env_names[] = {
++		"ethaddr",   /* Physical port 0 (leftmost)  - fm1-mac5  */
++		"eth1addr",  /* Physical port 1             - fm1-mac6  */
++		"eth2addr",  /* Physical port 2 (middle)    - fm1-mac2  */
++		"eth3addr",  /* Physical port 3             - fm1-mac9  */
++		"eth4addr"   /* Physical port 4 (rightmost) - fm1-mac10 */
++	};
++	
++	uint16_t mac_offsets[] = {
++		OFFSET_MAC5,   /* For fm1-mac5  (physical port 0, leftmost)  */
++		OFFSET_MAC6,   /* For fm1-mac6  (physical port 1) */
++		OFFSET_MAC2,   /* For fm1-mac2  (physical port 2, middle) */
++		OFFSET_MAC9,   /* For fm1-mac9  (physical port 3) */
++		OFFSET_MAC10   /* For fm1-mac10 (physical port 4, rightmost) */
++	};
++	
++	/* Get EEPROM device */
++	if (get_eeprom_device(&eeprom_dev))
++		return hw_test_fail(ctx, "Device not found at 0x%02x", EEPROM_ADDR);
++
++	/* Read magic number */
++	if (i2c_eeprom_read(eeprom_dev, OFFSET_MAGIC, magic_read, 4))
++		return hw_test_fail(ctx, "Failed to read");
++
++	/* Check if magic number is valid */
++	if (magic_read[0] != MAGIC_BYTE0 ||
++	    magic_read[1] != MAGIC_BYTE1 ||
++	    magic_read[2] != MAGIC_BYTE2 ||
++	    magic_read[3] != MAGIC_BYTE3)
++		return hw_test_fail(ctx, "Magic number not found");
++
++	/* Read model */
++	if (i2c_eeprom_read(eeprom_dev, OFFSET_MODEL, model_read, MODEL_SIZE))
++		return hw_test_fail(ctx, "Failed to read model");
++	model_read[MODEL_SIZE - 1] = '\0';
++
++	/* Read serial number */
++	if (i2c_eeprom_read(eeprom_dev, OFFSET_SERIAL, serial_read, SERIAL_SIZE))
++		return hw_test_fail(ctx, "Failed to read serial");
++	serial_read[SERIAL_SIZE - 1] = '\0';
++
++	/* Load model and serial into environment */
++	env_set("model", (char *)model_read);
++	env_set("serial_number", (char *)serial_read);
++	
++	/* Read and set MAC addresses in physical port order (left to right) */
++	for (i = 0; i < MAC_COUNT; i++) {
++		ret = i2c_eeprom_read(eeprom_dev, mac_offsets[i], mac_read, 6);
++		if (ret) {
++			printf("Warning: Failed to read MAC address for physical port %d\n", i);
++			continue;
++		}
++		
++		/* Format MAC address as string */
++		sprintf(mac_str, "%02X:%02X:%02X:%02X:%02X:%02X",
++		        mac_read[0], mac_read[1], mac_read[2],
++		        mac_read[3], mac_read[4], mac_read[5]);
++		
++		/* Set environment variable - matches physical left-to-right order */
++		env_set(mac_env_names[i], mac_str);
++	}
++
++	return hw_test_pass(ctx, "%s", serial_read);
++}
++
++static int do_program_eeprom(struct cmd_tbl *cmdtp, int flag, int argc, char *const argv[])
++{
++	struct udevice *eeprom_dev;
++	uint8_t data_buffer[256];
++	uint8_t mac_base[6], mac_current[6];
++	uint8_t write_buffer[SERIAL_SIZE];
++	uint16_t crc;
++	int ret, i;
++	
++	if (argc != 4) {
++		printf("Usage: program_eeprom <model> <serial> <mac_base>\n");
++		printf("Example: program_eeprom \"Gateway Development Kit\" \"A2.B002\" 02:4D:4F:4E:4F:01\n");
++		printf("Note: MAC addresses will be automatically generated from mac_base to mac_base+4\n");
++		printf("      in physical port order (left to right)\n");
++		return CMD_RET_USAGE;
++	}
++	
++	const char *model = argv[1];
++	const char *serial = argv[2];
++	const char *mac_base_str = argv[3];
++	
++	/* First, check if EEPROM is already programmed. We pass NULL because
++	 * we are using test_eeprom() as a probe here, not as a harness entry,
++	 * so its PASS/FAIL details are not needed. */
++	printf("Checking if EEPROM is already programmed...\n");
++	ret = test_eeprom(NULL);
++	if (ret == 0) {
++		printf("\nERROR: EEPROM is already programmed!\n");
++		printf("Magic number detected. To reprogram, you must manually erase the EEPROM first.\n");
++		return CMD_RET_FAILURE;
++	}
++	printf("EEPROM is blank, proceeding with programming...\n\n");
++	
++	/* Validate inputs */
++	if (strlen(model) >= MODEL_SIZE) {
++		printf("Error: Model name too long (max %d characters)\n", MODEL_SIZE - 1);
++		return CMD_RET_FAILURE;
++	}
++	
++	if (strlen(serial) >= SERIAL_SIZE) {
++		printf("Error: Serial number too long (max %d characters)\n", SERIAL_SIZE - 1);
++		return CMD_RET_FAILURE;
++	}
++	
++	/* Parse base MAC address */
++	if (parse_mac(mac_base_str, mac_base) < 0) {
++		printf("Error: Invalid MAC address format\n");
++		return CMD_RET_FAILURE;
++	}
++	
++	/* Calculate the last MAC address for display */
++	memcpy(mac_current, mac_base, 6);
++	for (i = 0; i < MAC_COUNT - 1; i++) {
++		increment_mac(mac_current);
++	}
++	
++	printf("Programming EEPROM with:\n");
++	printf("  Model:  %s\n", model);
++	printf("  Serial: %s\n", serial);
++	printf("  MAC:    %s to %02X:%02X:%02X:%02X:%02X:%02X (5 addresses, physical order)\n",
++	       mac_base_str,
++	       mac_current[0], mac_current[1], mac_current[2],
++	       mac_current[3], mac_current[4], mac_current[5]);
++	
++	/* Unlock EEPROM */
++	unlock_eeprom();
++	
++	/* Get EEPROM device */
++	ret = get_eeprom_device(&eeprom_dev);
++	if (ret) {
++		printf("Error: Failed to get EEPROM device at bus %d, address 0x%02x\n", 
++		       I2C_BUS, EEPROM_ADDR);
++		lock_eeprom();
++		return CMD_RET_FAILURE;
++	}
++	
++	/* Write Magic Number */
++	printf("Writing magic number...\n");
++	data_buffer[0] = MAGIC_BYTE0;
++	data_buffer[1] = MAGIC_BYTE1;
++	data_buffer[2] = MAGIC_BYTE2;
++	data_buffer[3] = MAGIC_BYTE3;
++	ret = i2c_eeprom_write(eeprom_dev, OFFSET_MAGIC, data_buffer, 4);
++	if (ret) goto write_error;
++	
++	/* Write Format Version */
++	printf("Writing format version...\n");
++	data_buffer[0] = 0x00;
++	data_buffer[1] = 0x01;
++	ret = i2c_eeprom_write(eeprom_dev, OFFSET_VERSION, data_buffer, 2);
++	if (ret) goto write_error;
++	
++	/* Write Model - prepare zero-padded buffer */
++	printf("Writing model name...\n");
++	memset(write_buffer, 0, MODEL_SIZE);
++	memcpy(write_buffer, model, strlen(model));
++	ret = i2c_eeprom_write(eeprom_dev, OFFSET_MODEL, write_buffer, MODEL_SIZE);
++	if (ret) goto write_error;
++	
++	/* Write Serial - prepare zero-padded buffer */
++	printf("Writing serial number...\n");
++	memset(write_buffer, 0, SERIAL_SIZE);
++	memcpy(write_buffer, serial, strlen(serial));
++	ret = i2c_eeprom_write(eeprom_dev, OFFSET_SERIAL, write_buffer, SERIAL_SIZE);
++	if (ret) goto write_error;
++	
++	/* Write MAC addresses in physical port order */
++	printf("Writing MAC addresses in physical port order...\n");
++	memcpy(mac_current, mac_base, 6);
++	
++	ret = i2c_eeprom_write(eeprom_dev, OFFSET_MAC5, mac_current, 6);
++	if (ret) goto write_error;
++	
++	increment_mac(mac_current);
++	ret = i2c_eeprom_write(eeprom_dev, OFFSET_MAC6, mac_current, 6);
++	if (ret) goto write_error;
++	
++	increment_mac(mac_current);
++	ret = i2c_eeprom_write(eeprom_dev, OFFSET_MAC2, mac_current, 6);
++	if (ret) goto write_error;
++	
++	increment_mac(mac_current);
++	ret = i2c_eeprom_write(eeprom_dev, OFFSET_MAC9, mac_current, 6);
++	if (ret) goto write_error;
++	
++	increment_mac(mac_current);
++	ret = i2c_eeprom_write(eeprom_dev, OFFSET_MAC10, mac_current, 6);
++	if (ret) goto write_error;
++	
++	/* Read back data section for CRC calculation */
++	printf("Calculating CRC...\n");
++	ret = i2c_eeprom_read(eeprom_dev, OFFSET_MODEL, data_buffer, 
++	                      OFFSET_MAC10 + 6 - OFFSET_MODEL);
++	if (ret) {
++		printf("Error: Failed to read back data for CRC\n");
++		lock_eeprom();
++		return CMD_RET_FAILURE;
++	}
++	
++	/* Calculate and write CRC */
++	crc = crc16_ccitt(data_buffer, OFFSET_MAC10 + 6 - OFFSET_MODEL);
++	data_buffer[0] = (crc >> 8) & 0xFF;
++	data_buffer[1] = crc & 0xFF;
++	ret = i2c_eeprom_write(eeprom_dev, OFFSET_CRC, data_buffer, 2);
++	if (ret) goto write_error;
++	
++	printf("CRC16: 0x%04X\n", crc);
++	
++	/* Wait for EEPROM writes to complete */
++	printf("Waiting for EEPROM write cycles to complete...\n");
++	udelay(50000);  // 50ms delay
++	
++	/* Verify by reading back */
++	printf("\nVerifying EEPROM contents:\n");
++	ret = i2c_eeprom_read(eeprom_dev, 0, data_buffer, 160);
++	if (ret) {
++		printf("Error: Failed to read back for verification\n");
++		lock_eeprom();
++		return CMD_RET_FAILURE;
++	}
++	
++	printf("Magic:   %02X %02X %02X %02X\n", 
++	       data_buffer[0], data_buffer[1], data_buffer[2], data_buffer[3]);
++	printf("Version: %02X %02X\n", data_buffer[4], data_buffer[5]);
++	printf("CRC:     %02X %02X\n", data_buffer[6], data_buffer[7]);
++	printf("Model:   %s\n", (char *)&data_buffer[OFFSET_MODEL]);
++	printf("Serial:  %s\n", (char *)&data_buffer[OFFSET_SERIAL]);
++	
++	/* Display MACs in physical order */
++	uint8_t *mac;
++	mac = &data_buffer[OFFSET_MAC5];
++	printf("MAC (fm1-mac5):  %02X:%02X:%02X:%02X:%02X:%02X [Physical port 0, leftmost]\n",
++	       mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
++	
++	mac = &data_buffer[OFFSET_MAC6];
++	printf("MAC (fm1-mac6):  %02X:%02X:%02X:%02X:%02X:%02X [Physical port 1]\n",
++	       mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
++	
++	mac = &data_buffer[OFFSET_MAC2];
++	printf("MAC (fm1-mac2):  %02X:%02X:%02X:%02X:%02X:%02X [Physical port 2, middle]\n",
++	       mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
++	
++	mac = &data_buffer[OFFSET_MAC9];
++	printf("MAC (fm1-mac9):  %02X:%02X:%02X:%02X:%02X:%02X [Physical port 3]\n",
++	       mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
++	
++	mac = &data_buffer[OFFSET_MAC10];
++	printf("MAC (fm1-mac10): %02X:%02X:%02X:%02X:%02X:%02X [Physical port 4, rightmost]\n",
++	       mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
++	
++	/* Lock EEPROM */
++	lock_eeprom();
++	
++	printf("\nEEPROM programming successful!\n");
++	return CMD_RET_SUCCESS;
++	
++write_error:
++	printf("Error: Failed to write to EEPROM\n");
++	lock_eeprom();
++	return CMD_RET_FAILURE;
++}
++
++U_BOOT_CMD(
++	program_eeprom, 4, 0, do_program_eeprom,
++	"Program EEPROM with board information",
++	"<model> <serial> <mac_base>\n"
++	"    model    - Board model name (max 31 chars)\n"
++	"    serial   - Board serial number (max 63 chars)\n"
++	"    mac_base - Base MAC address (format: XX:XX:XX:XX:XX:XX)\n"
++	"               The next 4 addresses will be automatically calculated\n"
++	"               and stored in physical port order (left to right)\n"
++	"Example:\n"
++	"    program_eeprom \"Gateway Development Kit\" \"A2.B002\" 02:4D:4F:4E:4F:01\n"
++	"    Physical port layout (left to right):\n"
++	"      Port 0 (fm1-mac5):  02:4D:4F:4E:4F:01\n"
++	"      Port 1 (fm1-mac6):  02:4D:4F:4E:4F:02\n"
++	"      Port 2 (fm1-mac2):  02:4D:4F:4E:4F:03\n"
++	"      Port 3 (fm1-mac9):  02:4D:4F:4E:4F:04\n"
++	"      Port 4 (fm1-mac10): 02:4D:4F:4E:4F:05"
++);
+\ No newline at end of file
+diff --git a/board/freescale/gateway_dk/setup/usbpd_controller.c b/board/freescale/gateway_dk/setup/usbpd_controller.c
+new file mode 100644
+index 00000000000..caa06ac5a81
+--- /dev/null
++++ b/board/freescale/gateway_dk/setup/usbpd_controller.c
+@@ -0,0 +1,568 @@
++/*
++ * STUSB4500 USB PD Controller NVM Programming
++ *
++ * Improved implementation with:
++ * - Status register polling instead of fixed delays
++ * - Read-back verification after programming
++ * - Bulk I2C writes for sector data
++ * - Skip programming if NVM already matches expected values
++ *
++ * Based on original U-Boot implementation, improved with techniques from
++ * Jeff Longo's stusb4500 library.
++ */
++
++#include <linux/types.h>
++#include <linux/delay.h>
++#include <stdio.h>
++#include <string.h>
++#include <dm.h>
++#include <i2c.h>
++#include <command.h>
++#include <exports.h>
++#include "i2c_helpers.h"
++#include "hw_test.h"
++#include "NVM_config_STUSB45.h"
++
++#define STUSB4500_ADDR    0x28
++#define I2C_BUS           2
++#define I2C_MUX_CHANNEL   0x04
++
++/* Static device-identification register (UM2650 §3.27) */
++#define DEVICE_ID_REG     0x2F
++#define DEVICE_ID_VAL     0x25
++
++/* Register addresses */
++#define FTP_CUST_PASSWORD_REG  0x95
++#define FTP_CTRL_0_REG         0x96
++#define FTP_CTRL_1_REG         0x97
++#define RW_BUFFER              0x53
++#define RESET_CTRL_REG         0x23
++
++/* FTP_CTRL_0 bit definitions */
++#define FTP_CUST_PWR      0x80  /* Power */
++#define FTP_CUST_RST_N    0x40  /* Reset (active low) */
++#define FTP_CUST_REQ      0x10  /* Request operation */
++#define FTP_CUST_SECT     0x07  /* Sector selection mask */
++
++/* FTP_CTRL_1 bit definitions */
++#define FTP_CUST_SER      0xF8  /* Sectors to erase mask */
++#define FTP_CUST_OPCODE   0x07  /* Opcode mask */
++
++/* Opcodes */
++#define OP_READ           0x00  /* Read sector */
++#define OP_WRITE_PL       0x01  /* Write to Program Load register */
++#define OP_WRITE_SER      0x02  /* Write to Sector Erase register */
++#define OP_READ_PL        0x03  /* Read Program Load register */
++#define OP_READ_SER       0x04  /* Read Sector Erase register */
++#define OP_ERASE_SECTOR   0x05  /* Erase sectors masked by SER */
++#define OP_PROG_SECTOR    0x06  /* Program sector */
++#define OP_SOFT_PROG      0x07  /* Soft program sectors masked by SER */
++
++/* Sector masks for SER register */
++#define SECTOR0           0x01
++#define SECTOR1           0x02
++#define SECTOR2           0x04
++#define SECTOR3           0x08
++#define SECTOR4           0x10
++#define ALL_SECTORS       (SECTOR0 | SECTOR1 | SECTOR2 | SECTOR3 | SECTOR4)
++
++/* Constants */
++#define FTP_CUST_PASSWORD 0x47
++#define NUM_SECTORS       5
++#define SECTOR_SIZE       8
++#define NVM_SIZE          (NUM_SECTORS * SECTOR_SIZE)
++#define POLL_TIMEOUT_US   50000  /* 50ms timeout for operations */
++#define POLL_INTERVAL_US  100
++
++/**
++ * wait_for_completion - Poll FTP_CTRL_0 until REQ bit clears
++ * @dev: I2C device
++ *
++ * Returns 0 on success, negative error code on failure or timeout
++ */
++static int wait_for_completion(struct udevice *dev)
++{
++	uint8_t status;
++	int timeout = POLL_TIMEOUT_US;
++	int ret;
++
++	do {
++		ret = dm_i2c_read(dev, FTP_CTRL_0_REG, &status, 1);
++		if (ret)
++			return ret;
++
++		if (!(status & FTP_CUST_REQ))
++			return 0;
++
++		udelay(POLL_INTERVAL_US);
++		timeout -= POLL_INTERVAL_US;
++	} while (timeout > 0);
++
++	printf("ERROR: NVM operation timed out\n");
++	return -ETIMEDOUT;
++}
++
++/**
++ * get_sector_data - Get pointer to expected sector data from header
++ * @sector: Sector number (0-4)
++ *
++ * Returns pointer to sector data array, or NULL if invalid sector
++ */
++static const uint8_t *get_sector_data(int sector)
++{
++	switch (sector) {
++	case 0: return Sector0;
++	case 1: return Sector1;
++	case 2: return Sector2;
++	case 3: return Sector3;
++	case 4: return Sector4;
++	default: return NULL;
++	}
++}
++
++/**
++ * read_nvm_sector - Read a single sector from NVM
++ * @dev: I2C device
++ * @sector: Sector number (0-4)
++ * @data: Buffer to store 8 bytes of sector data
++ *
++ * Returns 0 on success, negative error code on failure
++ */
++static int read_nvm_sector(struct udevice *dev, uint8_t sector, uint8_t *data)
++{
++	uint8_t buffer;
++	int ret;
++
++	/* Set PWR and RST_N bits */
++	buffer = FTP_CUST_PWR | FTP_CUST_RST_N;
++	ret = dm_i2c_reg_write(dev, FTP_CTRL_0_REG, buffer);
++	if (ret)
++		return ret;
++
++	/* Write read opcode */
++	buffer = OP_READ & FTP_CUST_OPCODE;
++	ret = dm_i2c_reg_write(dev, FTP_CTRL_1_REG, buffer);
++	if (ret)
++		return ret;
++
++	/* Select sector and issue read command */
++	buffer = (sector & FTP_CUST_SECT) | FTP_CUST_PWR | FTP_CUST_RST_N | FTP_CUST_REQ;
++	ret = dm_i2c_reg_write(dev, FTP_CTRL_0_REG, buffer);
++	if (ret)
++		return ret;
++
++	/* Wait for read to complete */
++	ret = wait_for_completion(dev);
++	if (ret)
++		return ret;
++
++	/* Read sector data from buffer */
++	ret = dm_i2c_read(dev, RW_BUFFER, data, SECTOR_SIZE);
++	if (ret)
++		return ret;
++
++	/* Reset controller state */
++	ret = dm_i2c_reg_write(dev, FTP_CTRL_0_REG, 0x00);
++
++	return ret;
++}
++
++/**
++ * write_nvm_sector - Write a single sector to NVM
++ * @dev: I2C device
++ * @sector: Sector number (0-4)
++ * @data: 8 bytes of data to write
++ *
++ * Returns 0 on success, negative error code on failure
++ */
++static int write_nvm_sector(struct udevice *dev, uint8_t sector, const uint8_t *data)
++{
++	uint8_t buffer;
++	int ret;
++
++	/* Write 8 bytes to RW_BUFFER in a single transaction */
++	ret = dm_i2c_write(dev, RW_BUFFER, data, SECTOR_SIZE);
++	if (ret)
++		return ret;
++
++	/* Set PWR and RST_N bits */
++	buffer = FTP_CUST_PWR | FTP_CUST_RST_N;
++	ret = dm_i2c_reg_write(dev, FTP_CTRL_0_REG, buffer);
++	if (ret)
++		return ret;
++
++	/* Write PL (Program Load) opcode */
++	buffer = OP_WRITE_PL & FTP_CUST_OPCODE;
++	ret = dm_i2c_reg_write(dev, FTP_CTRL_1_REG, buffer);
++	if (ret)
++		return ret;
++
++	/* Issue PL write command */
++	buffer = FTP_CUST_PWR | FTP_CUST_RST_N | FTP_CUST_REQ;
++	ret = dm_i2c_reg_write(dev, FTP_CTRL_0_REG, buffer);
++	if (ret)
++		return ret;
++
++	/* Wait for PL write to complete */
++	ret = wait_for_completion(dev);
++	if (ret)
++		return ret;
++
++	/* Write program sector opcode */
++	buffer = OP_PROG_SECTOR & FTP_CUST_OPCODE;
++	ret = dm_i2c_reg_write(dev, FTP_CTRL_1_REG, buffer);
++	if (ret)
++		return ret;
++
++	/* Issue program command with sector selection */
++	buffer = (sector & FTP_CUST_SECT) | FTP_CUST_PWR | FTP_CUST_RST_N | FTP_CUST_REQ;
++	ret = dm_i2c_reg_write(dev, FTP_CTRL_0_REG, buffer);
++	if (ret)
++		return ret;
++
++	/* Wait for programming to complete */
++	ret = wait_for_completion(dev);
++
++	return ret;
++}
++
++/**
++ * erase_nvm - Erase all NVM sectors
++ * @dev: I2C device
++ *
++ * Returns 0 on success, negative error code on failure
++ */
++static int erase_nvm(struct udevice *dev)
++{
++	uint8_t buffer;
++	int ret;
++
++	printf("Erasing NVM...\n");
++
++	/* Write sectors to erase (all) and SER write opcode */
++	buffer = ((ALL_SECTORS << 3) & FTP_CUST_SER) | (OP_WRITE_SER & FTP_CUST_OPCODE);
++	ret = dm_i2c_reg_write(dev, FTP_CTRL_1_REG, buffer);
++	if (ret)
++		return ret;
++
++	/* Issue SER write command */
++	buffer = FTP_CUST_PWR | FTP_CUST_RST_N | FTP_CUST_REQ;
++	ret = dm_i2c_reg_write(dev, FTP_CTRL_0_REG, buffer);
++	if (ret)
++		return ret;
++
++	ret = wait_for_completion(dev);
++	if (ret)
++		return ret;
++
++	/* Write soft program opcode */
++	buffer = OP_SOFT_PROG & FTP_CUST_OPCODE;
++	ret = dm_i2c_reg_write(dev, FTP_CTRL_1_REG, buffer);
++	if (ret)
++		return ret;
++
++	/* Issue soft program command */
++	buffer = FTP_CUST_PWR | FTP_CUST_RST_N | FTP_CUST_REQ;
++	ret = dm_i2c_reg_write(dev, FTP_CTRL_0_REG, buffer);
++	if (ret)
++		return ret;
++
++	ret = wait_for_completion(dev);
++	if (ret)
++		return ret;
++
++	/* Write erase opcode */
++	buffer = OP_ERASE_SECTOR & FTP_CUST_OPCODE;
++	ret = dm_i2c_reg_write(dev, FTP_CTRL_1_REG, buffer);
++	if (ret)
++		return ret;
++
++	/* Issue erase command */
++	buffer = FTP_CUST_PWR | FTP_CUST_RST_N | FTP_CUST_REQ;
++	ret = dm_i2c_reg_write(dev, FTP_CTRL_0_REG, buffer);
++	if (ret)
++		return ret;
++
++	ret = wait_for_completion(dev);
++
++	return ret;
++}
++
++/**
++ * enter_read_mode - Unlock NVM and power up for reading
++ * @dev: I2C device
++ *
++ * Returns 0 on success, negative error code on failure
++ */
++static int enter_read_mode(struct udevice *dev)
++{
++	uint8_t buffer;
++	int ret;
++
++	/* Unlock NVM with password */
++	ret = dm_i2c_reg_write(dev, FTP_CUST_PASSWORD_REG, FTP_CUST_PASSWORD);
++	if (ret)
++		return ret;
++
++	/* Reset internal controller */
++	ret = dm_i2c_reg_write(dev, FTP_CTRL_0_REG, 0x00);
++	if (ret)
++		return ret;
++
++	/* Power up NVM controller */
++	buffer = FTP_CUST_PWR | FTP_CUST_RST_N;
++	ret = dm_i2c_reg_write(dev, FTP_CTRL_0_REG, buffer);
++
++	return ret;
++}
++
++/**
++ * enter_write_mode - Unlock NVM, power up, and erase for writing
++ * @dev: I2C device
++ *
++ * Returns 0 on success, negative error code on failure
++ */
++static int enter_write_mode(struct udevice *dev)
++{
++	uint8_t buffer;
++	int ret;
++
++	/* Unlock NVM with password */
++	ret = dm_i2c_reg_write(dev, FTP_CUST_PASSWORD_REG, FTP_CUST_PASSWORD);
++	if (ret)
++		return ret;
++
++	/* RW_BUFFER must be 0 for partial erase feature */
++	ret = dm_i2c_reg_write(dev, RW_BUFFER, 0x00);
++	if (ret)
++		return ret;
++
++	/* Reset internal controller */
++	ret = dm_i2c_reg_write(dev, FTP_CTRL_0_REG, 0x00);
++	if (ret)
++		return ret;
++
++	/* Power up NVM controller */
++	buffer = FTP_CUST_PWR | FTP_CUST_RST_N;
++	ret = dm_i2c_reg_write(dev, FTP_CTRL_0_REG, buffer);
++	if (ret)
++		return ret;
++
++	/* Erase all sectors */
++	ret = erase_nvm(dev);
++
++	return ret;
++}
++
++/**
++ * exit_rw_mode - Power down NVM and lock with password clear
++ * @dev: I2C device
++ *
++ * Returns 0 on success, negative error code on failure
++ */
++static int exit_rw_mode(struct udevice *dev)
++{
++	int ret;
++
++	/* Clear FTP_CTRL_0, keep RST_N set */
++	ret = dm_i2c_reg_write(dev, FTP_CTRL_0_REG, FTP_CUST_RST_N);
++	if (ret)
++		return ret;
++
++	/* Clear FTP_CTRL_1 */
++	ret = dm_i2c_reg_write(dev, FTP_CTRL_1_REG, 0x00);
++	if (ret)
++		return ret;
++
++	/* Lock NVM by clearing password */
++	ret = dm_i2c_reg_write(dev, FTP_CUST_PASSWORD_REG, 0x00);
++
++	return ret;
++}
++
++/**
++ * read_all_sectors - Read entire NVM contents
++ * @dev: I2C device
++ * @nvm: Buffer to store all sector data [NUM_SECTORS][SECTOR_SIZE]
++ *
++ * Returns 0 on success, negative error code on failure
++ */
++static int read_all_sectors(struct udevice *dev, uint8_t nvm[NUM_SECTORS][SECTOR_SIZE])
++{
++	int ret;
++	int sector;
++
++	for (sector = 0; sector < NUM_SECTORS; sector++) {
++		ret = read_nvm_sector(dev, sector, nvm[sector]);
++		if (ret) {
++			printf("ERROR: Failed to read sector %d: %d\n", sector, ret);
++			return ret;
++		}
++	}
++
++	return 0;
++}
++
++/**
++ * verify_nvm_contents - Compare NVM contents against expected values
++ * @nvm: NVM data to verify [NUM_SECTORS][SECTOR_SIZE]
++ *
++ * Returns 0 if match, 1 if mismatch, negative on error
++ */
++static int verify_nvm_contents(uint8_t nvm[NUM_SECTORS][SECTOR_SIZE])
++{
++	const uint8_t *expected;
++	int sector;
++
++	for (sector = 0; sector < NUM_SECTORS; sector++) {
++		expected = get_sector_data(sector);
++		if (!expected)
++			return -EINVAL;
++
++		if (memcmp(nvm[sector], expected, SECTOR_SIZE) != 0)
++			return 1;  /* Mismatch */
++	}
++
++	return 0;  /* Match */
++}
++
++/**
++ * program_all_sectors - Write all sectors to NVM
++ * @dev: I2C device
++ *
++ * Returns 0 on success, negative error code on failure
++ */
++static int program_all_sectors(struct udevice *dev)
++{
++	const uint8_t *sector_data;
++	int ret;
++	int sector;
++
++	for (sector = 0; sector < NUM_SECTORS; sector++) {
++		sector_data = get_sector_data(sector);
++		if (!sector_data)
++			return -EINVAL;
++
++		printf("Writing sector %d...\n", sector);
++		ret = write_nvm_sector(dev, sector, sector_data);
++		if (ret) {
++			printf("ERROR: Failed to write sector %d: %d\n", sector, ret);
++			return ret;
++		}
++	}
++
++	return 0;
++}
++
++/**
++ * test_stusb4500_nvm - Main entry point for NVM test/programming
++ *
++ * Reads NVM, compares against expected values, reprograms if needed,
++ * and verifies the result.
++ *
++ * Returns 0 on success, negative error code on failure
++ */
++int test_stusb4500_nvm(struct hw_test_ctx *ctx)
++{
++	struct udevice *stusb_dev;
++	uint8_t nvm[NUM_SECTORS][SECTOR_SIZE];
++	int ret;
++	int verify_result;
++
++	/* Set up I2C access through mux */
++	ret = setup_i2c_muxed_device(I2C_BUS, GATEWAY_DK_I2C_MUX_ADDR,
++				     I2C_MUX_CHANNEL, STUSB4500_ADDR, &stusb_dev);
++	if (ret)
++		return hw_test_fail(ctx, "I2C setup failed");
++
++	/* Verify the chip identifies itself before touching NVM. */
++	ret = dm_i2c_reg_read(stusb_dev, DEVICE_ID_REG);
++	if (ret < 0)
++		return hw_test_fail(ctx, "Device ID read failed");
++	if (ret != DEVICE_ID_VAL)
++		return hw_test_fail(ctx, "Device ID 0x%02x != 0x%02x",
++				    ret, DEVICE_ID_VAL);
++
++	/* Enter read mode and read current NVM contents */
++	ret = enter_read_mode(stusb_dev);
++	if (ret) {
++		printf("ERROR: Failed to enter read mode: %d\n", ret);
++		exit_rw_mode(stusb_dev);
++		return hw_test_fail(ctx, "enter read mode failed (%d)", ret);
++	}
++
++	ret = read_all_sectors(stusb_dev, nvm);
++	if (ret) {
++		exit_rw_mode(stusb_dev);
++		return hw_test_fail(ctx, "sector read failed (%d)", ret);
++	}
++
++	/* Check if NVM already matches expected values */
++	verify_result = verify_nvm_contents(nvm);
++	if (verify_result == 0) {
++		/* NVM already correct - no programming needed */
++		exit_rw_mode(stusb_dev);
++		return hw_test_pass(ctx, "ID 0x%02x", DEVICE_ID_VAL);
++	}
++
++	/* Mismatch detected - need to reprogram */
++	printf("\nUSB PD configuration mismatch detected - reprogramming NVM...\n\n");
++
++	/* Exit read mode before entering write mode */
++	ret = exit_rw_mode(stusb_dev);
++	if (ret) {
++		printf("ERROR: Failed to exit read mode: %d\n", ret);
++		return hw_test_fail(ctx, "exit read mode failed (%d)", ret);
++	}
++
++	/* Enter write mode (unlocks, powers up, and erases) */
++	ret = enter_write_mode(stusb_dev);
++	if (ret) {
++		printf("ERROR: Failed to enter write mode: %d\n", ret);
++		exit_rw_mode(stusb_dev);
++		return hw_test_fail(ctx, "enter write mode failed (%d)", ret);
++	}
++
++	/* Program all sectors */
++	ret = program_all_sectors(stusb_dev);
++	if (ret) {
++		printf("ERROR: NVM programming failed: %d\n", ret);
++		exit_rw_mode(stusb_dev);
++		return hw_test_fail(ctx, "programming failed (%d)", ret);
++	}
++
++	/* Exit write mode */
++	ret = exit_rw_mode(stusb_dev);
++	if (ret) {
++		printf("ERROR: Failed to exit write mode: %d\n", ret);
++		return hw_test_fail(ctx, "exit write mode failed (%d)", ret);
++	}
++
++	/* Verify by reading back */
++	printf("Verifying NVM contents...\n");
++
++	ret = enter_read_mode(stusb_dev);
++	if (ret) {
++		printf("ERROR: Failed to re-enter read mode for verification: %d\n", ret);
++		exit_rw_mode(stusb_dev);
++		return hw_test_fail(ctx, "verify re-enter failed (%d)", ret);
++	}
++
++	ret = read_all_sectors(stusb_dev, nvm);
++	if (ret) {
++		exit_rw_mode(stusb_dev);
++		return hw_test_fail(ctx, "verify sector read failed (%d)", ret);
++	}
++
++	exit_rw_mode(stusb_dev);
++
++	/* Final verification */
++	verify_result = verify_nvm_contents(nvm);
++	if (verify_result != 0)
++		return hw_test_fail(ctx, "verification failed after programming");
++
++	printf("\n*** NVM reprogrammed and verified successfully! ***\n");
++	printf("*** Reset the device for updated settings to take effect. ***\n\n");
++
++	return hw_test_pass(ctx, "ID 0x%02x, reprogrammed", DEVICE_ID_VAL);
++}
+\ No newline at end of file
+-- 
+2.47.3
+

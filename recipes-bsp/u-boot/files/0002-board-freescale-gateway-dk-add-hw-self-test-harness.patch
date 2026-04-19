@@ -1,0 +1,314 @@
+From 818536bfc6072f4f63cb3d6fcc9dfe4f65640046 Mon Sep 17 00:00:00 2001
+From: Tomaz Zaman <tomaz@mono.si>
+Date: Sun, 19 Apr 2026 15:23:57 +0200
+Subject: [PATCH 2/7] board: freescale: gateway-dk: add hw self-test harness
+
+Adds the small infrastructure that the per-chip self-tests in the
+follow-up patch depend on:
+
+  - hw_test.{h,c}: a test runner that prints aligned bracket-prefixed
+    PASS/FAIL lines, a banner, and a final summary. Tests fill in a
+    context struct and return an int; the harness owns the styling
+    and the aggregate counting.
+  - i2c_helpers.{h,c}: setup_i2c_muxed_device() wraps the
+    'select PCA9545 channel, then get the device behind the mux'
+    pattern that every per-component test reuses.
+  - setup/Makefile: builds these two units; per-chip files are added
+    in the next patch.
+
+Upstream-Status: Inappropriate [product-specific]
+
+Signed-off-by: Tomaz Zaman <tomaz@mono.si>
+---
+ board/freescale/gateway_dk/setup/Makefile     | 18 ++++
+ board/freescale/gateway_dk/setup/hw_test.c    | 95 +++++++++++++++++++
+ board/freescale/gateway_dk/setup/hw_test.h    | 93 ++++++++++++++++++
+ .../freescale/gateway_dk/setup/i2c_helpers.c  | 21 ++++
+ .../freescale/gateway_dk/setup/i2c_helpers.h  | 17 ++++
+ 5 files changed, 244 insertions(+)
+ create mode 100644 board/freescale/gateway_dk/setup/Makefile
+ create mode 100644 board/freescale/gateway_dk/setup/hw_test.c
+ create mode 100644 board/freescale/gateway_dk/setup/hw_test.h
+ create mode 100644 board/freescale/gateway_dk/setup/i2c_helpers.c
+ create mode 100644 board/freescale/gateway_dk/setup/i2c_helpers.h
+
+diff --git a/board/freescale/gateway_dk/setup/Makefile b/board/freescale/gateway_dk/setup/Makefile
+new file mode 100644
+index 00000000000..71dde20b63c
+--- /dev/null
++++ b/board/freescale/gateway_dk/setup/Makefile
+@@ -0,0 +1,18 @@
++# SPDX-License-Identifier: GPL-2.0+
++#
++# Copyright 2025 Mono Technologies Inc.
++
++obj-y += i2c_helpers.o
++obj-y += hw_test.o
++obj-y += ddr_sanity.o
++obj-y += voltage_sensors.o
++obj-y += usbpd_controller.o
++obj-y += typec_controller.o
++obj-y += rtc.o
++obj-y += led_controller.o
++obj-y += eeprom.o
++obj-y += retimer.o
++obj-y += clock_gen.o
++obj-y += fan_controller.o
++obj-y += temp_sensors.o
++obj-y += sfp_i2c_mux.o
+\ No newline at end of file
+diff --git a/board/freescale/gateway_dk/setup/hw_test.c b/board/freescale/gateway_dk/setup/hw_test.c
+new file mode 100644
+index 00000000000..aa935db5439
+--- /dev/null
++++ b/board/freescale/gateway_dk/setup/hw_test.c
+@@ -0,0 +1,95 @@
++// SPDX-License-Identifier: GPL-2.0+
++/*
++ * Copyright 2025 Mono Technologies Inc.
++ */
++
++#include <config.h>
++#include <stdio.h>
++#include <stdarg.h>
++#include <vsprintf.h>
++#include "hw_test.h"
++
++int hw_test_fail(struct hw_test_ctx *ctx, const char *fmt, ...)
++{
++	va_list ap;
++
++	if (ctx) {
++		va_start(ap, fmt);
++		vsnprintf(ctx->details, sizeof(ctx->details), fmt, ap);
++		va_end(ap);
++	}
++	return -1;
++}
++
++int hw_test_pass(struct hw_test_ctx *ctx, const char *fmt, ...)
++{
++	va_list ap;
++
++	if (ctx) {
++		va_start(ap, fmt);
++		vsnprintf(ctx->details, sizeof(ctx->details), fmt, ap);
++		va_end(ap);
++	}
++	return 0;
++}
++
++void hw_test_print_pass(const char *name, const char *details)
++{
++	if (details && details[0])
++		printf(HW_TEST_TAG_PASS " %-*s %s\n",
++		       HW_TEST_LABEL_WIDTH, name, details);
++	else
++		printf(HW_TEST_TAG_PASS " %-*s\n",
++		       HW_TEST_LABEL_WIDTH, name);
++}
++
++void hw_test_print_fail(const char *name, const char *details)
++{
++	if (details && details[0])
++		printf(HW_TEST_TAG_FAIL " %-*s %s\n",
++		       HW_TEST_LABEL_WIDTH, name, details);
++	else
++		printf(HW_TEST_TAG_FAIL " %-*s\n",
++		       HW_TEST_LABEL_WIDTH, name);
++}
++
++void hw_tests_print_banner(const char *title)
++{
++	printf("\n" HW_TEST_C_BOLD "%s:" HW_TEST_C_RESET "\n", title);
++}
++
++void hw_tests_print_summary(struct hw_test_result r)
++{
++	const char *tag = r.failed ? HW_TEST_TAG_SUMMARY_FAIL
++				   : HW_TEST_TAG_SUMMARY_PASS;
++
++	printf("%s %-*s %u passed, %u failed\n\n",
++	       tag, HW_TEST_LABEL_WIDTH, "Self-test",
++	       r.passed, r.failed);
++}
++
++struct hw_test_result hw_tests_run(const struct hw_test *tests, size_t count)
++{
++	struct hw_test_result r = { 0, 0 };
++	size_t i;
++
++	for (i = 0; i < count; i++) {
++		struct hw_test_ctx ctx = { .details = { 0 }, .printed = 0 };
++		int ret = tests[i].run(&ctx);
++
++		if (ret == 0)
++			r.passed++;
++		else
++			r.failed++;
++
++		if (ctx.printed)
++			continue;
++
++		if (ret == 0)
++			hw_test_print_pass(tests[i].name, ctx.details);
++		else
++			hw_test_print_fail(tests[i].name, ctx.details);
++	}
++
++	return r;
++}
+diff --git a/board/freescale/gateway_dk/setup/hw_test.h b/board/freescale/gateway_dk/setup/hw_test.h
+new file mode 100644
+index 00000000000..63804f642af
+--- /dev/null
++++ b/board/freescale/gateway_dk/setup/hw_test.h
+@@ -0,0 +1,93 @@
++/* SPDX-License-Identifier: GPL-2.0+ */
++/*
++ * Copyright 2025 Mono Technologies Inc.
++ *
++ * Tiny harness for the on-board hardware self-tests run from
++ * misc_init_r(). Each test fills in ctx->details and returns 0 on
++ * pass, non-zero on fail; the harness prints one bracket-prefixed
++ * "[ OK ] / [FAIL]" line per test. Tests that need richer per-item
++ * output (e.g. per-rail voltage readouts) call the print helpers
++ * below directly and set ctx->printed so the harness suppresses its
++ * own summary line.
++ */
++
++#ifndef HW_TEST_H
++#define HW_TEST_H
++
++#include <linux/types.h>
++#include <linux/stddef.h>
++
++/*
++ * Display constants, kept here so styling tweaks are one-stop. The PASS
++ * and FAIL tags are six visible columns wide regardless of the embedded
++ * ANSI escape sequences; mind that when changing them.
++ */
++#define HW_TEST_C_GREEN		"\033[32m"
++#define HW_TEST_C_RED		"\033[31m"
++#define HW_TEST_C_BOLD		"\033[1m"
++#define HW_TEST_C_DIM		"\033[2m"
++#define HW_TEST_C_RESET		"\033[0m"
++
++#define HW_TEST_TAG_PASS	"[ " HW_TEST_C_GREEN "OK" HW_TEST_C_RESET " ]"
++#define HW_TEST_TAG_FAIL	"[" HW_TEST_C_RED "FAIL" HW_TEST_C_RESET "]"
++
++/*
++ * Distinct tags for the aggregate summary line so it visually carries
++ * a verdict ("did the whole thing pass?") rather than looking like
++ * just another test entry. Same six visible columns as the per-test
++ * tags above, so alignment is preserved.
++ */
++#define HW_TEST_TAG_SUMMARY_PASS	"[" HW_TEST_C_GREEN "PASS" HW_TEST_C_RESET "]"
++#define HW_TEST_TAG_SUMMARY_FAIL	"[" HW_TEST_C_RED "FAIL" HW_TEST_C_RESET "]"
++
++#define HW_TEST_LABEL_WIDTH	20	/* visible chars; controls alignment */
++
++#define HW_TEST_DETAILS_MAX	80
++
++struct hw_test_ctx {
++	char details[HW_TEST_DETAILS_MAX];
++	int printed;	/* set by tests that emit their own per-item lines */
++};
++
++typedef int (*hw_test_fn)(struct hw_test_ctx *ctx);
++
++struct hw_test {
++	const char *name;
++	hw_test_fn run;
++};
++
++/* Aggregate counts returned by hw_tests_run() */
++struct hw_test_result {
++	unsigned int passed;
++	unsigned int failed;
++};
++
++/*
++ * Run every test in the table. The harness prints one bracket-prefixed
++ * line per test unless the test set ctx->printed (in which case it has
++ * already emitted whatever output it wants).
++ */
++struct hw_test_result hw_tests_run(const struct hw_test *tests, size_t count);
++
++/* Banner / footer printers used to bracket the self-test phase. */
++void hw_tests_print_banner(const char *title);
++void hw_tests_print_summary(struct hw_test_result r);
++
++/*
++ * Print a bracket-prefixed line directly. Used by tests that emit
++ * per-item output (voltage rails). When a test calls these it MUST
++ * also set ctx->printed = 1 so the harness skips its own summary line.
++ */
++void hw_test_print_pass(const char *name, const char *details);
++void hw_test_print_fail(const char *name, const char *details);
++
++/*
++ * Helpers for tests to populate ctx->details. Both return -1 / 0
++ * respectively so the test body can write `return hw_test_fail(ctx, ...);`.
++ */
++int hw_test_fail(struct hw_test_ctx *ctx, const char *fmt, ...)
++	__attribute__((format(printf, 2, 3)));
++int hw_test_pass(struct hw_test_ctx *ctx, const char *fmt, ...)
++	__attribute__((format(printf, 2, 3)));
++
++#endif /* HW_TEST_H */
+diff --git a/board/freescale/gateway_dk/setup/i2c_helpers.c b/board/freescale/gateway_dk/setup/i2c_helpers.c
+new file mode 100644
+index 00000000000..f6a09d69214
+--- /dev/null
++++ b/board/freescale/gateway_dk/setup/i2c_helpers.c
+@@ -0,0 +1,21 @@
++#include <config.h>
++#include <dm.h>
++#include <i2c.h>
++#include "i2c_helpers.h"
++
++int setup_i2c_muxed_device(int bus, uint8_t mux_addr, uint8_t channel, 
++						   uint8_t dev_addr, struct udevice **dev)
++{
++	struct udevice *mux_dev;
++	int ret;
++	
++	ret = i2c_get_chip_for_busnum(bus, mux_addr, 1, &mux_dev);
++	if (ret)
++		return ret;
++	
++	ret = dm_i2c_write(mux_dev, 0x00, &channel, 1);
++	if (ret)
++		return ret;
++	
++	return i2c_get_chip_for_busnum(bus, dev_addr, 1, dev);
++}
+\ No newline at end of file
+diff --git a/board/freescale/gateway_dk/setup/i2c_helpers.h b/board/freescale/gateway_dk/setup/i2c_helpers.h
+new file mode 100644
+index 00000000000..2fa88505524
+--- /dev/null
++++ b/board/freescale/gateway_dk/setup/i2c_helpers.h
+@@ -0,0 +1,17 @@
++#ifndef I2C_HELPERS_H
++#define I2C_HELPERS_H
++
++#include <linux/types.h>
++
++struct udevice;
++
++/*
++ * Every PCA9545 mux on the Gateway-DK lives at the same I2C address;
++ * only the bus number and channel mask differ between callers.
++ */
++#define GATEWAY_DK_I2C_MUX_ADDR		0x70
++
++int setup_i2c_muxed_device(int bus, uint8_t mux_addr, uint8_t mux_channel,
++						   uint8_t dev_addr, struct udevice **devp);
++
++#endif
+\ No newline at end of file
+-- 
+2.47.3
+

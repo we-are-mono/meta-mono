@@ -1,0 +1,229 @@
+From 1d89bfb57d9d32a974aeedc19c0d9853b74f90a1 Mon Sep 17 00:00:00 2001
+From: Tomaz Zaman <tomaz@mono.si>
+Date: Sun, 19 Apr 2026 15:24:44 +0200
+Subject: [PATCH 5/7] configs: add Gateway-DK defconfig and board header
+
+Adds the build-time configuration for the Gateway-DK target:
+
+  configs/mono_gateway_dk_defconfig
+        The Kconfig-driven configuration: enables CONFIG_TARGET_GATEWAY_DK,
+        the LS1046A SoC, the boot mode, console, drivers, and the misc-init
+        hook the self-test runs from.
+
+  include/configs/gateway_dk.h
+        Compile-time defaults for the board: memory map, environment
+        variable layout, default boot script, and the rest of the board's
+        non-Kconfig parameters.
+
+Upstream-Status: Inappropriate [product-specific]
+
+Signed-off-by: Tomaz Zaman <tomaz@mono.si>
+---
+ configs/mono_gateway_dk_defconfig | 111 ++++++++++++++++++++++++++++++
+ include/configs/gateway_dk.h      |  76 ++++++++++++++++++++
+ 2 files changed, 187 insertions(+)
+ create mode 100644 configs/mono_gateway_dk_defconfig
+ create mode 100644 include/configs/gateway_dk.h
+
+diff --git a/configs/mono_gateway_dk_defconfig b/configs/mono_gateway_dk_defconfig
+new file mode 100644
+index 00000000000..77db8326ade
+--- /dev/null
++++ b/configs/mono_gateway_dk_defconfig
+@@ -0,0 +1,111 @@
++CONFIG_ARM=y
++CONFIG_COUNTER_FREQUENCY=25000000
++CONFIG_TARGET_GATEWAY_DK=y
++CONFIG_TFABOOT=y
++CONFIG_TEXT_BASE=0x82000000
++CONFIG_SYS_MALLOC_LEN=0x102000
++CONFIG_NR_DRAM_BANKS=2
++CONFIG_ENV_SIZE=0x2000
++CONFIG_ENV_OFFSET=0x300000
++CONFIG_ENV_SECT_SIZE=0x10000
++CONFIG_DM_GPIO=y
++CONFIG_DEFAULT_DEVICE_TREE="mono-gateway-dk"
++CONFIG_QSPI_AHB_INIT=y
++CONFIG_WATCHDOG_TIMEOUT_MSECS=15000
++CONFIG_ARMV8_SEC_FIRMWARE_SUPPORT=y
++CONFIG_SEC_FIRMWARE_ARMV8_PSCI=y
++CONFIG_PCI=y
++CONFIG_LAYERSCAPE_NS_ACCESS=y
++CONFIG_PCIE1=y
++CONFIG_PCIE2=y
++CONFIG_PCIE3=y
++CONFIG_CC_OPTIMIZE_FOR_SPEED=y
++CONFIG_REMAKE_ELF=y
++CONFIG_MP=y
++# CONFIG_TIMESTAMP is not set
++CONFIG_FIT_VERBOSE=y
++CONFIG_DISTRO_DEFAULTS=y
++CONFIG_BOOTDELAY=10
++CONFIG_OF_BOARD_SETUP=y
++CONFIG_OF_SYSTEM_SETUP=y
++CONFIG_USE_BOOTARGS=y
++CONFIG_BOOTARGS="console=ttyS0,115200 root=/dev/ram0 earlycon=uart8250,mmio,0x21c0500 mtdparts=1550000.spi:1m(rcw),15m(u-boot),48m(kernel.itb);7e800000.flash:16m(nand_uboot),48m(nand_kernel),448m(nand_free)"
++CONFIG_SYS_PBSIZE=532
++CONFIG_CYCLIC=y
++CONFIG_ARCH_MISC_INIT=y
++CONFIG_MISC_INIT_R=y
++# CONFIG_ID_EEPROM is not set
++CONFIG_CMD_EEPROM=y
++CONFIG_SYS_I2C_EEPROM_BUS=3
++CONFIG_SYS_EEPROM_SIZE=32768
++CONFIG_SYS_EEPROM_PAGE_WRITE_DELAY_MS=5
++CONFIG_CMD_MEMINFO=y
++CONFIG_CMD_MEMTEST=y
++# CONFIG_CMD_BIND is not set
++CONFIG_CMD_DM=y
++CONFIG_CMD_GPIO=y
++CONFIG_CMD_GPT=y
++CONFIG_CMD_I2C=y
++CONFIG_CMD_LSBLK=y
++CONFIG_CMD_MMC=y
++CONFIG_CMD_PCI=y
++CONFIG_CMD_USB=y
++CONFIG_CMD_USB_MASS_STORAGE=y
++CONFIG_CMD_CACHE=y
++CONFIG_CMD_RTC=y
++CONFIG_MTDPARTS_DEFAULT="mtdparts="
++CONFIG_OF_CONTROL=y
++CONFIG_ENV_OVERWRITE=y
++CONFIG_ENV_IS_IN_MMC=y
++CONFIG_ENV_IS_IN_SPI_FLASH=y
++CONFIG_SYS_RELOC_GD_ENV_ADDR=y
++CONFIG_USE_ETHPRIME=y
++CONFIG_ETHPRIME="fm1-mac5"
++# CONFIG_SCSI_AHCI is not set
++CONFIG_FSL_CAAM=y
++# CONFIG_DDR_SPD is not set
++CONFIG_CHIP_SELECTS_PER_CTRL=1
++CONFIG_DDR_ECC=y
++CONFIG_ECC_INIT_VIA_DDRCONTROLLER=y
++CONFIG_DM_I2C=y
++CONFIG_I2C_SET_DEFAULT_BUS_NUM=y
++CONFIG_I2C_MUX=y
++CONFIG_I2C_MUX_PCA954x=y
++CONFIG_I2C_EEPROM=y
++CONFIG_SYS_I2C_EEPROM_ADDR=0x50
++CONFIG_SUPPORT_EMMC_BOOT=y
++CONFIG_FSL_ESDHC=y
++CONFIG_MTD=y
++# CONFIG_SPI_FLASH_BAR is not set
++CONFIG_SPI_FLASH_STMICRO=y
++# CONFIG_SPI_FLASH_USE_4K_SECTORS is not set
++CONFIG_PHYLIB=y
++CONFIG_PHYLIB_10G=y
++CONFIG_PHY_FIXED=y
++CONFIG_DM_MDIO=y
++CONFIG_DM_ETH_PHY=y
++CONFIG_FMAN_ENET=y
++CONFIG_SYS_FMAN_FW_ADDR=0x400000
++CONFIG_MII=y
++CONFIG_FSL_LS_MDIO=y
++CONFIG_NVME_PCI=y
++CONFIG_DM_PCI_COMPAT=y
++CONFIG_PCIE_LAYERSCAPE_RC=y
++CONFIG_PCIE_LAYERSCAPE_EP=y
++CONFIG_PHY=y
++CONFIG_DM_RNG=y
++CONFIG_DM_RTC=y
++CONFIG_RTC_PCF2131=y
++CONFIG_SPECIFY_CONSOLE_INDEX=y
++CONFIG_DM_SERIAL=y
++CONFIG_SYS_NS16550=y
++CONFIG_SPI=y
++CONFIG_DM_SPI=y
++CONFIG_FSL_QSPI=y
++CONFIG_USB=y
++CONFIG_USB_XHCI_HCD=y
++CONFIG_USB_XHCI_DWC3=y
++# CONFIG_USB_XHCI_FSL is not set
++CONFIG_USB_DWC3=y
++CONFIG_USB_DWC3_LAYERSCAPE=y
++CONFIG_USB_STORAGE=y
+diff --git a/include/configs/gateway_dk.h b/include/configs/gateway_dk.h
+new file mode 100644
+index 00000000000..ce1ef94c78f
+--- /dev/null
++++ b/include/configs/gateway_dk.h
+@@ -0,0 +1,76 @@
++/* SPDX-License-Identifier: GPL-2.0+ */
++/*
++ * Copyright 2025 Mono Technologies Inc.
++ */
++
++#ifndef __GATEWAY_DK_H__
++#define __GATEWAY_DK_H__
++
++#include <asm/arch/config.h>
++#include <asm/arch/stream_id_lsch2.h>
++
++#define CFG_SYS_DDR_SDRAM_BASE		0x80000000
++#define CFG_SYS_FSL_DDR_SDRAM_BASE_PHY	0
++#define CFG_SYS_SDRAM_BASE			CFG_SYS_DDR_SDRAM_BASE
++#define CFG_SYS_DDR_BLOCK2_BASE		0x880000000ULL
++#define CPU_RELEASE_ADDR			secondary_boot_addr
++#define CFG_SYS_UBOOT_BASE			0x40100000
++
++#define I2C0_BUS_ADDR				0x0
++#define I2C_MUX_ADDR				0x70
++
++/* Serial Port */
++#define CFG_SYS_NS16550_CLK			(get_serial_clock())
++
++/* I2C bus multiplexer */
++#define I2C_MUX_PCA_ADDR_PRI		0x70 /* Primary Mux*/
++#define I2C_MUX_CH_DEFAULT			0x1 /* Channel 0*/
++#define I2C_MUX_CH_RTC				0x1 /* Channel 0*/
++
++/* I2C RGB controller */
++#define I2C_RGB_MUX_CHAN			0x08
++#define I2C_RGB_LED_ADDR 			0x6c
++#define I2C_RGB_LED_CURR			0xff
++
++/* I2C fan controller */
++#define I2C_FAN_ADDR				0x2e
++
++/* RTC */
++#define CFG_SYS_I2C_RTC_ADDR		0x51  /* Channel 0 I2C bus 0*/
++#define CFG_SYS_RTC_BUS_NUM			0
++
++/* FMan ucode */
++#ifndef SPL_NO_FMAN
++#ifdef CONFIG_SYS_DPAA_FMAN
++#define CFG_SYS_FM_MURAM_SIZE		0x60000
++#endif
++#endif
++
++/* Misc */
++#define HWCONFIG_BUFFER_SIZE		128
++
++/*
++ * Environment
++ */
++#define CFG_SYS_FSL_QSPI_BASE		0x40000000
++
++#undef BOOT_TARGET_DEVICES
++#define BOOT_TARGET_DEVICES(func) \
++	func(MMC, mmc, 0) \
++	func(USB, usb, 0) \
++	func(DHCP, dhcp, na)
++
++#include <config_distro_bootcmd.h>
++
++/* FMan */
++#ifdef CONFIG_SYS_DPAA_FMAN
++#define SGMII_PHY1_ADDR				0x0
++#define SGMII_PHY2_ADDR				0x1
++#define SGMII_PHY3_ADDR				0x2
++#define FDT_SEQ_MACADDR_FROM_ENV
++#endif
++
++#include <asm/fsl_secure_boot.h>
++#include <asm/arch/soc.h>
++
++#endif /* __GATEWAY_DK_H__ */
+-- 
+2.47.3
+

@@ -1,0 +1,776 @@
+From 85dd8b59a363574e90022cd601ac5708e6f4e282 Mon Sep 17 00:00:00 2001
+From: Tomaz Zaman <tomaz@mono.si>
+Date: Sun, 19 Apr 2026 15:24:13 +0200
+Subject: [PATCH 3/7] board: freescale: gateway-dk: add per-component
+ self-tests
+
+Adds the ten per-chip self-test modules invoked from misc_init_r() via
+the harness in the previous patch. Each one probes its target through
+the I2C mux and reports PASS/FAIL with a small detail string:
+
+  - clock_gen.c        - 6V49205B clock generator (Sys_CCB output)
+  - ddr_sanity.c       - bit-pattern probe of DDR4 banks 0 and 1
+  - fan_controller.c   - EMC2302 fan controller, tach + RPM
+  - led_controller.c   - LP5810A status LED (also surfaces the
+                         aggregate self-test verdict on the front
+                         panel via lp5810a_set_status())
+  - retimer.c          - DS100DF410 SerDes retimer device ID
+  - rtc.c              - PCF2131 real-time clock
+  - sfp_i2c_mux.c      - resets the SFP-side PCA9545 mux into a
+                         known-good state
+  - temp_sensors.c     - TMP431 CPU and board temperature
+  - typec_controller.c - HD3SS3220/TUSB322 USB Type-C controller
+  - voltage_sensors.c  - eight INA234 rails behind a PCA9545
+
+Upstream-Status: Inappropriate [product-specific]
+
+Signed-off-by: Tomaz Zaman <tomaz@mono.si>
+---
+ board/freescale/gateway_dk/setup/clock_gen.c  |  67 +++++++++++
+ board/freescale/gateway_dk/setup/ddr_sanity.c |  57 +++++++++
+ .../gateway_dk/setup/fan_controller.c         |  89 +++++++++++++++
+ .../gateway_dk/setup/led_controller.c         | 108 ++++++++++++++++++
+ board/freescale/gateway_dk/setup/retimer.c    |  36 ++++++
+ board/freescale/gateway_dk/setup/rtc.c        |  55 +++++++++
+ .../freescale/gateway_dk/setup/sfp_i2c_mux.c  |  47 ++++++++
+ .../freescale/gateway_dk/setup/temp_sensors.c |  58 ++++++++++
+ .../gateway_dk/setup/typec_controller.c       |  49 ++++++++
+ .../gateway_dk/setup/voltage_sensors.c        |  97 ++++++++++++++++
+ 10 files changed, 663 insertions(+)
+ create mode 100644 board/freescale/gateway_dk/setup/clock_gen.c
+ create mode 100644 board/freescale/gateway_dk/setup/ddr_sanity.c
+ create mode 100644 board/freescale/gateway_dk/setup/fan_controller.c
+ create mode 100644 board/freescale/gateway_dk/setup/led_controller.c
+ create mode 100644 board/freescale/gateway_dk/setup/retimer.c
+ create mode 100644 board/freescale/gateway_dk/setup/rtc.c
+ create mode 100644 board/freescale/gateway_dk/setup/sfp_i2c_mux.c
+ create mode 100644 board/freescale/gateway_dk/setup/temp_sensors.c
+ create mode 100644 board/freescale/gateway_dk/setup/typec_controller.c
+ create mode 100644 board/freescale/gateway_dk/setup/voltage_sensors.c
+
+diff --git a/board/freescale/gateway_dk/setup/clock_gen.c b/board/freescale/gateway_dk/setup/clock_gen.c
+new file mode 100644
+index 00000000000..836930d1dc1
+--- /dev/null
++++ b/board/freescale/gateway_dk/setup/clock_gen.c
+@@ -0,0 +1,67 @@
++// SPDX-License-Identifier: GPL-2.0+
++/*
++ * Copyright 2025 Mono Technologies Inc.
++ */
++
++#include <config.h>
++#include <dm.h>
++#include <i2c.h>
++#include "i2c_helpers.h"
++#include "hw_test.h"
++
++#define CLOCKGEN_ADDR		0x69
++#define I2C_BUS			0
++#define I2C_MUX_CHANNEL		0x01
++
++/* Register offsets */
++#define REG_SLEW_RATE2		0x04
++#define REG_REV_VENDOR_ID	0x07
++
++/* Expected values */
++#define EXPECTED_DEVICE_ID	0x11	/* Rev 0x1, Vendor 0x1 */
++
++/* Sys_CCB frequency values (bits 3:2 of register 0x04) */
++#define CCB_FREQ_66_66		0
++#define CCB_FREQ_100		1
++#define CCB_FREQ_80		2
++#define CCB_FREQ_83_33		3
++
++static const char *get_ccb_freq_string(uint8_t fs_bits)
++{
++	switch (fs_bits) {
++	case CCB_FREQ_66_66:	return "66.66 MHz";
++	case CCB_FREQ_100:	return "100 MHz";
++	case CCB_FREQ_80:	return "80 MHz";
++	case CCB_FREQ_83_33:	return "83.33 MHz";
++	default:		return "Unknown";
++	}
++}
++
++int test_6v49205b_clkgen(struct hw_test_ctx *ctx)
++{
++	struct udevice *clkgen_dev;
++	uint8_t buf[16];
++	uint8_t device_id;
++	uint8_t ccb_freq_bits;
++
++	if (setup_i2c_muxed_device(I2C_BUS, GATEWAY_DK_I2C_MUX_ADDR,
++				   I2C_MUX_CHANNEL, CLOCKGEN_ADDR, &clkgen_dev))
++		return hw_test_fail(ctx, "Setup failed");
++
++	if (dm_i2c_read(clkgen_dev, 0x00, buf, sizeof(buf)))
++		return hw_test_fail(ctx, "Failed to read registers");
++
++	/* SMBus returns byte count as first byte, so actual data starts at buf[1] */
++	device_id = buf[REG_REV_VENDOR_ID + 1];
++	if (device_id != EXPECTED_DEVICE_ID)
++		return hw_test_fail(ctx, "Device ID 0x%02X, expected 0x%02X",
++				    device_id, EXPECTED_DEVICE_ID);
++
++	/* Extract FS1:FS0 bits (bits 3:2) from REG_SLEW_RATE2 */
++	ccb_freq_bits = (buf[REG_SLEW_RATE2 + 1] >> 2) & 0x03;
++	if (ccb_freq_bits != CCB_FREQ_100)
++		return hw_test_fail(ctx, "output %s, expected 100 MHz",
++				    get_ccb_freq_string(ccb_freq_bits));
++
++	return hw_test_pass(ctx, "100 MHz output");
++}
+diff --git a/board/freescale/gateway_dk/setup/ddr_sanity.c b/board/freescale/gateway_dk/setup/ddr_sanity.c
+new file mode 100644
+index 00000000000..bb4fda089d3
+--- /dev/null
++++ b/board/freescale/gateway_dk/setup/ddr_sanity.c
+@@ -0,0 +1,57 @@
++// SPDX-License-Identifier: GPL-2.0+
++/*
++ * Quick verification of DDR banks.
++ *
++ * Copyright 2025 Mono Technologies Inc.
++ */
++
++#include <config.h>
++#include <linux/kernel.h>
++#include <asm/global_data.h>
++#include "hw_test.h"
++
++DECLARE_GLOBAL_DATA_PTR;
++
++/* Probe locations chosen to be safe from u-boot's own RAM usage */
++static const u64 bank0_locations[] = {
++	0x80000000ULL,	/* Start */
++	0xB0000000ULL,	/* Middle (~768MB in) */
++	0xF0000000ULL,	/* Near end */
++};
++
++static const u64 bank1_locations[] = {
++	0x880000000ULL,	/* Start */
++	0x900000000ULL,	/* Middle (~3GB in) */
++	0x9FFFF0000ULL,	/* Near end */
++};
++
++static int probe_bank(const u64 *locations, size_t n, uint32_t pattern)
++{
++	int errors = 0;
++	size_t i;
++
++	for (i = 0; i < n; i++) {
++		volatile uint32_t *addr = (volatile uint32_t *)locations[i];
++		uint32_t test_val = pattern ^ (i << 16);
++		*addr = test_val;
++		if (*addr != test_val)
++			errors++;
++	}
++
++	return errors;
++}
++
++int test_ddr_sanity(struct hw_test_ctx *ctx)
++{
++	int errors = 0;
++
++	errors += probe_bank(bank0_locations, ARRAY_SIZE(bank0_locations), 0xDEADBEEF);
++	errors += probe_bank(bank1_locations, ARRAY_SIZE(bank1_locations), 0xCAFEBABE);
++
++	if (errors)
++		return hw_test_fail(ctx, "%d errors", errors);
++
++	return hw_test_pass(ctx, "Bank0: %llu MB, Bank1: %llu MB",
++			    gd->bd->bi_dram[0].size / (1024 * 1024),
++			    gd->bd->bi_dram[1].size / (1024 * 1024));
++}
+diff --git a/board/freescale/gateway_dk/setup/fan_controller.c b/board/freescale/gateway_dk/setup/fan_controller.c
+new file mode 100644
+index 00000000000..72e83a6e507
+--- /dev/null
++++ b/board/freescale/gateway_dk/setup/fan_controller.c
+@@ -0,0 +1,89 @@
++// SPDX-License-Identifier: GPL-2.0+
++/*
++ * Copyright 2025 Mono Technologies Inc.
++ */
++
++#include <config.h>
++#include <linux/delay.h>
++#include <dm.h>
++#include <i2c.h>
++#include "i2c_helpers.h"
++#include "hw_test.h"
++
++#define EMC2302_ADDR		0x2E
++#define I2C_BUS			0
++#define I2C_MUX_CHANNEL		0x08
++#define TACH_HIGH_REG		0x3E
++#define TACH_LOW_REG		0x3F
++
++/* Valid tachometer range. EMC230X_RPM_FACTOR comes from the datasheet
++ * with EMC2305_TACH_CNT_MULTIPLIER = 2.
++ */
++#define EMC230X_RPM_FACTOR	3932160U
++#define TACH_MULTIPLIER		2U
++#define MIN_RPM			1000
++
++static int fan_controller_init(struct udevice *fan_dev)
++{
++	uint8_t reg;
++	int ret;
++
++	/* Invert polarity and set output type to push-pull */
++	reg = 0xff;
++	ret = dm_i2c_write(fan_dev, 0x2a, &reg, 1);
++	if (ret)
++		return ret;
++	ret = dm_i2c_write(fan_dev, 0x2b, &reg, 1);
++	if (ret)
++		return ret;
++
++	/* Set fans to fixed 50% speed; Linux takes over later */
++	reg = 0x80;
++	ret = dm_i2c_write(fan_dev, 0x30, &reg, 1);
++	if (ret)
++		return ret;
++	return dm_i2c_write(fan_dev, 0x40, &reg, 1);
++}
++
++int test_emc2302_fan(struct hw_test_ctx *ctx)
++{
++	struct udevice *fan_dev;
++	uint32_t tach_raw, tach_shifted, base, rpm;
++	int ret;
++
++	if (setup_i2c_muxed_device(I2C_BUS, GATEWAY_DK_I2C_MUX_ADDR,
++				   I2C_MUX_CHANNEL, EMC2302_ADDR, &fan_dev))
++		return hw_test_fail(ctx, "Setup failed");
++
++	if (fan_controller_init(fan_dev))
++		return hw_test_fail(ctx, "Initialization failed");
++
++	/* Give the fan ample amount of time to spin up */
++	mdelay(1000);
++
++	ret = dm_i2c_reg_read(fan_dev, TACH_HIGH_REG);
++	if (ret < 0)
++		return hw_test_fail(ctx, "Failed to read tach high byte");
++	tach_raw = ((uint8_t)ret) << 8;
++
++	ret = dm_i2c_reg_read(fan_dev, TACH_LOW_REG);
++	if (ret < 0)
++		return hw_test_fail(ctx, "Failed to read tach low byte");
++	tach_raw |= (uint8_t)ret;
++
++	if (tach_raw >= 0xFFF0)
++		return hw_test_fail(ctx, "Fan stalled, tach=0x%04x", tach_raw);
++
++	/* Right-shift by 3 bits per datasheet (tach count is left-aligned) */
++	tach_shifted = tach_raw >> 3;
++	if (tach_shifted == 0)
++		return hw_test_fail(ctx, "Tach reading too small, tach=0x%04x", tach_raw);
++
++	base = EMC230X_RPM_FACTOR / tach_shifted;
++	rpm = base * TACH_MULTIPLIER;
++
++	if (rpm < MIN_RPM)
++		return hw_test_fail(ctx, "Fan too slow: %u RPM", rpm);
++
++	return hw_test_pass(ctx, "%u RPM (Fan 1)", rpm);
++}
+diff --git a/board/freescale/gateway_dk/setup/led_controller.c b/board/freescale/gateway_dk/setup/led_controller.c
+new file mode 100644
+index 00000000000..9637716518c
+--- /dev/null
++++ b/board/freescale/gateway_dk/setup/led_controller.c
+@@ -0,0 +1,108 @@
++// SPDX-License-Identifier: GPL-2.0+
++/*
++ * Copyright 2025 Mono Technologies Inc.
++ *
++ * The on-board status LED is driven by an LP5810A LED controller.
++ * It is exercised in two phases:
++ *
++ *  - test_lp5810a_led() runs as a normal harness entry: it probes and
++ *    initialises the chip, leaving every status LED off.
++ *  - lp5810a_set_status() is invoked from misc_init_r() AFTER every
++ *    other test has finished, so it can colour the LED according to
++ *    the aggregate result and propagate that result to the kernel.
++ */
++
++#include <config.h>
++#include <stdio.h>
++#include <env.h>
++#include <dm.h>
++#include <i2c.h>
++#include <linux/kernel.h>
++#include "i2c_helpers.h"
++#include "hw_test.h"
++
++#define LP5810A_ADDR		0x6C
++#define I2C_BUS			2
++#define I2C_MUX_CHANNEL		0x08
++#define CHIP_EN_REG		0x00
++
++/* LED registers */
++#define LED_WHITE_REG		0x40
++#define LED_BLUE_REG		0x41
++#define LED_GREEN_REG		0x42
++#define LED_RED_REG		0x43
++
++#define LED_OFF			0x00
++#define LED_FULL		0xFF
++
++static const uint8_t status_leds[] = {
++	LED_WHITE_REG, LED_BLUE_REG, LED_GREEN_REG, LED_RED_REG,
++};
++
++/* Initial register programming applied during the boot self-test */
++static const struct {
++	uint8_t reg;
++	uint8_t value;
++} init_regs[] = {
++	{ 0x00, 0x01 },	/* CHIP_EN */
++	{ 0x02, 0x00 },	/* DEV_CONFIG_0 */
++	{ 0x10, 0x55 },	/* LED mode config */
++	{ 0x20, 0x0f },	/* LED enable mask */
++	{ 0x30, 0xff },	/* Peak current LED 0 */
++	{ 0x31, 0xff },	/* Peak current LED 1 */
++	{ 0x32, 0xff },	/* Peak current LED 2 */
++	{ 0x33, 0xff },	/* Peak current LED 3 */
++};
++
++static int lp5810a_get_device(struct udevice **dev)
++{
++	return setup_i2c_muxed_device(I2C_BUS, GATEWAY_DK_I2C_MUX_ADDR,
++				      I2C_MUX_CHANNEL, LP5810A_ADDR, dev);
++}
++
++int test_lp5810a_led(struct hw_test_ctx *ctx)
++{
++	struct udevice *led_dev;
++	uint8_t off = LED_OFF;
++	size_t i;
++
++	if (lp5810a_get_device(&led_dev))
++		return hw_test_fail(ctx, "Setup failed");
++
++	if (dm_i2c_reg_read(led_dev, CHIP_EN_REG) < 0)
++		return hw_test_fail(ctx, "CHIP_EN read failed");
++
++	for (i = 0; i < ARRAY_SIZE(init_regs); i++)
++		if (dm_i2c_write(led_dev, init_regs[i].reg, &init_regs[i].value, 1))
++			return hw_test_fail(ctx, "init write to 0x%02x failed",
++					    init_regs[i].reg);
++
++	for (i = 0; i < ARRAY_SIZE(status_leds); i++)
++		if (dm_i2c_write(led_dev, status_leds[i], &off, 1))
++			return hw_test_fail(ctx, "LED off-write to 0x%02x failed",
++					    status_leds[i]);
++
++	return 0;
++}
++
++/*
++ * Light the appropriate status LED and pass the verdict to the kernel
++ * via bootargs_hwtest. Always sets the env var so the kernel can rely
++ * on its presence.
++ */
++void lp5810a_set_status(int any_test_failed)
++{
++	struct udevice *led_dev;
++	uint8_t on = LED_FULL;
++
++	if (lp5810a_get_device(&led_dev))
++		return;
++
++	if (any_test_failed) {
++		dm_i2c_write(led_dev, LED_RED_REG, &on, 1);
++		env_set("bootargs_hwtest", "hwtest_status=fail");
++	} else {
++		dm_i2c_write(led_dev, LED_GREEN_REG, &on, 1);
++		env_set("bootargs_hwtest", "hwtest_status=pass");
++	}
++}
+diff --git a/board/freescale/gateway_dk/setup/retimer.c b/board/freescale/gateway_dk/setup/retimer.c
+new file mode 100644
+index 00000000000..4b2ed146550
+--- /dev/null
++++ b/board/freescale/gateway_dk/setup/retimer.c
+@@ -0,0 +1,36 @@
++// SPDX-License-Identifier: GPL-2.0+
++/*
++ * Copyright 2025 Mono Technologies Inc.
++ */
++
++#include <config.h>
++#include <dm.h>
++#include <i2c.h>
++#include "i2c_helpers.h"
++#include "hw_test.h"
++
++#define DS100DF410_ADDR		0x18
++#define I2C_BUS			0
++#define I2C_MUX_CHANNEL		0x01
++#define DEVICE_ID_REG		0x01
++#define EXPECTED_DEVICE_ID	0xD0
++
++int test_ds100df410_retimer(struct hw_test_ctx *ctx)
++{
++	struct udevice *dev;
++	int id;
++
++	if (setup_i2c_muxed_device(I2C_BUS, GATEWAY_DK_I2C_MUX_ADDR,
++				   I2C_MUX_CHANNEL, DS100DF410_ADDR, &dev))
++		return hw_test_fail(ctx, "Setup failed");
++
++	id = dm_i2c_reg_read(dev, DEVICE_ID_REG);
++	if (id < 0)
++		return hw_test_fail(ctx, "Read failed");
++
++	if (id != EXPECTED_DEVICE_ID)
++		return hw_test_fail(ctx, "Device ID 0x%02x != 0x%02x",
++				    id, EXPECTED_DEVICE_ID);
++
++	return hw_test_pass(ctx, "ID 0x%02x", id);
++}
+diff --git a/board/freescale/gateway_dk/setup/rtc.c b/board/freescale/gateway_dk/setup/rtc.c
+new file mode 100644
+index 00000000000..f198cb9cdaf
+--- /dev/null
++++ b/board/freescale/gateway_dk/setup/rtc.c
+@@ -0,0 +1,55 @@
++// SPDX-License-Identifier: GPL-2.0+
++/*
++ * Copyright 2025 Mono Technologies Inc.
++ */
++
++#include <config.h>
++#include <dm.h>
++#include <i2c.h>
++#include <rtc.h>
++#include "i2c_helpers.h"
++#include "hw_test.h"
++
++#define PCF2131_ADDR		0x53
++#define I2C_BUS			2
++#define I2C_MUX_CHANNEL		0x04
++#define CONTROL_2_REG		0x02
++
++/* PWRMNG[2:0] should be set to 000 (battery switch-over enabled) */
++#define PWRMNG_MASK		0xE0
++#define PWRMNG_EXPECTED		0x00
++
++int test_pcf2131_rtc(struct hw_test_ctx *ctx)
++{
++	struct udevice *i2c_dev, *rtc_dev;
++	struct rtc_time tm;
++	uint8_t control_2;
++	int ret;
++
++	if (setup_i2c_muxed_device(I2C_BUS, GATEWAY_DK_I2C_MUX_ADDR,
++				   I2C_MUX_CHANNEL, PCF2131_ADDR, &i2c_dev))
++		return hw_test_fail(ctx, "Setup failed");
++
++	ret = dm_i2c_reg_read(i2c_dev, CONTROL_2_REG);
++	if (ret < 0)
++		return hw_test_fail(ctx, "Failed to read Control_2 register");
++	control_2 = (uint8_t)ret;
++
++	/* Configure PWRMNG if it's not already 000 */
++	if ((control_2 & PWRMNG_MASK) != PWRMNG_EXPECTED) {
++		control_2 &= ~PWRMNG_MASK;
++		if (dm_i2c_reg_write(i2c_dev, CONTROL_2_REG, control_2))
++			return hw_test_fail(ctx, "Failed to configure PWRMNG");
++	}
++
++	/* Find the RTC device by name for dm_rtc_get() */
++	if (uclass_get_device_by_name(UCLASS_RTC, "rtc@53", &rtc_dev))
++		return hw_test_fail(ctx, "RTC device not found");
++
++	if (dm_rtc_get(rtc_dev, &tm))
++		return hw_test_fail(ctx, "Failed to read time");
++
++	return hw_test_pass(ctx, "%04d-%02d-%02d %02d:%02d:%02d",
++			    tm.tm_year, tm.tm_mon, tm.tm_mday,
++			    tm.tm_hour, tm.tm_min, tm.tm_sec);
++}
+diff --git a/board/freescale/gateway_dk/setup/sfp_i2c_mux.c b/board/freescale/gateway_dk/setup/sfp_i2c_mux.c
+new file mode 100644
+index 00000000000..6e4a697aa29
+--- /dev/null
++++ b/board/freescale/gateway_dk/setup/sfp_i2c_mux.c
+@@ -0,0 +1,47 @@
++// SPDX-License-Identifier: GPL-2.0+
++/*
++ * SFP I2C Mux Reset/Self-Test
++ *
++ * The mux can get stuck with multiple channels enabled after power glitches
++ * or abnormal resets, causing I2C arbitration errors. Writing 0x00 disables
++ * all channels, resetting the mux to a known good state.
++ *
++ * Copyright 2025 Mono Technologies Inc.
++ */
++
++#include <config.h>
++#include <dm.h>
++#include <i2c.h>
++#include "i2c_helpers.h"
++#include "hw_test.h"
++
++#define SFP_MUX_ADDR		GATEWAY_DK_I2C_MUX_ADDR
++#define I2C_BUS			1	/* i2c1 - SFP bus */
++#define PCA9545_CTRL_REG	0x00
++
++int test_sfp_i2c_mux(struct hw_test_ctx *ctx)
++{
++	struct udevice *mux_dev;
++	uint8_t ctrl_val;
++	int ret;
++
++	/* Get mux device directly (no channel selection needed) */
++	if (i2c_get_chip_for_busnum(I2C_BUS, SFP_MUX_ADDR, 1, &mux_dev))
++		return hw_test_fail(ctx, "Mux not found on bus %d", I2C_BUS);
++
++	/* Reset mux - disable all channels */
++	ctrl_val = 0x00;
++	if (dm_i2c_write(mux_dev, PCA9545_CTRL_REG, &ctrl_val, 1))
++		return hw_test_fail(ctx, "Reset failed");
++
++	/* Verify reset by reading back */
++	ret = dm_i2c_reg_read(mux_dev, PCA9545_CTRL_REG);
++	if (ret < 0)
++		return hw_test_fail(ctx, "Read-back failed");
++
++	if ((ret & 0x0F) != 0x00)
++		return hw_test_fail(ctx, "Reset verify: expected 0x00, got 0x%02x",
++				    ret & 0x0F);
++
++	return hw_test_pass(ctx, "Reset OK");
++}
+diff --git a/board/freescale/gateway_dk/setup/temp_sensors.c b/board/freescale/gateway_dk/setup/temp_sensors.c
+new file mode 100644
+index 00000000000..1f1137c8735
+--- /dev/null
++++ b/board/freescale/gateway_dk/setup/temp_sensors.c
+@@ -0,0 +1,58 @@
++// SPDX-License-Identifier: GPL-2.0+
++/*
++ * Copyright 2025 Mono Technologies Inc.
++ */
++
++#include <config.h>
++#include <dm.h>
++#include <i2c.h>
++#include "i2c_helpers.h"
++#include "hw_test.h"
++
++#define TMP431_ADDR		0x4C
++#define I2C_BUS			0
++#define CPU_TEMP_CHANNEL	0x02
++#define BOARD_TEMP_CHANNEL	0x04
++#define REMOTE_TEMP_REG		0x01
++#define LOCAL_TEMP_REG		0x00
++
++/* Temperature range limits (degrees Celsius) */
++#define TEMP_MIN		15
++#define TEMP_MAX		60
++
++static int read_temperature(struct hw_test_ctx *ctx, const char *label,
++			    uint8_t channel, uint8_t reg, int *temp_out)
++{
++	struct udevice *temp_dev;
++	int ret;
++
++	if (setup_i2c_muxed_device(I2C_BUS, GATEWAY_DK_I2C_MUX_ADDR,
++				   channel, TMP431_ADDR, &temp_dev))
++		return hw_test_fail(ctx, "%s sensor setup failed", label);
++
++	ret = dm_i2c_reg_read(temp_dev, reg);
++	if (ret < 0)
++		return hw_test_fail(ctx, "%s sensor read failed", label);
++
++	*temp_out = (int)(uint8_t)ret;
++	return 0;
++}
++
++int test_tmp431_temperatures(struct hw_test_ctx *ctx)
++{
++	int cpu_temp, board_temp;
++
++	if (read_temperature(ctx, "CPU", CPU_TEMP_CHANNEL, REMOTE_TEMP_REG, &cpu_temp))
++		return -1;
++
++	if (read_temperature(ctx, "Board", BOARD_TEMP_CHANNEL, LOCAL_TEMP_REG, &board_temp))
++		return -1;
++
++	if (cpu_temp < TEMP_MIN || cpu_temp > TEMP_MAX)
++		return hw_test_fail(ctx, "CPU out of range: %d °C", cpu_temp);
++
++	if (board_temp < TEMP_MIN || board_temp > TEMP_MAX)
++		return hw_test_fail(ctx, "Board out of range: %d °C", board_temp);
++
++	return hw_test_pass(ctx, "CPU %d °C, Board %d °C", cpu_temp, board_temp);
++}
+diff --git a/board/freescale/gateway_dk/setup/typec_controller.c b/board/freescale/gateway_dk/setup/typec_controller.c
+new file mode 100644
+index 00000000000..cb241c2a814
+--- /dev/null
++++ b/board/freescale/gateway_dk/setup/typec_controller.c
+@@ -0,0 +1,49 @@
++// SPDX-License-Identifier: GPL-2.0+
++/*
++ * Copyright 2025 Mono Technologies Inc.
++ */
++
++#include <config.h>
++#include <dm.h>
++#include <i2c.h>
++#include "i2c_helpers.h"
++#include "hw_test.h"
++
++#define HD3SS3220_ADDR		0x47
++#define I2C_BUS			2
++#define I2C_MUX_CHANNEL		0x04
++
++/* Expected device ID: "TUSB322" in ASCII, registers 0x00-0x07 read in
++ * reverse order: {0x00, 0x54, 0x55, 0x53, 0x42, 0x33, 0x32, 0x32}.
++ */
++static const uint8_t expected_device_id[8] = {
++	0x32, 0x32, 0x33, 0x42, 0x53, 0x55, 0x54, 0x00
++};
++
++int test_hd3ss3220(struct hw_test_ctx *ctx)
++{
++	struct udevice *hd3ss_dev;
++	uint8_t device_id[8];
++	char ascii[9];
++	int i, j;
++
++	if (setup_i2c_muxed_device(I2C_BUS, GATEWAY_DK_I2C_MUX_ADDR,
++				   I2C_MUX_CHANNEL, HD3SS3220_ADDR, &hd3ss_dev))
++		return hw_test_fail(ctx, "Setup failed");
++
++	if (dm_i2c_read(hd3ss_dev, 0x00, device_id, sizeof(device_id)))
++		return hw_test_fail(ctx, "Failed to read device ID");
++
++	for (i = 0; i < 8; i++)
++		if (device_id[i] != expected_device_id[i])
++			return hw_test_fail(ctx, "Device ID mismatch");
++
++	/* Render device ID in reverse order to show the ASCII string */
++	for (i = 7, j = 0; i >= 0; i--) {
++		if (device_id[i] >= 0x20 && device_id[i] <= 0x7E)
++			ascii[j++] = device_id[i];
++	}
++	ascii[j] = '\0';
++
++	return hw_test_pass(ctx, "%s", ascii);
++}
+diff --git a/board/freescale/gateway_dk/setup/voltage_sensors.c b/board/freescale/gateway_dk/setup/voltage_sensors.c
+new file mode 100644
+index 00000000000..8bbb6c3983a
+--- /dev/null
++++ b/board/freescale/gateway_dk/setup/voltage_sensors.c
+@@ -0,0 +1,97 @@
++// SPDX-License-Identifier: GPL-2.0+
++/*
++ * Copyright 2025 Mono Technologies Inc.
++ *
++ * Voltage rail self-test. Each rail is read via INA234 current sensors
++ * sitting behind a PCA9545 mux on bus 2. Per-rail PASS/FAIL lines are
++ * emitted directly through the harness print helpers (one bracket-
++ * prefixed line each); ctx->printed is set so the harness suppresses
++ * its own summary line for this entry.
++ */
++
++#include <config.h>
++#include <stdio.h>
++#include <dm.h>
++#include <i2c.h>
++#include <linux/kernel.h>
++#include "i2c_helpers.h"
++#include "hw_test.h"
++
++#define I2C_BUS				2
++#define INA234_BUS_VOLTAGE_REG		0x02
++#define NUM_SENSORS			ARRAY_SIZE(sensors)
++
++typedef struct {
++	uint8_t mux_channel;	/* PCA9545 channel bitmask (e.g. 0x01 = ch0) */
++	uint8_t address;	/* I2C address */
++	uint16_t shunt_mohm;	/* Shunt resistor value in mOhm */
++	uint32_t min_mv;	/* Minimum voltage in mV */
++	uint32_t max_mv;	/* Maximum voltage in mV */
++	const char *rail_name;
++} sensor_config_t;
++
++static const sensor_config_t sensors[] = {
++	/* Channel 0 */
++	{0x01, 0x40, 1, 13365, 22220, "20V Power Rail"},
++	{0x01, 0x41, 1,  4851,  5151, "5V Power Rail"},
++	{0x01, 0x42, 1,   970,  1030, "1V CPU PSU"},
++	{0x01, 0x43, 5,  1158,  1242, "1.2V DDR PSU"},
++	/* Channel 1 */
++	{0x02, 0x40, 5,  1307,  1394, "1.35V SerDes PSU"},
++	{0x02, 0x41, 5,  1732,  1869, "1.8V Power Rail"},
++	{0x02, 0x42, 5,  2396,  2606, "2.5V Power Rail"},
++	{0x02, 0x43, 1,  3188,  3414, "3.3V Power Rail"},
++};
++
++int test_voltage_sensors(struct hw_test_ctx *ctx)
++{
++	int failed = 0;
++	size_t i;
++	char detail[80];
++
++	ctx->printed = 1;	/* we emit per-rail lines ourselves */
++
++	for (i = 0; i < NUM_SENSORS; i++) {
++		const sensor_config_t *sensor = &sensors[i];
++		struct udevice *sensor_dev;
++		uint8_t buf[2];
++		uint16_t raw_voltage, voltage_bits;
++		uint32_t voltage_mv;
++
++		if (setup_i2c_muxed_device(I2C_BUS, GATEWAY_DK_I2C_MUX_ADDR,
++					   sensor->mux_channel, sensor->address, &sensor_dev)) {
++			hw_test_print_fail(sensor->rail_name, "Setup failed");
++			failed = 1;
++			continue;
++		}
++
++		if (dm_i2c_read(sensor_dev, INA234_BUS_VOLTAGE_REG, buf, 2)) {
++			hw_test_print_fail(sensor->rail_name, "Read failed");
++			failed = 1;
++			continue;
++		}
++
++		/* INA234: voltage in bits [14:4], LSB = 25.6 mV.
++		 * Integer math: voltage_mv = (raw >> 4) * 256 / 10.
++		 */
++		raw_voltage = (buf[0] << 8) | buf[1];
++		voltage_bits = raw_voltage >> 4;
++		voltage_mv = (voltage_bits * 256) / 10;
++
++		if (voltage_mv < sensor->min_mv || voltage_mv > sensor->max_mv) {
++			snprintf(detail, sizeof(detail),
++				 "%u.%03u V (limits %u.%03u – %u.%03u V)",
++				 voltage_mv / 1000, voltage_mv % 1000,
++				 sensor->min_mv / 1000, sensor->min_mv % 1000,
++				 sensor->max_mv / 1000, sensor->max_mv % 1000);
++			hw_test_print_fail(sensor->rail_name, detail);
++			failed = 1;
++		} else {
++			snprintf(detail, sizeof(detail), "%u.%03u V",
++				 voltage_mv / 1000, voltage_mv % 1000);
++			hw_test_print_pass(sensor->rail_name, detail);
++		}
++	}
++
++	return failed ? -1 : 0;
++}
+-- 
+2.47.3
+

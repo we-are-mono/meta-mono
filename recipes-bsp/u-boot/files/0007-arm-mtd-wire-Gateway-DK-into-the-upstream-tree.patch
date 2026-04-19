@@ -1,0 +1,104 @@
+From e9267679ec13c90c5b5993ea8aa022b69a4d2e89 Mon Sep 17 00:00:00 2001
+From: Tomaz Zaman <tomaz@mono.si>
+Date: Sun, 19 Apr 2026 15:25:02 +0200
+Subject: [PATCH 7/7] arm, mtd: wire Gateway-DK into the upstream tree
+
+Three small upstream-side hooks needed to pick up everything the
+previous patches added:
+
+  - arch/arm/Kconfig: add the CONFIG_TARGET_GATEWAY_DK entry that
+    select-s the board (sources board/freescale/gateway_dk/Kconfig
+    and gives it a place in the menuconfig tree).
+  - arch/arm/dts/Makefile: build mono-gateway-dk.dtb when the new
+    Kconfig is selected.
+  - drivers/mtd/spi/spi-nor-ids.c: add the MT25QU512ABB SPI-NOR id
+    used by the Gateway-DK QSPI flash.
+
+Upstream-Status: Inappropriate [product-specific]
+
+Signed-off-by: Tomaz Zaman <tomaz@mono.si>
+---
+ arch/arm/Kconfig              | 15 ++++++++-------
+ arch/arm/dts/Makefile         |  3 ++-
+ drivers/mtd/spi/spi-nor-ids.c |  3 +++
+ 3 files changed, 13 insertions(+), 8 deletions(-)
+
+diff --git a/arch/arm/Kconfig b/arch/arm/Kconfig
+index 2a16a7e31c4..fed301ec562 100644
+--- a/arch/arm/Kconfig
++++ b/arch/arm/Kconfig
+@@ -1878,8 +1878,8 @@ config TARGET_LS1046ARDB
+ 	  development platform that supports the QorIQ LS1046A
+ 	  Layerscape Architecture processor.
+ 
+-config TARGET_LS1046AFRWY
+-	bool "Support ls1046afrwy"
++config TARGET_GATEWAY_DK
++	bool "Support gateway_dk"
+ 	select ARCH_LS1046A
+ 	select ARM64
+ 	select ARMV8_MULTIENTRY
+@@ -1888,11 +1888,12 @@ config TARGET_LS1046AFRWY
+ 	select BOARD_LATE_INIT
+ 	select DM_SPI_FLASH if DM_SPI
+ 	select GPIO_EXTRA_HEADER
+-	imply SCSI
++	select FSL_DDR_INTERACTIVE
++	select SUPPORT_SPL
+ 	help
+-	  Support for Freescale LS1046AFRWY platform.
+-	  The LS1046A Freeway Board (FRWY) is a high-performance
+-	  development platform that supports the QorIQ LS1046A
++	  Support for Gateway Development Kit.
++	  Gateway Development Kit is a high-performance
++	  development platform that is based on the QorIQ LS1046A
+ 	  Layerscape Architecture processor.
+ 
+ config ARCH_SC5XX
+@@ -2416,7 +2417,7 @@ source "board/freescale/ls1021aiot/Kconfig"
+ source "board/freescale/ls1046aqds/Kconfig"
+ source "board/freescale/ls1043ardb/Kconfig"
+ source "board/freescale/ls1046ardb/Kconfig"
+-source "board/freescale/ls1046afrwy/Kconfig"
++source "board/freescale/gateway_dk/Kconfig"
+ source "board/freescale/ls1012aqds/Kconfig"
+ source "board/freescale/ls1012ardb/Kconfig"
+ source "board/freescale/ls1012afrdm/Kconfig"
+diff --git a/arch/arm/dts/Makefile b/arch/arm/dts/Makefile
+index 090bf4e6b24..5b9e31b2305 100644
+--- a/arch/arm/dts/Makefile
++++ b/arch/arm/dts/Makefile
+@@ -503,7 +503,6 @@ dtb-$(CONFIG_FSL_LSCH2) += fsl-ls1043a-qds-duart.dtb \
+ 	fsl-ls1046a-qds-duart.dtb \
+ 	fsl-ls1046a-qds-lpuart.dtb \
+ 	fsl-ls1046a-rdb.dtb \
+-	fsl-ls1046a-frwy.dtb \
+ 	fsl-ls1012a-qds.dtb \
+ 	fsl-ls1012a-rdb.dtb \
+ 	fsl-ls1012a-2g5rdb.dtb \
+@@ -517,6 +516,8 @@ dtb-$(CONFIG_TARGET_SL28) += fsl-ls1028a-kontron-sl28.dtb \
+ 
+ dtb-$(CONFIG_TARGET_TEN64) += fsl-ls1088a-ten64.dtb
+ 
++dtb-$(CONFIG_TARGET_GATEWAY_DK) += mono-gateway-dk.dtb
++
+ dtb-$(CONFIG_TARGET_STEMMY) += ste-ux500-samsung-stemmy.dtb
+ 
+ dtb-$(CONFIG_STM32F4) += stm32f429-disco.dtb \
+diff --git a/drivers/mtd/spi/spi-nor-ids.c b/drivers/mtd/spi/spi-nor-ids.c
+index 0361551763e..6043b1dcd72 100644
+--- a/drivers/mtd/spi/spi-nor-ids.c
++++ b/drivers/mtd/spi/spi-nor-ids.c
+@@ -355,6 +355,9 @@ const struct flash_info spi_nor_ids[] = {
+ 	{ INFO6("mt25qu512a",  0x20bb20, 0x104400, 64 * 1024, 1024,
+ 		 SECT_4K | SPI_NOR_DUAL_READ | SPI_NOR_QUAD_READ | SPI_NOR_4B_OPCODES |
+ 		 USE_FSR) },
++	{ INFO6("mt25qu512abb",  0x20bb20, 0x104000, 64 * 1024, 1024,
++		 SECT_4K | SPI_NOR_DUAL_READ | SPI_NOR_QUAD_READ | SPI_NOR_4B_OPCODES |
++		 USE_FSR) },
+ 	{ INFO("n25q512a",    0x20bb20, 0, 64 * 1024, 1024, SECT_4K | USE_FSR | SPI_NOR_QUAD_READ) },
+ 	{ INFO6("mt25ql512a",  0x20ba20, 0x104400, 64 * 1024, 1024, SECT_4K | USE_FSR | SPI_NOR_QUAD_READ | SPI_NOR_4B_OPCODES) },
+ 	{ INFO("n25q512ax3",  0x20ba20, 0, 64 * 1024, 1024, SECT_4K | USE_FSR | SPI_NOR_QUAD_READ) },
+-- 
+2.47.3
+

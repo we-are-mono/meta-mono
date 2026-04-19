@@ -6,12 +6,20 @@ COMPATIBLE_MACHINE = "gateway-dk"
 
 DEPENDS = "bison-native flex-native dtc-native bc-native u-boot-tools-native"
 
-SRC_URI = "git://github.com/we-are-mono/u-boot;protocol=https;branch=mt-6.12.y \
-           file://environment.txt \
-           file://environment-qspi.txt \
-           file://environment-emmc.txt \
+# Pinned to an NXP Linux Factory release (see conf/include/nxp-base.inc
+# for the tag and SHA). Mono's Gateway-DK board support is applied
+# from files/ as a numbered patch series.
+require conf/include/nxp-base.inc
+SRC_URI = "git://github.com/nxp-qoriq/u-boot;protocol=https;nobranch=1 \
+           file://0001-board-freescale-gateway-dk-add-board-core.patch \
+           file://0002-board-freescale-gateway-dk-add-hw-self-test-harness.patch \
+           file://0003-board-freescale-gateway-dk-add-per-component-self-te.patch \
+           file://0004-board-freescale-gateway-dk-add-USB-PD-and-EEPROM-dev.patch \
+           file://0005-configs-add-Gateway-DK-defconfig-and-board-header.patch \
+           file://0006-arm-dts-add-mono-gateway-dk.dts.patch \
+           file://0007-arm-mtd-wire-Gateway-DK-into-the-upstream-tree.patch \
           "
-SRCREV = "9f13d11658f696d4d1b4f76fa88264c52bd2e7c2"
+SRCREV = "${NXP_LF_SRCREV_UBOOT}"
 
 FILESEXTRAPATHS:prepend := "${THISDIR}/files:"
 
@@ -32,9 +40,10 @@ do_compile() {
 
     oe_runmake ${UBOOT_MACHINE}
     oe_runmake ${EXTRA_OEMAKE}
-    # Build per-boottype environments (common base + boottype-specific recovery command)
-    cat ${UNPACKDIR}/environment.txt ${UNPACKDIR}/environment-qspi.txt | mkenvimage -s 0x2000 -o ${B}/u-boot-qspi.env -
-    cat ${UNPACKDIR}/environment.txt ${UNPACKDIR}/environment-emmc.txt | mkenvimage -s 0x2000 -o ${B}/u-boot-emmc.env -
+    # Build per-boottype environments (common base + boottype-specific recovery command).
+    # Templates are read directly from the layer; no SRC_URI/UNPACKDIR dance needed.
+    cat ${THISDIR}/files/environment.txt ${THISDIR}/files/environment-qspi.txt | mkenvimage -s 0x2000 -o ${B}/u-boot-qspi.env -
+    cat ${THISDIR}/files/environment.txt ${THISDIR}/files/environment-emmc.txt | mkenvimage -s 0x2000 -o ${B}/u-boot-emmc.env -
 }
 
 do_deploy() {
