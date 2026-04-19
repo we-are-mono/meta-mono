@@ -1,0 +1,139 @@
+From a9cd753c27bb69a7c71898f11f8bd3347042c6ab Mon Sep 17 00:00:00 2001
+From: Tomaz Zaman <tomaz@mono.si>
+Date: Sat, 18 Apr 2026 23:44:03 +0200
+Subject: [PATCH 2/2] plat/nxp/ls1046a/gateway-dk: add DDR4 initialization
+
+Configures DDR4 controller timings, mode registers, and related errata
+workarounds for the Gateway Development Kit. The settings were tuned
+on hardware and stabilized against sustained memory stress.
+
+Upstream-Status: Inappropriate [product-specific]
+
+Signed-off-by: Tomaz Zaman <tomaz@mono.si>
+---
+ plat/nxp/soc-ls1046a/gateway_dk/ddr_init.c | 113 +++++++++++++++++++++
+ 1 file changed, 113 insertions(+)
+ create mode 100755 plat/nxp/soc-ls1046a/gateway_dk/ddr_init.c
+
+diff --git a/plat/nxp/soc-ls1046a/gateway_dk/ddr_init.c b/plat/nxp/soc-ls1046a/gateway_dk/ddr_init.c
+new file mode 100755
+index 000000000..0b75bed3c
+--- /dev/null
++++ b/plat/nxp/soc-ls1046a/gateway_dk/ddr_init.c
+@@ -0,0 +1,113 @@
++/*
++**
++**     Copyright Copyright 2025 Mono Technologies Inc.
++**
++**     SPDX-License-Identifier: BSD-3-Clause
++**
++*/
++
++#include <assert.h>
++#include <errno.h>
++#include <stdbool.h>
++#include <stdint.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <common/debug.h>
++#include <lib/utils.h>
++#include <errata.h>
++#include <plat_common.h>
++
++#include <ddr.h>
++#include <platform_def.h>
++
++const struct ddr_cfg_regs static_2100 = {
++    .cs[0].bnds = 0x01FF,
++    .cs[0].config = 0x80810512,
++    .cs[0].config_2 = 0x00,
++    .cs[1].config_2 = 0x00,
++    .cs[2].config_2 =  0x00,
++    .cs[3].config_2 =  0x00,
++    .timing_cfg[0] = 0xFF770018,
++    .timing_cfg[1] = 0x020E1265,
++    .timing_cfg[2] = 0x005951A0,
++    .timing_cfg[3] = 0x125D1100,
++    .timing_cfg[4] = 0xD502,
++    .timing_cfg[5] = 0x06401400,
++    .timing_cfg[7] = 0x26600000,
++    .timing_cfg[8] = 0x06447A00,
++    .sdram_cfg[0] = 0x65240008,
++    .sdram_cfg[1] = 0x00401010,
++    .dq_map[0] = 0x0760A104,
++    .dq_map[1] = 0x84184184,
++    .dq_map[2] = 0x0611A104,
++    .dq_map[3] = 0x84100000,
++    .sdram_mode[0] = 0x01010834,
++    .sdram_mode[1] = 0x00100000,
++    .sdram_mode[2] = 0x00,
++    .sdram_mode[3] = 0x00,
++    .sdram_mode[4] = 0x00,
++    .sdram_mode[5] = 0x00,
++    .sdram_mode[6] = 0x00,
++    .sdram_mode[7] = 0x00,
++    .sdram_mode[8] = 0x0500,
++    .sdram_mode[9] = 0x09080000,
++    .sdram_mode[10] = 0x00,
++    .sdram_mode[11] = 0x00,
++    .sdram_mode[12] = 0x00,
++    .sdram_mode[13] = 0x00,
++    .sdram_mode[14] = 0x00,
++    .sdram_mode[15] = 0x00,
++    .md_cntl = 0x00,
++    .interval = 0x1FFE07FF,
++    .data_init = 0xDEADBEEF,
++    .clk_cntl = 0x02400000,
++    .init_addr = 0x00,
++    .ddr_sr_cntr = 0x0,
++    .init_ext_addr = 0x00,
++    .zq_cntl = 0x8A090705,
++    .wrlvl_cntl[0] = 0x86750605,
++    .wrlvl_cntl[1] = 0x05070709,
++    .wrlvl_cntl[2] = 0x09090A08,
++    .cdr[0] = 0x80080000,
++    .cdr[1] = 0xC0,
++    .debug[28] = 0x4e,
++};
++
++long long board_static_ddr(struct ddr_info *priv)
++{
++	memcpy(&priv->ddr_reg, &static_2100, sizeof(static_2100));
++
++	return 0x200000000UL;
++}
++
++long long init_ddr(void)
++{
++	int spd_addr[] = {NXP_SPD_EEPROM0};
++	struct ddr_info info;
++	struct sysinfo sys;
++	long long dram_size;
++
++	zeromem(&sys, sizeof(sys));
++	get_clocks(&sys);
++
++	debug("platform clock %lu\n", sys.freq_platform);
++	debug("DDR PLL1 %lu\n", sys.freq_ddr_pll0);
++	debug("DDR PLL2 %lu\n", sys.freq_ddr_pll1);
++
++	zeromem(&info, sizeof(struct ddr_info));
++	info.num_ctlrs = 1;
++	info.dimm_on_ctlr = 1;
++	info.clk = get_ddr_freq(&sys, 0);
++	info.spd_addr = spd_addr;
++	info.ddr[0] = (void *)NXP_DDR_ADDR;
++
++	dram_size = dram_init(&info);
++
++	if (dram_size < 0)
++		ERROR("DDR init failed.\n");
++
++	erratum_a008850_post();
++
++	return dram_size;
++}
+-- 
+2.47.3
+

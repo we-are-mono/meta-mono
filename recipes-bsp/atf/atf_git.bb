@@ -7,8 +7,15 @@ COMPATIBLE_MACHINE = "gateway-dk"
 DEPENDS = "u-boot-tools-native u-boot rcw"
 do_compile[depends] += "u-boot:do_deploy rcw:do_deploy"
 
-SRC_URI = "git://github.com/we-are-mono/atf;protocol=https;branch=mt-6.12.y"
-SRCREV = "80a4fbc4d79b16549a2bad4e3532899ce7de4cef"
+# Pinned to an NXP Linux Factory release (see conf/include/nxp-base.inc
+# for the tag and SHA). Mono's Gateway-DK board support is applied
+# from files/ as patches.
+require conf/include/nxp-base.inc
+SRC_URI = "git://github.com/nxp-qoriq/atf;protocol=https;nobranch=1 \
+           file://0001-plat-nxp-ls1046a-gateway-dk-add-board-support.patch \
+           file://0002-plat-nxp-ls1046a-gateway-dk-add-DDR4-initialization.patch \
+"
+SRCREV = "${NXP_LF_SRCREV_ATF}"
 
 S = "${WORKDIR}/git"
 
