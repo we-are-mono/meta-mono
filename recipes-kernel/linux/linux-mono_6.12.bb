@@ -8,22 +8,24 @@ DEPENDS += "bison-native flex-native bc-native"
 
 FILESEXTRAPATHS:prepend := "${THISDIR}/files:"
 
-LINUX_VERSION = "6.12.49"
+# Pinned to an NXP Linux Factory release (see conf/include/nxp-base.inc
+# for the tag, SHA, and kernel version). Mono's board files (defconfig,
+# dts, INA234 patch) layer on top.
+require conf/include/nxp-base.inc
+
+LINUX_VERSION = "${NXP_LF_LINUX_VERSION}"
 PV = "${LINUX_VERSION}+git${SRCPV}"
 
 KCONFIG_MODE = "alldefconfig"
 
-LINUX_QORIQ_BRANCH = "lf-6.12.y"
-LINUX_QORIQ_SRC = "git://github.com/nxp-qoriq/linux.git;protocol=https"
-
-SRC_URI = "${LINUX_QORIQ_SRC};branch=${LINUX_QORIQ_BRANCH} \
+SRC_URI = "git://github.com/nxp-qoriq/linux.git;protocol=https;nobranch=1 \
            file://defconfig \
            file://mono-gateway-dk.dts \
            file://mono-gateway-dk-usdpaa-xg-only.dts \
            file://001-hwmon-ina2xx-Add-INA234-support.patch \
           "
 
-SRCREV = "df24f9428e38740256a410b983003a478e72a7c0"
+SRCREV = "${NXP_LF_SRCREV_LINUX}"
 
 S = "${WORKDIR}/git"
 
