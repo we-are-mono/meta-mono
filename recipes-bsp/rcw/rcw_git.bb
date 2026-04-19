@@ -6,8 +6,14 @@ COMPATIBLE_MACHINE = "gateway-dk"
 
 DEPENDS = "tcl-native"
 
-SRC_URI = "git://github.com/we-are-mono/rcw;protocol=https;branch=mt-6.12.y"
-SRCREV = "a37e83067fb9496dd0be6b4bc24e85361fd2e0a2"
+# Pinned to an NXP Linux Factory release (see conf/include/nxp-base.inc
+# for the tag and SHA). Mono's Gateway-DK board files are applied
+# from files/ as a patch.
+require conf/include/nxp-base.inc
+SRC_URI = "git://github.com/nxp-qoriq/rcw;protocol=https;nobranch=1 \
+           file://0001-gateway-dk-add-board-support.patch \
+"
+SRCREV = "${NXP_LF_SRCREV_RCW}"
 
 S = "${WORKDIR}/git"
 

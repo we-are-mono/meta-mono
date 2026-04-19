@@ -1,0 +1,186 @@
+From 8c88a301eda2b1085445de2d4c2320447b6438cc Mon Sep 17 00:00:00 2001
+From: Tomaz Zaman <tomaz@mono.si>
+Date: Sat, 18 Apr 2026 23:47:40 +0200
+Subject: [PATCH] gateway-dk: add board support
+
+Adds reset configuration words for the Mono Gateway Development Kit
+(LS1046A-based), covering both QSPI and eMMC boot modes at 2100 MT/s
+DDR. Pin muxing routes Ethernet controller pins to GPIO3, enables
+USB, I2C3, SDHC (eMMC), and UART for Bluetooth.
+
+The QSPI and eMMC variants share all settings except PBI_SRC, so the
+bulk lives in gateway_dk_common.rcwi and each boot variant is a thin
+wrapper that selects the boot source and includes the common file.
+
+Upstream-Status: Inappropriate [product-specific]
+
+Signed-off-by: Tomaz Zaman <tomaz@mono.si>
+---
+ Makefile                                      | 10 ++-
+ gateway_dk/Makefile                           |  1 +
+ .../gateway_dk_common.rcwi                    | 77 +++++++++++++++++++
+ .../rcw_2100_emmcboot.rcw                     |  8 ++
+ .../rcw_2100_qspiboot.rcw                     |  8 ++
+ gateway_dk/README                             |  3 +
+ 6 files changed, 106 insertions(+), 1 deletion(-)
+ create mode 100644 gateway_dk/Makefile
+ create mode 100644 gateway_dk/NN_FFSSPSNP_1133_5A06/gateway_dk_common.rcwi
+ create mode 100755 gateway_dk/NN_FFSSPSNP_1133_5A06/rcw_2100_emmcboot.rcw
+ create mode 100755 gateway_dk/NN_FFSSPSNP_1133_5A06/rcw_2100_qspiboot.rcw
+ create mode 100644 gateway_dk/README
+
+diff --git a/Makefile b/Makefile
+index 103ac30..9947ccb 100644
+--- a/Makefile
++++ b/Makefile
+@@ -10,11 +10,19 @@ BOARDS = b4420qds b4860qds \
+ 	 lx2160ardb lx2160aqds lx2160ardb_rev2 lx2160aqds_rev2 lx2162aqds \
+ 	 p2041rdb p3041ds p4080ds p5020ds p5040ds \
+ 	 t1024qds t1023rdb t1024rdb t1040rdb t1042rdb t1042rdb_pi t1040qds \
+-	 t2080rdb t2080qds t2081qds t4240qds t4240rdb t1040d4rdb t1042d4rdb
++	 t2080rdb t2080qds t2081qds t4240qds t4240rdb t1040d4rdb t1042d4rdb gateway_dk
++
++
++
++TCLSH := $(shell command -v tclsh 2> /dev/null)
+ 
+ VER = $(shell git describe --tags)
+ 
+ all install clean:
++ifndef TCLSH
++	$(error "tclsh is not available. please  install it.")
++	exit 1
++endif
+ 	@for board in $(BOARDS); do \
+ 		$(MAKE) -C $$board $@ DESTDIR=$(DESTDIR)/$$board; \
+ 	done
+diff --git a/gateway_dk/Makefile b/gateway_dk/Makefile
+new file mode 100644
+index 0000000..f77e46b
+--- /dev/null
++++ b/gateway_dk/Makefile
+@@ -0,0 +1 @@
++include ../Makefile.inc
+diff --git a/gateway_dk/NN_FFSSPSNP_1133_5A06/gateway_dk_common.rcwi b/gateway_dk/NN_FFSSPSNP_1133_5A06/gateway_dk_common.rcwi
+new file mode 100644
+index 0000000..cac1ea8
+--- /dev/null
++++ b/gateway_dk/NN_FFSSPSNP_1133_5A06/gateway_dk_common.rcwi
+@@ -0,0 +1,77 @@
++/*
++ * Shared RCW settings for the Gateway Development Kit. Included by the
++ * per-boot-medium files in this directory; the including file only sets
++ * PBI_SRC to select the boot source.
++ */
++
++#include <../ls1046ardb/ls1046a.rcwi>
++
++%littleendian64b=1
++%dont64bswapcrc=1
++
++/* clocking */
++SYSCLK_FREQ=600                   /* SYSCLK input = 600 * 166.667 kHz = 100 MHz */
++SYS_PLL_RAT=6                     /* platform clock =  6 * SYSCLK =  600 MHz */
++MEM_PLL_RAT=21                    /* DDR clock = 21 * SYSCLK = 2100 MT/s */
++CGA_PLL1_RAT=16                   /* PLL1 (CPU) = 16 * SYSCLK = 1600 MHz */
++CGA_PLL2_RAT=14                   /* PLL2 (FMan, eSDHC, QSPI) = 14 * SYSCLK = 1400 MHz */
++HWA_CGA_M2_CLK_SEL=1              /* QSPI clock selector */
++HWA_CGA_M1_CLK_SEL=6              /* b110 Group A PLL2 /2 is clock, for FMAN */
++
++/* SerDes settings */
++SRDS_PRTCL_S1=4403                /* 0x1133: 0=XFI.9, 1=XFI.10, 2=SGMII.5, 3=SGMII.6 */
++SRDS_PRTCL_S2=23046               /* 0x5a06: 0=PCIe 1.0x1, 1=SGMII.2, 2=OFF, 3=PCIe 3.0x1 */
++SRDS_PLL_REF_CLK_SEL_S1=1         /* 100/156.25 Mhz Clock for SerDes 1 */
++SRDS_PLL_REF_CLK_SEL_S2=0         /* 100/100 Mhz Clock for Serdes 2 */
++SRDS_DIV_PEX_S1=0                 /* For PCIe, define later */
++SRDS_DIV_PEX_S2=0                 /* For PCIe, define later */
++
++/* I/O bank voltages, all set to 0 for 1.8V */
++TVDD_VSEL=0
++DVDD_VSEL=0
++EVDD_VSEL=0
++
++/* memory settings */
++DDR_FDBK_MULT=2                   /* Mandatory */
++DDR_REFCLK_SEL=1                  /* 0=DDRCLK, 1=DIFF_SYSCLK, both should work */
++DRAM_LAT=1                        /* b01 for latencies, higher than 8-8-8 */
++
++/* boot settings (PBI_SRC is set by the including wrapper file) */
++SB_EN=0                           /* secure boot is not enabled */
++
++/* pin multiplexing, all IFC_* options set the pins to QSPI */
++IFC_GRP_A_EXT=1
++IFC_GRP_D_EXT=1
++IFC_GRP_E1_EXT=0
++IFC_GRP_E1_BASE=1
++IFC_GRP_F_EXT=1
++IRQ_OUT=1                         /* Mandatory */
++IRQ_EXT=0                         /* We want IRQ/GPIO pins instead of FTM */
++IRQ_BASE=1                        /* All GPIO1[23:31] pins set to IRQ */
++IIC2_EXT=0                        /* We want I2C pins */
++EC1=1                             /* We want GPIO3, not EC1 */
++EC2=1                             /* We want GPIO3, not EC2 */
++EM1=1                             /* We want GPIO3, not EM1 */
++UART_BASE=6                       /* b110, all UART pins assigned to UART */
++SDHC_BASE=0
++SPI_EXT=2                         /* We need GPIO2_02 for SFP clock selector */
++SPI_BASE=0
++USB_DRVVBUS=0
++USB_PWRFAULT=0
++
++.pbi
++// Set the BOOTLOCPTR
++write 0x570600, 0x00000000
++write 0x570604, 0x10000000
++.end
++
++.pbi
++// Make sure to use IIC3_SCL and IIC3_SDA (GPIO_4[10|11] by default)
++write 0x57040c, 0x00000000
++.end
++
++#include <../ls1046ardb/cci_barrier_disable.rcw>
++#include <../ls1046ardb/usb_phy_freq.rcw>
++#include <../ls1046ardb/a008851.rcw>
++#include <../ls1046ardb/a010477.rcw>
++#include <../ls1046ardb/a009531.rcw>
+diff --git a/gateway_dk/NN_FFSSPSNP_1133_5A06/rcw_2100_emmcboot.rcw b/gateway_dk/NN_FFSSPSNP_1133_5A06/rcw_2100_emmcboot.rcw
+new file mode 100755
+index 0000000..6c321b7
+--- /dev/null
++++ b/gateway_dk/NN_FFSSPSNP_1133_5A06/rcw_2100_emmcboot.rcw
+@@ -0,0 +1,8 @@
++/*
++ * Gateway Development Kit - eMMC boot
++ * To build, just enter "make" in the top level directory.
++ */
++
++PBI_SRC=6                         /* eMMC (b0110) */
++
++#include "gateway_dk_common.rcwi"
+diff --git a/gateway_dk/NN_FFSSPSNP_1133_5A06/rcw_2100_qspiboot.rcw b/gateway_dk/NN_FFSSPSNP_1133_5A06/rcw_2100_qspiboot.rcw
+new file mode 100755
+index 0000000..2e49fce
+--- /dev/null
++++ b/gateway_dk/NN_FFSSPSNP_1133_5A06/rcw_2100_qspiboot.rcw
+@@ -0,0 +1,8 @@
++/*
++ * Gateway Development Kit - QSPI boot
++ * To build, just enter "make" in the top level directory.
++ */
++
++PBI_SRC=4                         /* QSPI (b0100) */
++
++#include "gateway_dk_common.rcwi"
+diff --git a/gateway_dk/README b/gateway_dk/README
+new file mode 100644
+index 0000000..52e816e
+--- /dev/null
++++ b/gateway_dk/README
+@@ -0,0 +1,3 @@
++Reset Configuration Word for the Mono Gateway Development Kit
++(LS1046A-based). Full build and deployment documentation lives in the
++meta-mono Yocto layer.
+-- 
+2.47.3
+
