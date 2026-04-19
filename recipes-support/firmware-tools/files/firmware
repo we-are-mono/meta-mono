@@ -187,11 +187,24 @@ fetch_via_usb() {
             # Look for the file pair in known locations.
             # Track .bin-only and .sig-only locations separately so we can
             # give a useful error if the user forgot one of the two files.
+            #
+            # seen_inodes guards against case-insensitive filesystems (exFAT,
+            # FAT32) where "firmware/", "Firmware/", and "FIRMWARE/" all
+            # resolve to the same physical directory. We record the inode of
+            # each matched directory and skip it if already seen, so only one
+            # match is recorded regardless of which spelling was probed first.
+            local seen_inodes=""
             for rel in "" "firmware/" "Firmware/" "FIRMWARE/"; do
                 local has_bin=0 has_sig=0
                 [ -f "${mountpoint}/${rel}${fw_file}" ] && has_bin=1
                 [ -f "${mountpoint}/${rel}${sig_file}" ] && has_sig=1
                 if [ "$has_bin" = 1 ] && [ "$has_sig" = 1 ]; then
+                    local inode
+                    inode=$(stat -c '%i' "${mountpoint}/${rel:-.}" 2>/dev/null) || true
+                    if [ -n "$inode" ] && echo "$seen_inodes" | grep -qF "|${inode}|"; then
+                        continue
+                    fi
+                    seen_inodes="${seen_inodes}|${inode}|"
                     matches="${matches}/dev/${part}:${rel}
 "
                 elif [ "$has_bin" = 1 ]; then
