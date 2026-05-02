@@ -21,6 +21,8 @@ SRCREV = "${NXP_LF_SRCREV_ATF}"
 PLATFORM = "gateway_dk"
 UBOOT_BINARY = "u-boot.bin"
 BOOTTYPE ?= "qspi emmc"
+SFP0TYPE ?= "10g"
+SFP1TYPE ?= "10g"
 
 # requires CROSS_COMPILE set by hand as there is no configure script
 export CROSS_COMPILE = "${TARGET_PREFIX}"
@@ -37,12 +39,33 @@ do_configure[noexec] = "1"
 
 do_compile() {
     for d in ${BOOTTYPE}; do
-        case $d in
-        qspi)
-            rcwimg="${RCWQSPI}"
+        case "${SFP0TYPE}:${SFP1TYPE}:$d" in
+        10g:10g:qspi)
+            rcwimg="${RCWQSPI_SFP0_10G_SFP1_10G}"
             ;;
-        emmc)
-            rcwimg="${RCWEMMC}"
+        10g:10g:emmc)
+            rcwimg="${RCWEMMC_SFP0_10G_SFP1_10G}"
+            ;;
+        10g:1g:qspi)
+            rcwimg="${RCWQSPI_SFP0_10G_SFP1_1G}"
+            ;;
+        10g:1g:emmc)
+            rcwimg="${RCWEMMC_SFP0_10G_SFP1_1G}"
+            ;;
+        1g:10g:qspi)
+            rcwimg="${RCWQSPI_SFP0_1G_SFP1_10G}"
+            ;;
+        1g:10g:emmc)
+            rcwimg="${RCWEMMC_SFP0_1G_SFP1_10G}"
+            ;;
+        1g:1g:qspi)
+            rcwimg="${RCWQSPI_SFP0_1G_SFP1_1G}"
+            ;;
+        1g:1g:emmc)
+            rcwimg="${RCWEMMC_SFP0_1G_SFP1_1G}"
+            ;;
+        *)
+            bbfatal "Unsupported SFP0TYPE '${SFP0TYPE}', SFP1TYPE '${SFP1TYPE}', or BOOTTYPE '${d}'"
             ;;
         esac
 

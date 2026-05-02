@@ -1,0 +1,516 @@
+From 49c0f1fcd5fec191bddab3112894e1c7d8c894ac Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?M=C3=B4she=20van=20der=20Sterre?= <me@moshe.nl>
+Date: Sat, 2 May 2026 18:23:18 +0200
+Subject: [PATCH] gateway_dk: add SFP Base-X RCW profiles
+
+Upstream-Status: Inappropriate [product-specific]
+
+---
+ .../rcw_2100_emmcboot.rcw                     | 76 +++++++++++++++++++
+ .../rcw_2100_qspiboot.rcw                     | 76 +++++++++++++++++++
+ .../rcw_2100_emmcboot.rcw                     | 76 +++++++++++++++++++
+ .../rcw_2100_qspiboot.rcw                     | 76 +++++++++++++++++++
+ .../rcw_2100_emmcboot.rcw                     | 76 +++++++++++++++++++
+ .../rcw_2100_qspiboot.rcw                     | 76 +++++++++++++++++++
+ 6 files changed, 456 insertions(+)
+ create mode 100644 gateway_dk/NN_FSSSPSNP_1333_5A06/rcw_2100_emmcboot.rcw
+ create mode 100644 gateway_dk/NN_FSSSPSNP_1333_5A06/rcw_2100_qspiboot.rcw
+ create mode 100644 gateway_dk/NN_SFSSPSNP_3133_5A06/rcw_2100_emmcboot.rcw
+ create mode 100644 gateway_dk/NN_SFSSPSNP_3133_5A06/rcw_2100_qspiboot.rcw
+ create mode 100644 gateway_dk/NN_SSSSPSNP_3333_5A06/rcw_2100_emmcboot.rcw
+ create mode 100644 gateway_dk/NN_SSSSPSNP_3333_5A06/rcw_2100_qspiboot.rcw
+
+diff --git a/gateway_dk/NN_FSSSPSNP_1333_5A06/rcw_2100_emmcboot.rcw b/gateway_dk/NN_FSSSPSNP_1333_5A06/rcw_2100_emmcboot.rcw
+new file mode 100644
+index 0000000..41ce806
+--- /dev/null
++++ b/gateway_dk/NN_FSSSPSNP_1333_5A06/rcw_2100_emmcboot.rcw
+@@ -0,0 +1,76 @@
++/*
++ * To build, just enter "make" in the top level directory.
++ */
++
++#include <../ls1046ardb/ls1046a.rcwi>
++
++%littleendian64b=1
++%dont64bswapcrc=1
++
++/* clocking */
++SYSCLK_FREQ=600                   /* SYSCLK input = 600 * 166.667 kHz = 100 MHz */
++SYS_PLL_RAT=6                     /* platform clock =  6 * SYSCLK =  600 MHz */
++MEM_PLL_RAT=21                    /* DDR clock = 21 * SYSCLK = 2100 MT/s */
++CGA_PLL1_RAT=16                   /* PLL1 (CPU) = 16 * SYSCLK = 1600 MHz */
++CGA_PLL2_RAT=14                   /* PLL2 (FMan, eSDHC, QSPI) = 14 * SYSCLK = 1400 MHz */
++HWA_CGA_M2_CLK_SEL=1              /* QSPI clock selector */
++HWA_CGA_M1_CLK_SEL=6              /* b110 Group A PLL2 /2 is clock, for FMAN */
++
++/* SerDes settings */
++SRDS_PRTCL_S1=4915                /* 0x1333: 0=XFI.9, 1=SGMII.10, 2=SGMII.5, 3=SGMII.6 */
++SRDS_PRTCL_S2=23046               /* 0x5a06: 0=PCIe 1.0x1, 1=SGMII.2, 2=OFF, 3=PCIe 3.0x1 */
++SRDS_PLL_REF_CLK_SEL_S1=1         /* 100/156.25 Mhz Clock for SerDes 1 */
++SRDS_PLL_REF_CLK_SEL_S2=0         /* 100/100 Mhz Clock for Serdes 2 */
++SRDS_DIV_PEX_S1=0                 /* For PCIe, define later */
++SRDS_DIV_PEX_S2=0                 /* For PCIe, define later */
++
++/* I/O bank voltages, all set to 0 for 1.8V */
++TVDD_VSEL=0
++DVDD_VSEL=0
++EVDD_VSEL=0
++
++/* memory settings */
++DDR_FDBK_MULT=2                   /* Mandatory */
++DDR_REFCLK_SEL=1                  /* 0=DDRCLK, 1=DIFF_SYSCLK, both should work */
++DRAM_LAT=1                        /* b01 for latencies, higher than 8-8-8 */
++
++/* boot settings */
++PBI_SRC=6                         /* EMMC (b0110) */
++SB_EN=0                           /* secure boot is not enabled */
++
++/* pin multiplexing, all IFC_* options set the pins to QSPI */
++IFC_GRP_A_EXT=1
++IFC_GRP_D_EXT=1
++IFC_GRP_E1_EXT=0
++IFC_GRP_E1_BASE=1
++IFC_GRP_F_EXT=1
++IRQ_OUT=1                         /* Mandatory */
++IRQ_EXT=0                         /* We want IRQ/GPIO pins instead of FTM */
++IRQ_BASE=1                        /* All GPIO1[23:31] pins set to IRQ */
++IIC2_EXT=0                        /* We want I2C pins */
++EC1=1                             /* We want GPIO3, not EC1 */
++EC2=1                             /* We want GPIO3, not EC2 */
++EM1=1                             /* We want GPIO3, not EM1 */
++UART_BASE=6                       /* b110, all UART pins assigned to UART */
++SDHC_BASE=0
++SPI_EXT=2                         /* We need GPIO2_02 for SFP clock selector */
++SPI_BASE=0
++USB_DRVVBUS=0
++USB_PWRFAULT=0
++
++.pbi
++// Set the BOOTLOCPTR
++write 0x570600, 0x00000000
++write 0x570604, 0x10000000
++.end
++
++.pbi
++// Make sure to use IIC3_SCL and IIC3_SDA (GPIO_4[10|11] by default)
++write 0x57040c, 0x00000000
++.end
++
++#include <../ls1046ardb/cci_barrier_disable.rcw>
++#include <../ls1046ardb/usb_phy_freq.rcw>
++#include <../ls1046ardb/a008851.rcw>
++#include <../ls1046ardb/a010477.rcw>
++#include <../ls1046ardb/a009531.rcw>
+diff --git a/gateway_dk/NN_FSSSPSNP_1333_5A06/rcw_2100_qspiboot.rcw b/gateway_dk/NN_FSSSPSNP_1333_5A06/rcw_2100_qspiboot.rcw
+new file mode 100644
+index 0000000..032272f
+--- /dev/null
++++ b/gateway_dk/NN_FSSSPSNP_1333_5A06/rcw_2100_qspiboot.rcw
+@@ -0,0 +1,76 @@
++/*
++ * To build, just enter "make" in the top level directory.
++ */
++
++#include <../ls1046ardb/ls1046a.rcwi>
++
++%littleendian64b=1
++%dont64bswapcrc=1
++
++/* clocking */
++SYSCLK_FREQ=600                   /* SYSCLK input = 600 * 166.667 kHz = 100 MHz */
++SYS_PLL_RAT=6                     /* platform clock =  6 * SYSCLK =  600 MHz */
++MEM_PLL_RAT=21                    /* DDR clock = 21 * SYSCLK = 2100 MT/s */
++CGA_PLL1_RAT=16                   /* PLL1 (CPU) = 16 * SYSCLK = 1600 MHz */
++CGA_PLL2_RAT=14                   /* PLL2 (FMan, eSDHC, QSPI) = 14 * SYSCLK = 1400 MHz */
++HWA_CGA_M2_CLK_SEL=1              /* QSPI clock selector */
++HWA_CGA_M1_CLK_SEL=6              /* b110 Group A PLL2 /2 is clock, for FMAN */
++
++/* SerDes settings */
++SRDS_PRTCL_S1=4915                /* 0x1333: 0=XFI.9, 1=SGMII.10, 2=SGMII.5, 3=SGMII.6 */
++SRDS_PRTCL_S2=23046               /* 0x5a06: 0=PCIe 1.0x1, 1=SGMII.2, 2=OFF, 3=PCIe 3.0x1 */
++SRDS_PLL_REF_CLK_SEL_S1=1         /* 100/156.25 Mhz Clock for SerDes 1 */
++SRDS_PLL_REF_CLK_SEL_S2=0         /* 100/100 Mhz Clock for Serdes 2 */
++SRDS_DIV_PEX_S1=0                 /* For PCIe, define later */
++SRDS_DIV_PEX_S2=0                 /* For PCIe, define later */
++
++/* I/O bank voltages, all set to 0 for 1.8V */
++TVDD_VSEL=0
++DVDD_VSEL=0
++EVDD_VSEL=0
++
++/* memory settings */
++DDR_FDBK_MULT=2                   /* Mandatory */
++DDR_REFCLK_SEL=1                  /* 0=DDRCLK, 1=DIFF_SYSCLK, both should work */
++DRAM_LAT=1                        /* b01 for latencies, higher than 8-8-8 */
++
++/* boot settings */
++PBI_SRC=4                         /* QSPI (b0100) */
++SB_EN=0                           /* secure boot is not enabled */
++
++/* pin multiplexing, all IFC_* options set the pins to QSPI */
++IFC_GRP_A_EXT=1
++IFC_GRP_D_EXT=1
++IFC_GRP_E1_EXT=0
++IFC_GRP_E1_BASE=1
++IFC_GRP_F_EXT=1
++IRQ_OUT=1                         /* Mandatory */
++IRQ_EXT=0                         /* We want IRQ/GPIO pins instead of FTM */
++IRQ_BASE=1                        /* All GPIO1[23:31] pins set to IRQ */
++IIC2_EXT=0                        /* We want I2C pins */
++EC1=1                             /* We want GPIO3, not EC1 */
++EC2=1                             /* We want GPIO3, not EC2 */
++EM1=1                             /* We want GPIO3, not EM1 */
++UART_BASE=6                       /* b110, all UART pins assigned to UART */
++SDHC_BASE=0
++SPI_EXT=2                         /* We need GPIO2_02 for SFP clock selector */
++SPI_BASE=0
++USB_DRVVBUS=0
++USB_PWRFAULT=0
++
++.pbi
++// Set the BOOTLOCPTR
++write 0x570600, 0x00000000
++write 0x570604, 0x10000000
++.end
++
++.pbi
++// Make sure to use IIC3_SCL and IIC3_SDA (GPIO_4[10|11] by default)
++write 0x57040c, 0x00000000
++.end
++
++#include <../ls1046ardb/cci_barrier_disable.rcw>
++#include <../ls1046ardb/usb_phy_freq.rcw>
++#include <../ls1046ardb/a008851.rcw>
++#include <../ls1046ardb/a010477.rcw>
++#include <../ls1046ardb/a009531.rcw>
+diff --git a/gateway_dk/NN_SFSSPSNP_3133_5A06/rcw_2100_emmcboot.rcw b/gateway_dk/NN_SFSSPSNP_3133_5A06/rcw_2100_emmcboot.rcw
+new file mode 100644
+index 0000000..dc2d27b
+--- /dev/null
++++ b/gateway_dk/NN_SFSSPSNP_3133_5A06/rcw_2100_emmcboot.rcw
+@@ -0,0 +1,76 @@
++/*
++ * To build, just enter "make" in the top level directory.
++ */
++
++#include <../ls1046ardb/ls1046a.rcwi>
++
++%littleendian64b=1
++%dont64bswapcrc=1
++
++/* clocking */
++SYSCLK_FREQ=600                   /* SYSCLK input = 600 * 166.667 kHz = 100 MHz */
++SYS_PLL_RAT=6                     /* platform clock =  6 * SYSCLK =  600 MHz */
++MEM_PLL_RAT=21                    /* DDR clock = 21 * SYSCLK = 2100 MT/s */
++CGA_PLL1_RAT=16                   /* PLL1 (CPU) = 16 * SYSCLK = 1600 MHz */
++CGA_PLL2_RAT=14                   /* PLL2 (FMan, eSDHC, QSPI) = 14 * SYSCLK = 1400 MHz */
++HWA_CGA_M2_CLK_SEL=1              /* QSPI clock selector */
++HWA_CGA_M1_CLK_SEL=6              /* b110 Group A PLL2 /2 is clock, for FMAN */
++
++/* SerDes settings */
++SRDS_PRTCL_S1=12595               /* 0x3133: 0=SGMII.9, 1=XFI.10, 2=SGMII.5, 3=SGMII.6 */
++SRDS_PRTCL_S2=23046               /* 0x5a06: 0=PCIe 1.0x1, 1=SGMII.2, 2=OFF, 3=PCIe 3.0x1 */
++SRDS_PLL_REF_CLK_SEL_S1=1         /* 100/156.25 Mhz Clock for SerDes 1 */
++SRDS_PLL_REF_CLK_SEL_S2=0         /* 100/100 Mhz Clock for Serdes 2 */
++SRDS_DIV_PEX_S1=0                 /* For PCIe, define later */
++SRDS_DIV_PEX_S2=0                 /* For PCIe, define later */
++
++/* I/O bank voltages, all set to 0 for 1.8V */
++TVDD_VSEL=0
++DVDD_VSEL=0
++EVDD_VSEL=0
++
++/* memory settings */
++DDR_FDBK_MULT=2                   /* Mandatory */
++DDR_REFCLK_SEL=1                  /* 0=DDRCLK, 1=DIFF_SYSCLK, both should work */
++DRAM_LAT=1                        /* b01 for latencies, higher than 8-8-8 */
++
++/* boot settings */
++PBI_SRC=6                         /* EMMC (b0110) */
++SB_EN=0                           /* secure boot is not enabled */
++
++/* pin multiplexing, all IFC_* options set the pins to QSPI */
++IFC_GRP_A_EXT=1
++IFC_GRP_D_EXT=1
++IFC_GRP_E1_EXT=0
++IFC_GRP_E1_BASE=1
++IFC_GRP_F_EXT=1
++IRQ_OUT=1                         /* Mandatory */
++IRQ_EXT=0                         /* We want IRQ/GPIO pins instead of FTM */
++IRQ_BASE=1                        /* All GPIO1[23:31] pins set to IRQ */
++IIC2_EXT=0                        /* We want I2C pins */
++EC1=1                             /* We want GPIO3, not EC1 */
++EC2=1                             /* We want GPIO3, not EC2 */
++EM1=1                             /* We want GPIO3, not EM1 */
++UART_BASE=6                       /* b110, all UART pins assigned to UART */
++SDHC_BASE=0
++SPI_EXT=2                         /* We need GPIO2_02 for SFP clock selector */
++SPI_BASE=0
++USB_DRVVBUS=0
++USB_PWRFAULT=0
++
++.pbi
++// Set the BOOTLOCPTR
++write 0x570600, 0x00000000
++write 0x570604, 0x10000000
++.end
++
++.pbi
++// Make sure to use IIC3_SCL and IIC3_SDA (GPIO_4[10|11] by default)
++write 0x57040c, 0x00000000
++.end
++
++#include <../ls1046ardb/cci_barrier_disable.rcw>
++#include <../ls1046ardb/usb_phy_freq.rcw>
++#include <../ls1046ardb/a008851.rcw>
++#include <../ls1046ardb/a010477.rcw>
++#include <../ls1046ardb/a009531.rcw>
+diff --git a/gateway_dk/NN_SFSSPSNP_3133_5A06/rcw_2100_qspiboot.rcw b/gateway_dk/NN_SFSSPSNP_3133_5A06/rcw_2100_qspiboot.rcw
+new file mode 100644
+index 0000000..22037cd
+--- /dev/null
++++ b/gateway_dk/NN_SFSSPSNP_3133_5A06/rcw_2100_qspiboot.rcw
+@@ -0,0 +1,76 @@
++/*
++ * To build, just enter "make" in the top level directory.
++ */
++
++#include <../ls1046ardb/ls1046a.rcwi>
++
++%littleendian64b=1
++%dont64bswapcrc=1
++
++/* clocking */
++SYSCLK_FREQ=600                   /* SYSCLK input = 600 * 166.667 kHz = 100 MHz */
++SYS_PLL_RAT=6                     /* platform clock =  6 * SYSCLK =  600 MHz */
++MEM_PLL_RAT=21                    /* DDR clock = 21 * SYSCLK = 2100 MT/s */
++CGA_PLL1_RAT=16                   /* PLL1 (CPU) = 16 * SYSCLK = 1600 MHz */
++CGA_PLL2_RAT=14                   /* PLL2 (FMan, eSDHC, QSPI) = 14 * SYSCLK = 1400 MHz */
++HWA_CGA_M2_CLK_SEL=1              /* QSPI clock selector */
++HWA_CGA_M1_CLK_SEL=6              /* b110 Group A PLL2 /2 is clock, for FMAN */
++
++/* SerDes settings */
++SRDS_PRTCL_S1=12595               /* 0x3133: 0=SGMII.9, 1=XFI.10, 2=SGMII.5, 3=SGMII.6 */
++SRDS_PRTCL_S2=23046               /* 0x5a06: 0=PCIe 1.0x1, 1=SGMII.2, 2=OFF, 3=PCIe 3.0x1 */
++SRDS_PLL_REF_CLK_SEL_S1=1         /* 100/156.25 Mhz Clock for SerDes 1 */
++SRDS_PLL_REF_CLK_SEL_S2=0         /* 100/100 Mhz Clock for Serdes 2 */
++SRDS_DIV_PEX_S1=0                 /* For PCIe, define later */
++SRDS_DIV_PEX_S2=0                 /* For PCIe, define later */
++
++/* I/O bank voltages, all set to 0 for 1.8V */
++TVDD_VSEL=0
++DVDD_VSEL=0
++EVDD_VSEL=0
++
++/* memory settings */
++DDR_FDBK_MULT=2                   /* Mandatory */
++DDR_REFCLK_SEL=1                  /* 0=DDRCLK, 1=DIFF_SYSCLK, both should work */
++DRAM_LAT=1                        /* b01 for latencies, higher than 8-8-8 */
++
++/* boot settings */
++PBI_SRC=4                         /* QSPI (b0100) */
++SB_EN=0                           /* secure boot is not enabled */
++
++/* pin multiplexing, all IFC_* options set the pins to QSPI */
++IFC_GRP_A_EXT=1
++IFC_GRP_D_EXT=1
++IFC_GRP_E1_EXT=0
++IFC_GRP_E1_BASE=1
++IFC_GRP_F_EXT=1
++IRQ_OUT=1                         /* Mandatory */
++IRQ_EXT=0                         /* We want IRQ/GPIO pins instead of FTM */
++IRQ_BASE=1                        /* All GPIO1[23:31] pins set to IRQ */
++IIC2_EXT=0                        /* We want I2C pins */
++EC1=1                             /* We want GPIO3, not EC1 */
++EC2=1                             /* We want GPIO3, not EC2 */
++EM1=1                             /* We want GPIO3, not EM1 */
++UART_BASE=6                       /* b110, all UART pins assigned to UART */
++SDHC_BASE=0
++SPI_EXT=2                         /* We need GPIO2_02 for SFP clock selector */
++SPI_BASE=0
++USB_DRVVBUS=0
++USB_PWRFAULT=0
++
++.pbi
++// Set the BOOTLOCPTR
++write 0x570600, 0x00000000
++write 0x570604, 0x10000000
++.end
++
++.pbi
++// Make sure to use IIC3_SCL and IIC3_SDA (GPIO_4[10|11] by default)
++write 0x57040c, 0x00000000
++.end
++
++#include <../ls1046ardb/cci_barrier_disable.rcw>
++#include <../ls1046ardb/usb_phy_freq.rcw>
++#include <../ls1046ardb/a008851.rcw>
++#include <../ls1046ardb/a010477.rcw>
++#include <../ls1046ardb/a009531.rcw>
+diff --git a/gateway_dk/NN_SSSSPSNP_3333_5A06/rcw_2100_emmcboot.rcw b/gateway_dk/NN_SSSSPSNP_3333_5A06/rcw_2100_emmcboot.rcw
+new file mode 100644
+index 0000000..dc8ba6e
+--- /dev/null
++++ b/gateway_dk/NN_SSSSPSNP_3333_5A06/rcw_2100_emmcboot.rcw
+@@ -0,0 +1,76 @@
++/*
++ * To build, just enter "make" in the top level directory.
++ */
++
++#include <../ls1046ardb/ls1046a.rcwi>
++
++%littleendian64b=1
++%dont64bswapcrc=1
++
++/* clocking */
++SYSCLK_FREQ=600                   /* SYSCLK input = 600 * 166.667 kHz = 100 MHz */
++SYS_PLL_RAT=6                     /* platform clock =  6 * SYSCLK =  600 MHz */
++MEM_PLL_RAT=21                    /* DDR clock = 21 * SYSCLK = 2100 MT/s */
++CGA_PLL1_RAT=16                   /* PLL1 (CPU) = 16 * SYSCLK = 1600 MHz */
++CGA_PLL2_RAT=14                   /* PLL2 (FMan, eSDHC, QSPI) = 14 * SYSCLK = 1400 MHz */
++HWA_CGA_M2_CLK_SEL=1              /* QSPI clock selector */
++HWA_CGA_M1_CLK_SEL=6              /* b110 Group A PLL2 /2 is clock, for FMAN */
++
++/* SerDes settings */
++SRDS_PRTCL_S1=13107               /* 0x3333: 0=SGMII.9, 1=SGMII.10, 2=SGMII.5, 3=SGMII.6 */
++SRDS_PRTCL_S2=23046               /* 0x5a06: 0=PCIe 1.0x1, 1=SGMII.2, 2=OFF, 3=PCIe 3.0x1 */
++SRDS_PLL_REF_CLK_SEL_S1=1         /* 100/156.25 Mhz Clock for SerDes 1 */
++SRDS_PLL_REF_CLK_SEL_S2=0         /* 100/100 Mhz Clock for Serdes 2 */
++SRDS_DIV_PEX_S1=0                 /* For PCIe, define later */
++SRDS_DIV_PEX_S2=0                 /* For PCIe, define later */
++
++/* I/O bank voltages, all set to 0 for 1.8V */
++TVDD_VSEL=0
++DVDD_VSEL=0
++EVDD_VSEL=0
++
++/* memory settings */
++DDR_FDBK_MULT=2                   /* Mandatory */
++DDR_REFCLK_SEL=1                  /* 0=DDRCLK, 1=DIFF_SYSCLK, both should work */
++DRAM_LAT=1                        /* b01 for latencies, higher than 8-8-8 */
++
++/* boot settings */
++PBI_SRC=6                         /* EMMC (b0110) */
++SB_EN=0                           /* secure boot is not enabled */
++
++/* pin multiplexing, all IFC_* options set the pins to QSPI */
++IFC_GRP_A_EXT=1
++IFC_GRP_D_EXT=1
++IFC_GRP_E1_EXT=0
++IFC_GRP_E1_BASE=1
++IFC_GRP_F_EXT=1
++IRQ_OUT=1                         /* Mandatory */
++IRQ_EXT=0                         /* We want IRQ/GPIO pins instead of FTM */
++IRQ_BASE=1                        /* All GPIO1[23:31] pins set to IRQ */
++IIC2_EXT=0                        /* We want I2C pins */
++EC1=1                             /* We want GPIO3, not EC1 */
++EC2=1                             /* We want GPIO3, not EC2 */
++EM1=1                             /* We want GPIO3, not EM1 */
++UART_BASE=6                       /* b110, all UART pins assigned to UART */
++SDHC_BASE=0
++SPI_EXT=2                         /* We need GPIO2_02 for SFP clock selector */
++SPI_BASE=0
++USB_DRVVBUS=0
++USB_PWRFAULT=0
++
++.pbi
++// Set the BOOTLOCPTR
++write 0x570600, 0x00000000
++write 0x570604, 0x10000000
++.end
++
++.pbi
++// Make sure to use IIC3_SCL and IIC3_SDA (GPIO_4[10|11] by default)
++write 0x57040c, 0x00000000
++.end
++
++#include <../ls1046ardb/cci_barrier_disable.rcw>
++#include <../ls1046ardb/usb_phy_freq.rcw>
++#include <../ls1046ardb/a008851.rcw>
++#include <../ls1046ardb/a010477.rcw>
++#include <../ls1046ardb/a009531.rcw>
+diff --git a/gateway_dk/NN_SSSSPSNP_3333_5A06/rcw_2100_qspiboot.rcw b/gateway_dk/NN_SSSSPSNP_3333_5A06/rcw_2100_qspiboot.rcw
+new file mode 100644
+index 0000000..345f3f0
+--- /dev/null
++++ b/gateway_dk/NN_SSSSPSNP_3333_5A06/rcw_2100_qspiboot.rcw
+@@ -0,0 +1,76 @@
++/*
++ * To build, just enter "make" in the top level directory.
++ */
++
++#include <../ls1046ardb/ls1046a.rcwi>
++
++%littleendian64b=1
++%dont64bswapcrc=1
++
++/* clocking */
++SYSCLK_FREQ=600                   /* SYSCLK input = 600 * 166.667 kHz = 100 MHz */
++SYS_PLL_RAT=6                     /* platform clock =  6 * SYSCLK =  600 MHz */
++MEM_PLL_RAT=21                    /* DDR clock = 21 * SYSCLK = 2100 MT/s */
++CGA_PLL1_RAT=16                   /* PLL1 (CPU) = 16 * SYSCLK = 1600 MHz */
++CGA_PLL2_RAT=14                   /* PLL2 (FMan, eSDHC, QSPI) = 14 * SYSCLK = 1400 MHz */
++HWA_CGA_M2_CLK_SEL=1              /* QSPI clock selector */
++HWA_CGA_M1_CLK_SEL=6              /* b110 Group A PLL2 /2 is clock, for FMAN */
++
++/* SerDes settings */
++SRDS_PRTCL_S1=13107               /* 0x3333: 0=SGMII.9, 1=SGMII.10, 2=SGMII.5, 3=SGMII.6 */
++SRDS_PRTCL_S2=23046               /* 0x5a06: 0=PCIe 1.0x1, 1=SGMII.2, 2=OFF, 3=PCIe 3.0x1 */
++SRDS_PLL_REF_CLK_SEL_S1=1         /* 100/156.25 Mhz Clock for SerDes 1 */
++SRDS_PLL_REF_CLK_SEL_S2=0         /* 100/100 Mhz Clock for Serdes 2 */
++SRDS_DIV_PEX_S1=0                 /* For PCIe, define later */
++SRDS_DIV_PEX_S2=0                 /* For PCIe, define later */
++
++/* I/O bank voltages, all set to 0 for 1.8V */
++TVDD_VSEL=0
++DVDD_VSEL=0
++EVDD_VSEL=0
++
++/* memory settings */
++DDR_FDBK_MULT=2                   /* Mandatory */
++DDR_REFCLK_SEL=1                  /* 0=DDRCLK, 1=DIFF_SYSCLK, both should work */
++DRAM_LAT=1                        /* b01 for latencies, higher than 8-8-8 */
++
++/* boot settings */
++PBI_SRC=4                         /* QSPI (b0100) */
++SB_EN=0                           /* secure boot is not enabled */
++
++/* pin multiplexing, all IFC_* options set the pins to QSPI */
++IFC_GRP_A_EXT=1
++IFC_GRP_D_EXT=1
++IFC_GRP_E1_EXT=0
++IFC_GRP_E1_BASE=1
++IFC_GRP_F_EXT=1
++IRQ_OUT=1                         /* Mandatory */
++IRQ_EXT=0                         /* We want IRQ/GPIO pins instead of FTM */
++IRQ_BASE=1                        /* All GPIO1[23:31] pins set to IRQ */
++IIC2_EXT=0                        /* We want I2C pins */
++EC1=1                             /* We want GPIO3, not EC1 */
++EC2=1                             /* We want GPIO3, not EC2 */
++EM1=1                             /* We want GPIO3, not EM1 */
++UART_BASE=6                       /* b110, all UART pins assigned to UART */
++SDHC_BASE=0
++SPI_EXT=2                         /* We need GPIO2_02 for SFP clock selector */
++SPI_BASE=0
++USB_DRVVBUS=0
++USB_PWRFAULT=0
++
++.pbi
++// Set the BOOTLOCPTR
++write 0x570600, 0x00000000
++write 0x570604, 0x10000000
++.end
++
++.pbi
++// Make sure to use IIC3_SCL and IIC3_SDA (GPIO_4[10|11] by default)
++write 0x57040c, 0x00000000
++.end
++
++#include <../ls1046ardb/cci_barrier_disable.rcw>
++#include <../ls1046ardb/usb_phy_freq.rcw>
++#include <../ls1046ardb/a008851.rcw>
++#include <../ls1046ardb/a010477.rcw>
++#include <../ls1046ardb/a009531.rcw>
+-- 
+2.51.0
