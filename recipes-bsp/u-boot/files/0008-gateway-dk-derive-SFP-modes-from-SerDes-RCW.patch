@@ -1,0 +1,252 @@
+From 70baa83ef1aa138de8612053da7d5630795bc8f3 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?M=C3=B4she=20van=20der=20Sterre?= <me@moshe.nl>
+Date: Fri, 7 Aug 2026 15:34:46 +0200
+Subject: [PATCH] board: gateway_dk: derive SFP modes from SerDes RCW
+
+Upstream-Status: Inappropriate [product-specific]
+
+Signed-off-by: Môshe van der Sterre <me@moshe.nl>
+---
+ board/freescale/gateway_dk/gateway_dk.c | 195 +++++++++++++++++++++++-
+ 1 file changed, 194 insertions(+), 1 deletion(-)
+
+diff --git a/board/freescale/gateway_dk/gateway_dk.c b/board/freescale/gateway_dk/gateway_dk.c
+index 53beeee70e2..1583b761d2e 100644
+--- a/board/freescale/gateway_dk/gateway_dk.c
++++ b/board/freescale/gateway_dk/gateway_dk.c
+@@ -27,9 +27,11 @@
+ #include <fsl_esdhc.h>
+ #include <fsl_dspi.h>
+ #include <dm.h>
++#include <linux/libfdt.h>
+ 
+ #include "../common/i2c_mux.h"
+ #include "setup/hw_test.h"
++#include "setup/i2c_helpers.h"
+ 
+ DECLARE_GLOBAL_DATA_PTR;
+ 
+@@ -61,6 +63,32 @@ void lp5810a_set_status(int any_test_failed);
+ #define DCFG_PORSR1_OFFSET		0x000
+ #define ERRATUM_A010539_TRIGGER_OFFSET	0x1A8
+ 
++#define MONO_SRDS1_SFP0_10G_SFP1_10G	0x1133
++#define MONO_SRDS1_SFP0_10G_SFP1_1G	0x1333
++#define MONO_SRDS1_SFP0_1G_SFP1_1G	0x3333
++
++#define MONO_SFP0_ETH_PATH	"/soc/fman@1a00000/ethernet@f0000"
++#define MONO_SFP1_ETH_PATH	"/soc/fman@1a00000/ethernet@f2000"
++
++#define MONO_RETIMER_I2C_BUS		0
++#define MONO_RETIMER_I2C_MUX_ADDR	0x70
++#define MONO_RETIMER_I2C_MUX_CHANNEL	0x01
++#define MONO_RETIMER_ADDR		0x18
++#define MONO_RETIMER_DEVICE_ID_REG	0x01
++#define MONO_RETIMER_EXPECTED_ID	0xd0
++#define MONO_RETIMER_CHANNEL_REG	0xff
++#define MONO_RETIMER_CHANNEL_PAGE_BASE	0x04
++#define MONO_RETIMER_PFD_OVERRIDE_REG	0x09
++#define MONO_RETIMER_PFD_CDR_BYPASS	BIT(5)
++#define MONO_RETIMER_DATA_MUX_REG	0x1e
++#define MONO_RETIMER_DATA_MUX_MASK	(BIT(7) | BIT(6) | BIT(5))
++
++enum mono_sfp_mode {
++	MONO_SFP_MODE_10G,
++	MONO_SFP_MODE_1000BASEX,
++	MONO_SFP_MODE_UNKNOWN,
++};
++
+ static void erratum_a010539(void)
+ {
+ 	u32 porsr1_val;
+@@ -71,6 +99,169 @@ static void erratum_a010539(void)
+ 	out_be32((void *)(CFG_SYS_FSL_SCFG_ADDR + ERRATUM_A010539_TRIGGER_OFFSET), 0xFFFFFFFF);
+ }
+ 
++static u32 mono_get_serdes1_protocol(void)
++{
++	struct ccsr_gur __iomem *gur = (void *)(CFG_SYS_FSL_GUTS_ADDR);
++	u32 protocol = gur_in32(&gur->rcwsr[4]);
++
++	protocol &= FSL_CHASSIS2_RCWSR4_SRDS1_PRTCL_MASK;
++	protocol >>= FSL_CHASSIS2_RCWSR4_SRDS1_PRTCL_SHIFT;
++
++	return protocol;
++}
++
++static enum mono_sfp_mode mono_sfp_mode_from_serdes1(u32 protocol, int port)
++{
++	switch (protocol) {
++	case MONO_SRDS1_SFP0_10G_SFP1_10G:
++		return MONO_SFP_MODE_10G;
++	case MONO_SRDS1_SFP0_10G_SFP1_1G:
++		return port == 0 ? MONO_SFP_MODE_10G : MONO_SFP_MODE_1000BASEX;
++	case MONO_SRDS1_SFP0_1G_SFP1_1G:
++		return MONO_SFP_MODE_1000BASEX;
++	default:
++		return MONO_SFP_MODE_UNKNOWN;
++	}
++}
++
++static int mono_retimer_update_bits(struct udevice *dev, uint reg, u8 mask, u8 set)
++{
++	int ret = dm_i2c_reg_read(dev, reg);
++	u8 val;
++
++	if (ret < 0)
++		return ret;
++
++	val = (ret & ~mask) | (set & mask);
++	return dm_i2c_reg_write(dev, reg, val);
++}
++
++static int mono_configure_retimer_channel(struct udevice *retimer_dev,
++					  int channel,
++					  enum mono_sfp_mode mode)
++{
++	u8 page = MONO_RETIMER_CHANNEL_PAGE_BASE | channel;
++	u8 bypass = mode == MONO_SFP_MODE_1000BASEX ?
++		MONO_RETIMER_PFD_CDR_BYPASS : 0;
++	int ret;
++
++	ret = dm_i2c_reg_write(retimer_dev, MONO_RETIMER_CHANNEL_REG, page);
++	if (ret)
++		return ret;
++
++	ret = mono_retimer_update_bits(retimer_dev, MONO_RETIMER_PFD_OVERRIDE_REG,
++				       MONO_RETIMER_PFD_CDR_BYPASS, bypass);
++	if (ret)
++		return ret;
++
++	ret = mono_retimer_update_bits(retimer_dev, MONO_RETIMER_DATA_MUX_REG,
++				       MONO_RETIMER_DATA_MUX_MASK, 0);
++	if (ret)
++		return ret;
++
++	return dm_i2c_reg_write(retimer_dev, MONO_RETIMER_CHANNEL_REG, 0);
++}
++
++static void mono_configure_sfp_retimer(void)
++{
++	enum mono_sfp_mode sfp0_mode, sfp1_mode;
++	struct udevice *retimer_dev;
++	u32 serdes1 = mono_get_serdes1_protocol();
++	int ret;
++
++	sfp0_mode = mono_sfp_mode_from_serdes1(serdes1, 0);
++	sfp1_mode = mono_sfp_mode_from_serdes1(serdes1, 1);
++	if (sfp0_mode == MONO_SFP_MODE_UNKNOWN ||
++	    sfp1_mode == MONO_SFP_MODE_UNKNOWN) {
++		printf("SFP retimer: unsupported SerDes1 protocol 0x%x\n", serdes1);
++		return;
++	}
++
++	ret = setup_i2c_muxed_device(MONO_RETIMER_I2C_BUS,
++				     MONO_RETIMER_I2C_MUX_ADDR,
++				     MONO_RETIMER_I2C_MUX_CHANNEL,
++				     MONO_RETIMER_ADDR, &retimer_dev);
++	if (ret) {
++		printf("SFP retimer: setup failed (%d)\n", ret);
++		return;
++	}
++
++	ret = dm_i2c_reg_read(retimer_dev, MONO_RETIMER_DEVICE_ID_REG);
++	if (ret < 0) {
++		printf("SFP retimer: device ID read failed (%d)\n", ret);
++		return;
++	}
++	if ((u8)ret != MONO_RETIMER_EXPECTED_ID) {
++		printf("SFP retimer: unexpected device ID 0x%02x\n", ret & 0xff);
++		return;
++	}
++
++	ret = mono_configure_retimer_channel(retimer_dev, 0, sfp0_mode);
++	if (ret) {
++		printf("SFP0 retimer: configuration failed (%d)\n", ret);
++		return;
++	}
++
++	ret = mono_configure_retimer_channel(retimer_dev, 1, sfp1_mode);
++	if (ret) {
++		printf("SFP1 retimer: configuration failed (%d)\n", ret);
++		return;
++	}
++}
++
++static int mono_fixup_sfp_port(void *blob, const char *path,
++			       enum mono_sfp_mode mode)
++{
++	int node;
++	int ret;
++
++	fdt32_t fixed_link[5];
++
++	if (mode != MONO_SFP_MODE_1000BASEX)
++		return 0;
++
++	node = fdt_path_offset(blob, path);
++	if (node < 0) {
++		printf("SFP DT fixup: missing %s (%d)\n", path, node);
++		return node;
++	}
++
++ 	ret = fdt_setprop_string(blob, node, "phy-connection-type",
++				 "1000base-x");
++	if (ret)
++		return ret;
++
++	fixed_link[0] = cpu_to_fdt32(0);
++	fixed_link[1] = cpu_to_fdt32(1);
++	fixed_link[2] = cpu_to_fdt32(1000);
++	fixed_link[3] = cpu_to_fdt32(0);
++	fixed_link[4] = cpu_to_fdt32(0);
++
++	ret = fdt_setprop(blob, node, "fixed-link",
++			  fixed_link, sizeof(fixed_link));
++
++	if (ret)
++		return ret;
++
++	return 0;
++}
++
++static void mono_fixup_sfp_ports(void *blob)
++{
++	u32 serdes1 = mono_get_serdes1_protocol();
++	enum mono_sfp_mode sfp0_mode = mono_sfp_mode_from_serdes1(serdes1, 0);
++	enum mono_sfp_mode sfp1_mode = mono_sfp_mode_from_serdes1(serdes1, 1);
++	int ret;
++
++	ret = mono_fixup_sfp_port(blob, MONO_SFP0_ETH_PATH, sfp0_mode);
++	if (ret)
++		printf("SFP0 DT fixup failed (%d)\n", ret);
++
++	ret = mono_fixup_sfp_port(blob, MONO_SFP1_ETH_PATH, sfp1_mode);
++	if (ret)
++		printf("SFP1 DT fixup failed (%d)\n", ret);
++}
++
+ int board_early_init_f(void)
+ {
+ 	erratum_a010539();
+@@ -112,6 +303,7 @@ int misc_init_r(void)
+ 
+ 	hw_tests_print_banner("Boot Self-Test");
+ 	r = hw_tests_run(hw_tests, ARRAY_SIZE(hw_tests));
++	mono_configure_sfp_retimer();
+ 
+ 	/* Surface the aggregate result on the front-panel LED and propagate
+ 	 * it to the kernel via bootargs.
+@@ -170,6 +362,7 @@ int ft_board_setup(void *blob, struct bd_info *bd)
+ #endif
+ #endif
+ 
++	mono_fixup_sfp_ports(blob);
+ 	fdt_fixup_icid(blob);
+ 	return 0;
+-}
+\ No newline at end of file
++}
+-- 
+2.52.0
+

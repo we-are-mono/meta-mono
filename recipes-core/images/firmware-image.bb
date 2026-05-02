@@ -19,7 +19,7 @@ SRC_URI = ""
 S = "${UNPACKDIR}/src"
 
 # BOOTTYPE can be overridden on command line
-BOOTTYPE ?= "qspi emmc"
+BOOTTYPE ?= "qspi emmc qspi1g emmc1g"
 
 # Firmware signing key (ECDSA P-256). Set these to enable image signing.
 # If FIRMWARE_SIGNING_KEY is not set or the file doesn't exist, the build
@@ -64,10 +64,12 @@ do_compile() {
         truncate -s 32M ${WORKDIR}/firmware-${d}.bin
 
         # On eMMC the CPU boots from a 4KB offset to avoid the partition table region
-        if [ "$d" = "emmc" ]; then
+        if [ "$d" = "emmc" ] || [ "$d" = "emmc1g" ]; then
             BL2_SEEK=4
+            uboot_env="emmc"
         else
             BL2_SEEK=0
+            uboot_env="qspi"
         fi
 
         # Windows match the partition layout in the kernel device tree (and
@@ -75,13 +77,13 @@ do_compile() {
         # ending at the 32MB image size.
         check_size ${DEPLOY_DIR_IMAGE}/atf/bl2_${d}.pbl $(expr 1024 - $BL2_SEEK)
         check_size ${DEPLOY_DIR_IMAGE}/atf/fip.bin 2048
-        check_size ${DEPLOY_DIR_IMAGE}/u-boot-${d}.env 1024
+        check_size ${DEPLOY_DIR_IMAGE}/u-boot-${uboot_env}.env 1024
         check_size ${DEPLOY_DIR_IMAGE}/${FMAN_UCODE} 1024
         check_size ${DEPLOY_DIR_IMAGE}/fitImage 24576
 
         dd if=${DEPLOY_DIR_IMAGE}/atf/bl2_${d}.pbl of=${WORKDIR}/firmware-${d}.bin bs=1K seek=${BL2_SEEK} conv=notrunc
         dd if=${DEPLOY_DIR_IMAGE}/atf/fip.bin of=${WORKDIR}/firmware-${d}.bin bs=1K seek=1024 conv=notrunc
-        dd if=${DEPLOY_DIR_IMAGE}/u-boot-${d}.env of=${WORKDIR}/firmware-${d}.bin bs=1K seek=3072 conv=notrunc
+        dd if=${DEPLOY_DIR_IMAGE}/u-boot-${uboot_env}.env of=${WORKDIR}/firmware-${d}.bin bs=1K seek=3072 conv=notrunc
         dd if=${DEPLOY_DIR_IMAGE}/${FMAN_UCODE} of=${WORKDIR}/firmware-${d}.bin bs=1K seek=4096 conv=notrunc
         dd if=${DEPLOY_DIR_IMAGE}/fitImage of=${WORKDIR}/firmware-${d}.bin bs=1K seek=8192 conv=notrunc
     done

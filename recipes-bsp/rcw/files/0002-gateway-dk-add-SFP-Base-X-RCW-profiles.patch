@@ -1,0 +1,95 @@
+From 524b648d7785a5a63445f34d44466d30bd135d4a Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?M=C3=B4she=20van=20der=20Sterre?= <me@moshe.nl>
+Date: Fri, 7 Aug 2026 15:55:35 +0200
+Subject: [PATCH] board: gateway_dk: derive SFP modes from SerDes RCW
+
+Upstream-Status: Inappropriate [product-specific]
+
+Signed-off-by: Môshe van der Sterre <me@moshe.nl>
+---
+ gateway_dk/NN_FFSSPSNP_1133_5A06/rcw_2100_emmcboot.rcw   | 5 +++--
+ gateway_dk/NN_FFSSPSNP_1133_5A06/rcw_2100_qspiboot.rcw   | 5 +++--
+ gateway_dk/NN_FSSSPSNP_1333_5A06/rcw_2100_emmcboot.rcw   | 9 +++++++++
+ gateway_dk/NN_FSSSPSNP_1333_5A06/rcw_2100_qspiboot.rcw   | 9 +++++++++
+ .../{NN_FFSSPSNP_1133_5A06 => }/gateway_dk_common.rcwi   | 1 -
+ 5 files changed, 24 insertions(+), 5 deletions(-)
+ create mode 100644 gateway_dk/NN_FSSSPSNP_1333_5A06/rcw_2100_emmcboot.rcw
+ create mode 100644 gateway_dk/NN_FSSSPSNP_1333_5A06/rcw_2100_qspiboot.rcw
+ rename gateway_dk/{NN_FFSSPSNP_1133_5A06 => }/gateway_dk_common.rcwi (97%)
+
+diff --git a/gateway_dk/NN_FFSSPSNP_1133_5A06/rcw_2100_emmcboot.rcw b/gateway_dk/NN_FFSSPSNP_1133_5A06/rcw_2100_emmcboot.rcw
+index 6c321b7..bb99549 100755
+--- a/gateway_dk/NN_FFSSPSNP_1133_5A06/rcw_2100_emmcboot.rcw
++++ b/gateway_dk/NN_FFSSPSNP_1133_5A06/rcw_2100_emmcboot.rcw
+@@ -3,6 +3,7 @@
+  * To build, just enter "make" in the top level directory.
+  */
+ 
+-PBI_SRC=6                         /* eMMC (b0110) */
++#include "../gateway_dk_common.rcwi"
+ 
+-#include "gateway_dk_common.rcwi"
++SRDS_PRTCL_S1=4403                /* 0x1133: 0=XFI.9, 1=XFI.10, 2=SGMII.5, 3=SGMII.6 */
++PBI_SRC=6                         /* eMMC (b0110) */
+diff --git a/gateway_dk/NN_FFSSPSNP_1133_5A06/rcw_2100_qspiboot.rcw b/gateway_dk/NN_FFSSPSNP_1133_5A06/rcw_2100_qspiboot.rcw
+index 2e49fce..fe2936c 100755
+--- a/gateway_dk/NN_FFSSPSNP_1133_5A06/rcw_2100_qspiboot.rcw
++++ b/gateway_dk/NN_FFSSPSNP_1133_5A06/rcw_2100_qspiboot.rcw
+@@ -3,6 +3,7 @@
+  * To build, just enter "make" in the top level directory.
+  */
+ 
+-PBI_SRC=4                         /* QSPI (b0100) */
++#include "../gateway_dk_common.rcwi"
+ 
+-#include "gateway_dk_common.rcwi"
++SRDS_PRTCL_S1=4403                /* 0x1133: 0=XFI.9, 1=XFI.10, 2=SGMII.5, 3=SGMII.6 */
++PBI_SRC=4                         /* QSPI (b0100) */
+diff --git a/gateway_dk/NN_FSSSPSNP_1333_5A06/rcw_2100_emmcboot.rcw b/gateway_dk/NN_FSSSPSNP_1333_5A06/rcw_2100_emmcboot.rcw
+new file mode 100644
+index 0000000..675b9c4
+--- /dev/null
++++ b/gateway_dk/NN_FSSSPSNP_1333_5A06/rcw_2100_emmcboot.rcw
+@@ -0,0 +1,9 @@
++/*
++ * Gateway Development Kit - eMMC boot
++ * To build, just enter "make" in the top level directory.
++ */
++
++#include "../gateway_dk_common.rcwi"
++
++SRDS_PRTCL_S1=4915                /* 0x1333: 0=XFI.9, 1=SGMII.10, 2=SGMII.5, 3=SGMII.6 */
++PBI_SRC=6                         /* eMMC (b0110) */
+diff --git a/gateway_dk/NN_FSSSPSNP_1333_5A06/rcw_2100_qspiboot.rcw b/gateway_dk/NN_FSSSPSNP_1333_5A06/rcw_2100_qspiboot.rcw
+new file mode 100644
+index 0000000..00b2546
+--- /dev/null
++++ b/gateway_dk/NN_FSSSPSNP_1333_5A06/rcw_2100_qspiboot.rcw
+@@ -0,0 +1,9 @@
++/*
++ * Gateway Development Kit - QSPI boot
++ * To build, just enter "make" in the top level directory.
++ */
++
++#include "../gateway_dk_common.rcwi"
++
++SRDS_PRTCL_S1=4915                /* 0x1333: 0=XFI.9, 1=SGMII.10, 2=SGMII.5, 3=SGMII.6 */
++PBI_SRC=4                         /* QSPI (b0100) */
+diff --git a/gateway_dk/NN_FFSSPSNP_1133_5A06/gateway_dk_common.rcwi b/gateway_dk/gateway_dk_common.rcwi
+similarity index 97%
+rename from gateway_dk/NN_FFSSPSNP_1133_5A06/gateway_dk_common.rcwi
+rename to gateway_dk/gateway_dk_common.rcwi
+index cac1ea8..ba2579d 100644
+--- a/gateway_dk/NN_FFSSPSNP_1133_5A06/gateway_dk_common.rcwi
++++ b/gateway_dk/gateway_dk_common.rcwi
+@@ -19,7 +19,6 @@ HWA_CGA_M2_CLK_SEL=1              /* QSPI clock selector */
+ HWA_CGA_M1_CLK_SEL=6              /* b110 Group A PLL2 /2 is clock, for FMAN */
+ 
+ /* SerDes settings */
+-SRDS_PRTCL_S1=4403                /* 0x1133: 0=XFI.9, 1=XFI.10, 2=SGMII.5, 3=SGMII.6 */
+ SRDS_PRTCL_S2=23046               /* 0x5a06: 0=PCIe 1.0x1, 1=SGMII.2, 2=OFF, 3=PCIe 3.0x1 */
+ SRDS_PLL_REF_CLK_SEL_S1=1         /* 100/156.25 Mhz Clock for SerDes 1 */
+ SRDS_PLL_REF_CLK_SEL_S2=0         /* 100/100 Mhz Clock for Serdes 2 */
+-- 
+2.52.0
+

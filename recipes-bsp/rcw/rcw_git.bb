@@ -12,6 +12,7 @@ DEPENDS = "tcl-native"
 require conf/include/nxp-base.inc
 SRC_URI = "git://github.com/nxp-qoriq/rcw;protocol=https;nobranch=1 \
            file://0001-gateway-dk-add-board-support.patch \
+           file://0002-gateway-dk-add-SFP-Base-X-RCW-profiles.patch \
 "
 SRCREV = "${NXP_LF_SRCREV_RCW}"
 
