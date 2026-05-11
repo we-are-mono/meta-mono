@@ -1,0 +1,253 @@
+From 3f3d47c3fbc235eee271664965b230444e93f805 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?M=C3=B4she=20van=20der=20Sterre?= <me@moshe.nl>
+Date: Mon, 11 May 2026 15:27:12 +0200
+Subject: [PATCH] plat/nxp/ls1046a/gateway-dk: add semihost boot support
+
+Upstream-Status: Inappropriate [Mono Gateway DK recovery JTAG boot support]
+---
+ .../plat_make_helper/plat_common_def.mk       |  8 ++
+ plat/nxp/common/setup/common.mk               |  3 +
+ plat/nxp/common/setup/include/plat_common.h   |  1 +
+ plat/nxp/common/setup/ls_io_storage.c         | 78 +++++++++++++++++--
+ plat/nxp/soc-ls1046a/gateway_dk/platform.mk   |  2 +-
+ plat/nxp/soc-ls1046a/soc.c                    | 11 +++
+ 6 files changed, 94 insertions(+), 9 deletions(-)
+
+diff --git a/plat/nxp/common/plat_make_helper/plat_common_def.mk b/plat/nxp/common/plat_make_helper/plat_common_def.mk
+index 86dacf83d..58a7169b4 100644
+--- a/plat/nxp/common/plat_make_helper/plat_common_def.mk
++++ b/plat/nxp/common/plat_make_helper/plat_common_def.mk
+@@ -91,6 +91,14 @@ define add_boot_mode_define
+     else ifeq ($(1),flexspi_nor)
+         $$(eval $$(call SET_NXP_MAKE_FLAG,XSPI_NEEDED,BL2))
+         $$(eval $$(call add_define,FLEXSPI_NOR_BOOT))
++    else ifeq ($(1),semihost)
++        $$(eval $$(call SET_NXP_MAKE_FLAG,QSPI_NEEDED,BL2))
++        $$(eval $$(call SET_NXP_MAKE_FLAG,SD_MMC_NEEDED,BL2))
++        $$(eval $$(call SET_NXP_MAKE_FLAG,IFC_NOR_NEEDED,BL2))
++        $$(eval $$(call add_define,QSPI_BOOT))
++        $$(eval $$(call add_define,EMMC_BOOT))
++        $$(eval $$(call add_define,NOR_BOOT))
++        $$(eval $$(call add_define,SEMIHOST_BOOT))
+     else
+         $$(error $(PLAT) Cannot Support Boot Mode: $(BOOT_MODE))
+     endif
+diff --git a/plat/nxp/common/setup/common.mk b/plat/nxp/common/setup/common.mk
+index b7e16ae60..72d9aca64 100644
+--- a/plat/nxp/common/setup/common.mk
++++ b/plat/nxp/common/setup/common.mk
+@@ -75,8 +75,11 @@ PLAT_BL_COMMON_SOURCES	+=	${XLAT_TABLES_LIB_SRCS}
+ 
+ BL2_SOURCES		+=	drivers/io/io_fip.c			\
+ 				drivers/io/io_memmap.c			\
++				drivers/io/io_semihosting.c		\
+ 				drivers/io/io_storage.c			\
+ 				common/desc_image_load.c 		\
++				lib/semihosting/semihosting.c		\
++				lib/semihosting/${ARCH}/semihosting_call.S	\
+ 				plat/nxp/common/setup/ls_image_load.c		\
+ 				plat/nxp/common/setup/ls_io_storage.c		\
+ 				plat/nxp/common/setup/ls_bl2_el3_setup.c	\
+diff --git a/plat/nxp/common/setup/include/plat_common.h b/plat/nxp/common/setup/include/plat_common.h
+index 45832fa68..86a7488a2 100644
+--- a/plat/nxp/common/setup/include/plat_common.h
++++ b/plat/nxp/common/setup/include/plat_common.h
+@@ -85,6 +85,7 @@ enum boot_device {
+ 	BOOT_DEVICE_SDHC2_EMMC,
+ 	BOOT_DEVICE_FLEXSPI_NOR,
+ 	BOOT_DEVICE_FLEXSPI_NAND,
++	BOOT_DEVICE_SEMIHOST,
+ 	BOOT_DEVICE_NONE
+ };
+ 
+diff --git a/plat/nxp/common/setup/ls_io_storage.c b/plat/nxp/common/setup/ls_io_storage.c
+index 7f01e72c3..69d5aaaec 100644
+--- a/plat/nxp/common/setup/ls_io_storage.c
++++ b/plat/nxp/common/setup/ls_io_storage.c
+@@ -31,6 +31,10 @@
+ #if defined(SD_BOOT) || defined(EMMC_BOOT)
+ #include <sd_mmc.h>
+ #endif
++#if defined(SEMIHOST_BOOT)
++#include <drivers/io/io_semihosting.h>
++#include <lib/semihosting.h>
++#endif
+ #include <tools_share/firmware_image_package.h>
+ 
+ #ifdef CONFIG_DDR_FIP_IMAGE
+@@ -50,9 +54,14 @@ static const io_dev_connector_t *fip_dev_con;
+ static uintptr_t fip_dev_handle;
+ static const io_dev_connector_t *backend_dev_con;
+ 
+-static io_block_spec_t fip_block_spec = {
+-	.offset = PLAT_FIP_OFFSET,
+-	.length = PLAT_FIP_MAX_SIZE
++static union {
++	io_block_spec_t block;
++	io_file_spec_t file;
++} fip_spec = {
++	.block = {
++		.offset = PLAT_FIP_OFFSET,
++		.length = PLAT_FIP_MAX_SIZE
++	}
+ };
+ 
+ static const io_uuid_spec_t bl2_uuid_spec = {
+@@ -137,7 +146,7 @@ struct plat_io_policy {
+ static const struct plat_io_policy policies[] = {
+ 	[FIP_IMAGE_ID] = {
+ 		&backend_dev_handle,
+-		(uintptr_t)&fip_block_spec,
++		(uintptr_t)&fip_spec,
+ 		open_backend
+ 	},
+ 	[BL2_IMAGE_ID] = {
+@@ -269,12 +278,28 @@ int open_backend(const uintptr_t spec)
+ 	return result;
+ }
+ 
++#if defined(CONFIG_DDR_FIP_IMAGE) || defined(POLICY_FUSE_PROVISION)
++static bool backend_is_semihosting(void)
++{
++#if defined(SEMIHOST_BOOT)
++	const io_dev_info_t *dev = (io_dev_info_t *)backend_dev_handle;
++
++	return dev != NULL &&
++	       dev->funcs != NULL &&
++	       dev->funcs->type != NULL &&
++	       dev->funcs->type() == IO_TYPE_SEMIHOSTING;
++#else
++	return false;
++#endif
++}
++#endif
++
+ #if defined(SD_BOOT) || defined(EMMC_BOOT) || defined(NAND_BOOT)
+ static int plat_io_block_setup(size_t fip_offset, uintptr_t block_dev_spec)
+ {
+ 	int io_result;
+ 
+-	fip_block_spec.offset = fip_offset;
++	fip_spec.block.offset = fip_offset;
+ 
+ 	io_result = register_io_dev_block(&backend_dev_con);
+ 	assert(io_result == 0);
+@@ -293,7 +318,7 @@ static int plat_io_memmap_setup(size_t fip_offset)
+ {
+ 	int io_result;
+ 
+-	fip_block_spec.offset = fip_offset;
++	fip_spec.block.offset = fip_offset;
+ 
+ 	io_result = register_io_dev_memmap(&backend_dev_con);
+ 	assert(io_result == 0);
+@@ -481,6 +506,42 @@ int ls_flexspi_nor_io_setup(void)
+ #endif
+ }
+ 
++int semihost_io_setup(void)
++{
++#if defined(SEMIHOST_BOOT)
++	int io_result;
++
++	fip_spec.file.path = "fip.bin";
++	fip_spec.file.mode = FOPEN_MODE_RB;
++	INFO("Semihost boot: opening FIP path '%s'\n", fip_spec.file.path);
++
++	io_result = register_io_dev_sh(&backend_dev_con);
++	if (io_result != 0) {
++		ERROR("Semihost boot: register_io_dev_sh failed (%d)\n",
++		      io_result);
++		assert(io_result == 0);
++		return io_result;
++	}
++
++	io_result = io_dev_open(backend_dev_con, (uintptr_t)NULL,
++				&backend_dev_handle);
++	if (io_result != 0) {
++		ERROR("Semihost boot: io_dev_open failed (%d)\n", io_result);
++		assert(io_result == 0);
++		return io_result;
++	}
++
++	INFO("Semihost boot: FIP backend ready\n");
++	return io_result;
++#else
++	ERROR("Semihost driver not present. Check your BUILD\n");
++
++	/* Should never reach here */
++	assert(false);
++	return -1;
++#endif
++}
++
+ static int (* const ls_io_setup_table[])(void) = {
+ 	[BOOT_DEVICE_IFC_NOR] = ifc_nor_io_setup,
+ 	[BOOT_DEVICE_IFC_NAND] = ifc_nand_io_setup,
+@@ -489,6 +550,7 @@ static int (* const ls_io_setup_table[])(void) = {
+ 	[BOOT_DEVICE_SDHC2_EMMC] = emmc_sdhc2_io_setup,
+ 	[BOOT_DEVICE_FLEXSPI_NOR] = ls_flexspi_nor_io_setup,
+ 	[BOOT_DEVICE_FLEXSPI_NAND] = ls_flexspi_nor_io_setup,
++	[BOOT_DEVICE_SEMIHOST] = semihost_io_setup,
+ };
+ 
+ 
+@@ -538,14 +600,14 @@ int plat_get_image_source(unsigned int image_id, uintptr_t *dev_handle,
+ 		}
+ 	}
+ #ifdef CONFIG_DDR_FIP_IMAGE
+-	else {
++	else if (!backend_is_semihosting()) {
+ 		VERBOSE("Trying alternative IO\n");
+ 		result = plat_get_ddr_fip_image_source(image_id, dev_handle,
+ 						image_spec, open_backend);
+ 	}
+ #endif
+ #ifdef POLICY_FUSE_PROVISION
+-	if (result != 0) {
++	if (result != 0 && !backend_is_semihosting()) {
+ 		VERBOSE("Trying FUSE IO\n");
+ 		result = plat_get_fuse_image_source(image_id, dev_handle,
+ 						image_spec, open_backend);
+diff --git a/plat/nxp/soc-ls1046a/gateway_dk/platform.mk b/plat/nxp/soc-ls1046a/gateway_dk/platform.mk
+index e77b441df..d14a65534 100755
+--- a/plat/nxp/soc-ls1046a/gateway_dk/platform.mk
++++ b/plat/nxp/soc-ls1046a/gateway_dk/platform.mk
+@@ -8,7 +8,7 @@
+ BOOT_MODE			?=	qspi
+ BOARD				:=	gateway_dk
+ POVDD_ENABLE		:=	no
+-SUPPORTED_BOOT_MODE	:=	qspi emmc
++SUPPORTED_BOOT_MODE	:=	qspi emmc semihost
+ 
+ # DDR Compilation Configs
+ CONFIG_STATIC_DDR	:= 1
+diff --git a/plat/nxp/soc-ls1046a/soc.c b/plat/nxp/soc-ls1046a/soc.c
+index 726a924d8..8391be5a9 100644
+--- a/plat/nxp/soc-ls1046a/soc.c
++++ b/plat/nxp/soc-ls1046a/soc.c
+@@ -7,6 +7,7 @@
+ #include <assert.h>
+ 
+ #include <arch.h>
++#include <arch_helpers.h>
+ #include <caam.h>
+ #include <cassert.h>
+ #include <cci.h>
+@@ -229,6 +230,16 @@ enum boot_device get_boot_dev(void)
+ 	uint32_t porsr1;
+ 	uint32_t rcw_src, val;
+ 
++#if defined(SEMIHOST_BOOT)
++	u_register_t mdscr_el1 = read_mdscr_el1();
++
++	if ((mdscr_el1 & (ULL(1) << 14)) != 0U) {
++		return BOOT_DEVICE_SEMIHOST;
++	}
++
++	NOTICE("No debugger found; using normal boot as fallback\n");
++#endif
++
+ 	porsr1 = read_reg_porsr1();
+ 
+ 	rcw_src = (porsr1 & PORSR1_RCW_MASK) >> PORSR1_RCW_SHIFT;

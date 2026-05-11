@@ -14,6 +14,7 @@ require conf/include/nxp-base.inc
 SRC_URI = "git://github.com/nxp-qoriq/atf;protocol=https;nobranch=1 \
            file://0001-plat-nxp-ls1046a-gateway-dk-add-board-support.patch \
            file://0002-plat-nxp-ls1046a-gateway-dk-add-DDR4-initialization.patch \
+           file://0003-plat-nxp-ls1046a-gateway-dk-add-semihost-boot-suppor.patch \
 "
 SRCREV = "${NXP_LF_SRCREV_ATF}"
 
@@ -22,7 +23,7 @@ S = "${WORKDIR}/git"
 # Local variables
 PLATFORM = "gateway_dk"
 UBOOT_BINARY = "u-boot.bin"
-BOOTTYPE ?= "qspi emmc"
+BOOTTYPE ?= "qspi emmc semihost"
 
 # requires CROSS_COMPILE set by hand as there is no configure script
 export CROSS_COMPILE = "${TARGET_PREFIX}"
@@ -41,16 +42,31 @@ do_compile() {
     for d in ${BOOTTYPE}; do
         case $d in
         qspi)
-            rcwimg="${RCWQSPI}"
+            atf_bl2_target="pbl"
+            bl2_artifact_src="bl2_${d}.pbl"
+            bl2_artifact_dst="bl2_${d}.pbl"
+            rcw_arg="RCW=${DEPLOY_DIR_IMAGE}/rcw/gateway_dk/${RCWQSPI}"
             ;;
+
         emmc)
-            rcwimg="${RCWEMMC}"
+            atf_bl2_target="pbl"
+            bl2_artifact_src="bl2_${d}.pbl"
+            bl2_artifact_dst="bl2_${d}.pbl"
+            rcw_arg="RCW=${DEPLOY_DIR_IMAGE}/rcw/gateway_dk/${RCWEMMC}"
             ;;
+
+        semihost)
+            atf_bl2_target="bl2"
+            bl2_artifact_src="bl2.bin"
+            bl2_artifact_dst="bl2_${d}.bin"
+            rcw_arg=""
+            ;;
+
         esac
 
         make V=1 realclean
-        oe_runmake pbl fip PLAT=${PLATFORM} BOOT_MODE=${d} DEBUG=0 LOG_LEVEL=20 RCW=${DEPLOY_DIR_IMAGE}/rcw/gateway_dk/${rcwimg} BL33=${DEPLOY_DIR_IMAGE}/${UBOOT_BINARY}
-        cp ${S}/build/${PLATFORM}/release/bl2_${d}.pbl .
+        oe_runmake ${atf_bl2_target} fip PLAT=${PLATFORM} BOOT_MODE="$d" DEBUG=0 LOG_LEVEL=20 ${rcw_arg} BL33=${DEPLOY_DIR_IMAGE}/${UBOOT_BINARY}
+        cp ${S}/build/${PLATFORM}/release/${bl2_artifact_src} ./${bl2_artifact_dst}
         cp ${S}/build/${PLATFORM}/release/fip.bin .
     done
 }
@@ -60,6 +76,9 @@ inherit deploy
 do_deploy() {
     install -d ${DEPLOYDIR}/atf/
     install -m 0644 ${S}/*.pbl ${DEPLOYDIR}/atf/
+    if ls ${S}/bl2_*.bin >/dev/null 2>&1; then
+        install -m 0644 ${S}/bl2_*.bin ${DEPLOYDIR}/atf/
+    fi
     install -m 0644 ${S}/fip.bin ${DEPLOYDIR}/atf/
 }
 
