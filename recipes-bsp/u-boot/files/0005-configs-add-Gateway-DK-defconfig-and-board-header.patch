@@ -19,9 +19,9 @@ Upstream-Status: Inappropriate [product-specific]
 
 Signed-off-by: Tomaz Zaman <tomaz@mono.si>
 ---
- configs/mono_gateway_dk_defconfig | 111 ++++++++++++++++++++++++++++++
+ configs/mono_gateway_dk_defconfig | 113 ++++++++++++++++++++++++++++++
  include/configs/gateway_dk.h      |  76 ++++++++++++++++++++
- 2 files changed, 187 insertions(+)
+ 2 files changed, 189 insertions(+)
  create mode 100644 configs/mono_gateway_dk_defconfig
  create mode 100644 include/configs/gateway_dk.h
 
@@ -30,7 +30,7 @@ new file mode 100644
 index 00000000000..77db8326ade
 --- /dev/null
 +++ b/configs/mono_gateway_dk_defconfig
-@@ -0,0 +1,111 @@
+@@ -0,0 +1,113 @@
 +CONFIG_ARM=y
 +CONFIG_COUNTER_FREQUENCY=25000000
 +CONFIG_TARGET_GATEWAY_DK=y
@@ -59,6 +59,8 @@ index 00000000000..77db8326ade
 +CONFIG_FIT_VERBOSE=y
 +CONFIG_DISTRO_DEFAULTS=y
 +CONFIG_BOOTDELAY=10
++CONFIG_BOOTCOUNT_LIMIT=y
++CONFIG_BOOTCOUNT_ENV=y
 +CONFIG_OF_BOARD_SETUP=y
 +CONFIG_OF_SYSTEM_SETUP=y
 +CONFIG_USE_BOOTARGS=y
