@@ -60,27 +60,23 @@ The eMMC memory map is identical, but RCW+BL2 starts at a 4KB offset because the
 
 ## Production Sources
 
-Current Yocto release: **Walnascar** (Yocto 5.1)
+Current Yocto release: **Wrynose** (Yocto 6.0 LTS)
+
+All four BSP components track NXP Linux Factory upstream directly; our Gateway-DK changes are carried as patches under `recipes-{bsp,kernel}/*/files/`. SRCREVs and the LF tag live in [`conf/include/nxp-base.inc`](conf/include/nxp-base.inc).
 
 | Package | Tag |
 |---------|-----|
-| [rcw](https://github.com/we-are-mono/rcw) | `mt-6.12.49-2.2.0` |
-| [u-boot](https://github.com/we-are-mono/u-boot) | `mt-6.12.49-2.2.0` |
-| [atf](https://github.com/we-are-mono/atf) | `mt-6.12.49-2.2.0` |
-| [linux](https://github.com/nxp-qoriq/linux) | `lf-6.12.49-2.2.0` |
+| rcw     | `lf-6.12.49-2.2.0` |
+| u-boot  | `lf-6.12.49-2.2.0` |
+| atf     | `lf-6.12.49-2.2.0` |
+| linux   | `lf-6.12.49-2.2.0` |
 
 
 ## Versioning Scheme
 
 NXP uses Linux kernel minor version numbers for development of their firmware components (RCW, U-Boot, ATF) and Linux kernel. Their branches are prefixed with `lf-` and suffixed with `-y` (without patch numbers), e.g., `lf-6.12.y`. Stable releases are tagged with the full kernel version plus an internal SDK version, e.g., `lf-6.12.49-2.2.0`.
 
-We follow the same convention, branching our work from NXP stable releases into `mt-` prefixed branches (e.g., `mt-6.12.y`) and tagging releases accordingly (e.g., `mt-6.12.49-2.2.0`).
-
-Breaking down a tag like `mt-6.12.49-2.2.0`:
-
-- **mt** - Mono Technologies Inc.
-- **6.12.49** - Linux kernel version (major.minor.patch)
-- **2.2.0** - NXP SDK release the branch is based on
+We pin all four components to the same NXP LF tag (currently `lf-6.12.49-2.2.0`) via `conf/include/nxp-base.inc`, and carry our Gateway-DK additions as patches in the relevant `recipes-*/files/` directories. Bumping to a newer NXP LF release means editing one include file and refreshing any patches that no longer apply — see [`CLAUDE.md`](CLAUDE.md) for the procedure.
 
 Firmware images follow CalVer: `YYYY.MM.N` (e.g., `2026.03.1`), set via `FIRMWARE_VERSION` in `conf/machine/gateway-dk.conf`.
 
