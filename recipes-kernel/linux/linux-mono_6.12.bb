@@ -27,8 +27,6 @@ SRC_URI = "git://github.com/nxp-qoriq/linux.git;protocol=https;nobranch=1 \
 
 SRCREV = "${NXP_LF_SRCREV_LINUX}"
 
-S = "${WORKDIR}/git"
-
 do_configure:prepend() {
     cp ${UNPACKDIR}/*.dts ${S}/arch/arm64/boot/dts/freescale/
 }

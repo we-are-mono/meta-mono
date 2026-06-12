@@ -8,8 +8,7 @@ SRC_URI = " \
     file://S95status-led \
 "
 
-S = "${WORKDIR}/sources"
-UNPACKDIR = "${S}"
+S = "${UNPACKDIR}"
 
 do_install() {
     install -d ${D}${bindir}

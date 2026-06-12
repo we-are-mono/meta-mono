@@ -1,0 +1,5 @@
+#!/bin/sh
+# Load LP5812 LED controller kernel module so /sys/class/leds/status:*
+# entries appear before later init scripts (e.g. S95status-led) try to
+# use them.
+modprobe leds-lp5812

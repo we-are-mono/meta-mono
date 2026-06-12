@@ -11,24 +11,16 @@ SRC_URI = " \
     file://S99sfp-led \
 "
 
-S = "${WORKDIR}/sources"
-UNPACKDIR = "${S}"
+S = "${UNPACKDIR}"
 
 # Depends on SFP bus being available
 DEPENDS += "virtual/kernel"
 
 do_install:append() {
-    if ${@bb.utils.contains('DISTRO_FEATURES', 'systemd', 'true', 'false', d)}; then
-        # systemd: modules-load.d
-        install -d ${D}${sysconfdir}/modules-load.d
-        echo "sfp-led" > ${D}${sysconfdir}/modules-load.d/sfp-led.conf
-    else
-        # busybox: init script
-        install -d ${D}${sysconfdir}/init.d
-        install -m 0755 ${S}/S99sfp-led ${D}${sysconfdir}/init.d/
-        install -d ${D}${sysconfdir}/rcS.d
-        ln -sf ../init.d/S99sfp-led ${D}${sysconfdir}/rcS.d/S99sfp-led
-    fi
+    install -d ${D}${sysconfdir}/init.d
+    install -m 0755 ${S}/S99sfp-led ${D}${sysconfdir}/init.d/
+    install -d ${D}${sysconfdir}/rcS.d
+    ln -sf ../init.d/S99sfp-led ${D}${sysconfdir}/rcS.d/S99sfp-led
 }
 
-FILES:${PN} += "${@bb.utils.contains('DISTRO_FEATURES', 'systemd', '${sysconfdir}/modules-load.d/sfp-led.conf', '${sysconfdir}/init.d/S99sfp-led ${sysconfdir}/rcS.d/S99sfp-led', d)}"
+FILES:${PN} += "${sysconfdir}/init.d/S99sfp-led ${sysconfdir}/rcS.d/S99sfp-led"

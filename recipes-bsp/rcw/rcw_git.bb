@@ -15,8 +15,6 @@ SRC_URI = "git://github.com/nxp-qoriq/rcw;protocol=https;nobranch=1 \
 "
 SRCREV = "${NXP_LF_SRCREV_RCW}"
 
-S = "${WORKDIR}/git"
-
 BOARD = "gateway_dk"
 
 do_compile() {

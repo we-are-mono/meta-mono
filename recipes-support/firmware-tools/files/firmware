@@ -256,7 +256,7 @@ fetch_via_usb() {
 }
 
 cmd_update() {
-    local boot_medium target source="net" from_path="" preserve_env=0
+    local boot_medium target source="net" from_path="" preserve_env=0 custom_url=""
 
     # Parse args
     while [ $# -gt 0 ]; do
@@ -264,6 +264,8 @@ cmd_update() {
             --usb) source="usb"; shift ;;
             --from) source="local"; from_path="${2:-}"; shift 2 ;;
             --from=*) source="local"; from_path="${1#--from=}"; shift ;;
+            --url) custom_url="${2:-}"; shift 2 ;;
+            --url=*) custom_url="${1#--url=}"; shift ;;
             --preserve-env) preserve_env=1; shift ;;
             -h|--help)
                 cmd_help
@@ -272,6 +274,18 @@ cmd_update() {
             *) die "Unknown option: $1. Run 'firmware help' for usage." ;;
         esac
     done
+
+    if [ -n "$custom_url" ]; then
+        # Strip a trailing slash so we don't end up with a double slash in URLs
+        custom_url="${custom_url%/}"
+        # --url only makes sense for the network source
+        if [ "$source" != "net" ]; then
+            die "--url cannot be combined with --usb or --from"
+        fi
+        # Dynamic scope: shadow the global FIRMWARE_URL for the rest of this
+        # function and anything it calls (fetch_via_network).
+        local FIRMWARE_URL="$custom_url"
+    fi
 
     if [ "$source" = "local" ] && [ -z "$from_path" ]; then
         die "--from requires a path (a directory containing the .bin and .sig)"
@@ -283,13 +297,19 @@ cmd_update() {
     local env_label="no"
     [ "$preserve_env" = 1 ] && env_label="yes"
 
+    # Show "net" or "net (custom URL)" so it's obvious when an override is in play
+    local source_label="$source"
+    if [ "$source" = "net" ] && [ -n "$custom_url" ]; then
+        source_label="net ($custom_url)"
+    fi
+
     echo ""
     echo "╔═════════════════════════════════════════════════════════╗"
     echo "║                    FIRMWARE UPDATE                      ║"
     echo "╠═════════════════════════════════════════════════════════╣"
     printf "║  Booted from:   %-39s ║\n" "$boot_medium"
     printf "║  Target:        %-39s ║\n" "$target"
-    printf "║  Source:        %-39s ║\n" "$source"
+    printf "║  Source:        %-39s ║\n" "$source_label"
     printf "║  Preserve env:  %-39s ║\n" "$env_label"
     echo "║                                                         ║"
     echo "║  DO NOT power off or interrupt the device during the    ║"
@@ -430,6 +450,9 @@ cmd_help() {
     echo ""
     echo "update options — source (pick one):"
     echo "  (none)          Download from ${FIRMWARE_URL} (requires network)"
+    echo "  --url URL       Download from URL instead of the default server"
+    echo "                  (useful for a local dev server; only with the"
+    echo "                  network source — not compatible with --usb/--from)"
     echo "  --usb           Find firmware on a plugged-in USB drive"
     echo "  --from PATH     Use a local directory containing the .bin and .sig"
     echo ""
@@ -453,6 +476,7 @@ cmd_help() {
     echo "  firmware update                        Update over network (env wiped)"
     echo "  firmware update --usb                  Update from USB drive"
     echo "  firmware update --from /mnt/usb        Update from a mounted dir"
+    echo "  firmware update --url http://10.0.0.5  Download from a dev server"
     echo "  firmware update --usb --preserve-env   Update from USB, keep env"
     echo "  firmware backup                        Back up the inactive medium"
     echo ""

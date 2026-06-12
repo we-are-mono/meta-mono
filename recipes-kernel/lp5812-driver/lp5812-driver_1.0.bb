@@ -9,15 +9,18 @@ SRC_URI = " \
     file://leds-lp5812.c \
     file://leds-lp5812.h \
     file://Makefile \
+    file://S05lp5812 \
 "
 
-S = "${WORKDIR}/sources"
-UNPACKDIR = "${S}"
+S = "${UNPACKDIR}"
 
 do_install:append() {
-    # Install module configuration if needed
-    install -d ${D}${sysconfdir}/modules-load.d
-    echo "leds-lp5812" > ${D}${sysconfdir}/modules-load.d/leds-lp5812.conf
+    # S05 runs before S95status-led so the LED nodes exist by the time
+    # any consumer looks for them.
+    install -d ${D}${sysconfdir}/init.d
+    install -m 0755 ${S}/S05lp5812 ${D}${sysconfdir}/init.d/
+    install -d ${D}${sysconfdir}/rcS.d
+    ln -sf ../init.d/S05lp5812 ${D}${sysconfdir}/rcS.d/S05lp5812
 }
 
-FILES:${PN} += "${sysconfdir}/modules-load.d/leds-lp5812.conf"
+FILES:${PN} += "${sysconfdir}/init.d/S05lp5812 ${sysconfdir}/rcS.d/S05lp5812"

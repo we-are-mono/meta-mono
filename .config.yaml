@@ -7,21 +7,21 @@ distro: recovery
 repos:
   bitbake:
     url: https://git.openembedded.org/bitbake
-    branch: "2.12"
+    branch: "2.18"
     path: sources/bitbake
     layers:
       .: "disabled"
 
   openembedded-core:
     url: https://git.openembedded.org/openembedded-core
-    branch: walnascar
+    branch: wrynose
     path: sources/openembedded-core
     layers:
       meta:
 
   meta-openembedded:
     url: https://git.openembedded.org/meta-openembedded
-    branch: walnascar
+    branch: wrynose
     path: sources/meta-openembedded
     layers:
       meta-oe:

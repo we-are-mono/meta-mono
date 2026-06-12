@@ -12,12 +12,10 @@ do_compile[depends] += "u-boot:do_deploy rcw:do_deploy"
 # from files/ as patches.
 require conf/include/nxp-base.inc
 SRC_URI = "git://github.com/nxp-qoriq/atf;protocol=https;nobranch=1 \
-           file://0001-plat-nxp-ls1046a-gateway-dk-add-board-support.patch \
-           file://0002-plat-nxp-ls1046a-gateway-dk-add-DDR4-initialization.patch \
+           file://0001-gateway-dk-add-board-support.patch \
+           file://0002-gateway-dk-add-DDR4-initialization.patch \
 "
 SRCREV = "${NXP_LF_SRCREV_ATF}"
-
-S = "${WORKDIR}/git"
 
 # Local variables
 PLATFORM = "gateway_dk"

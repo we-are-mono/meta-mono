@@ -11,19 +11,17 @@ DEPENDS = "bison-native flex-native dtc-native bc-native u-boot-tools-native"
 # from files/ as a numbered patch series.
 require conf/include/nxp-base.inc
 SRC_URI = "git://github.com/nxp-qoriq/u-boot;protocol=https;nobranch=1 \
-           file://0001-board-freescale-gateway-dk-add-board-core.patch \
-           file://0002-board-freescale-gateway-dk-add-hw-self-test-harness.patch \
-           file://0003-board-freescale-gateway-dk-add-per-component-self-te.patch \
-           file://0004-board-freescale-gateway-dk-add-USB-PD-and-EEPROM-dev.patch \
-           file://0005-configs-add-Gateway-DK-defconfig-and-board-header.patch \
-           file://0006-arm-dts-add-mono-gateway-dk.dts.patch \
-           file://0007-arm-mtd-wire-Gateway-DK-into-the-upstream-tree.patch \
+           file://0001-gateway-dk-add-board-core.patch \
+           file://0002-gateway-dk-add-hw-self-test-harness.patch \
+           file://0003-gateway-dk-add-per-component-self-te.patch \
+           file://0004-gateway-dk-add-USB-PD-and-EEPROM-dev.patch \
+           file://0005-gateway-dk-add-defconfig-and-board-header.patch \
+           file://0006-gateway-dk-add-dts.patch \
+           file://0007-gateway-dk-wire-into-upstream-tree.patch \
           "
 SRCREV = "${NXP_LF_SRCREV_UBOOT}"
 
 FILESEXTRAPATHS:prepend := "${THISDIR}/files:"
-
-S = "${WORKDIR}/git"
 
 inherit kernel-arch deploy
 

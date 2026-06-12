@@ -12,7 +12,7 @@ inherit deploy
 
 # No source needed - just assembly
 SRC_URI = ""
-S = "${WORKDIR}/src"
+S = "${UNPACKDIR}/src"
 
 # BOOTTYPE can be overridden on command line
 BOOTTYPE ?= "qspi emmc"
