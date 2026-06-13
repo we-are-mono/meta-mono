@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-06-13 — Security review follow-ups: supply-chain pinning, CVE scanning
+- Pin external kas layers (bitbake, openembedded-core, meta-openembedded) to explicit commits, not just moving branches — the toolchain/core recipes that build everything can no longer shift between builds; bump deliberately like nxp-base.inc
+- Enable CVE scanning via the `sbom-cve-check` fragment (`OE_FRAGMENTS` in site.conf/site.example.conf); non-gating — unpatched CVEs surface as build warnings plus a manifest in the deploy dir
+- linux-mono: include upstream `cve-exclusion.inc` so the kernel report drops not-applicable/wrong-platform CVEs (83 → 14) with upstream's triage attached
+- firmware: stage downloads in a private `mktemp` dir instead of the fixed `/tmp/firmware-update` path
+- base-files: drop the sysctl.d drop-ins (ip_forward, nf_conntrack) — CMM fast-path tuning that has no place in the recovery/firmware image
+- recovery: add IPv6 nameservers (Google + Cloudflare) to resolv.conf so DNS resolves on IPv6-only networks (#12)
+- Bump FIRMWARE_VERSION to 2026.06.2
+
 ## 2026-06-12 — Migrate to wrynose
 - Upgrade Yocto layer from walnascar to wrynose (bitbake 2.18)
 - Switch file:// recipes to `S = ${UNPACKDIR}`; drop explicit `S = ${WORKDIR}/git` from git:// recipes

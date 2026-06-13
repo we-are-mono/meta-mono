@@ -5,9 +5,16 @@ machine: gateway-dk
 distro: recovery
 
 repos:
-  bitbake:
+  # External layers are pinned to a specific commit (not just a moving
+  # branch) so the toolchain and core recipes that build everything —
+  # including the on-device curl/openssl that verify firmware — can't
+  # shift under us between builds. Bump these commits deliberately, the
+  # same way conf/include/nxp-base.inc pins the NXP recipes. The branch
+  # is kept for documentation and as the fetch ref.
+  bitbake:  
     url: https://git.openembedded.org/bitbake
     branch: "2.18"
+    commit: 294074e65f37822a0f31bb11eb968d311b54a66a
     path: sources/bitbake
     layers:
       .: "disabled"
@@ -15,6 +22,7 @@ repos:
   openembedded-core:
     url: https://git.openembedded.org/openembedded-core
     branch: wrynose
+    commit: 39d4d267906f8e18d44e1ba5da84acc4a5a85b61
     path: sources/openembedded-core
     layers:
       meta:
@@ -22,6 +30,7 @@ repos:
   meta-openembedded:
     url: https://git.openembedded.org/meta-openembedded
     branch: wrynose
+    commit: a43f0d532c399458cae44ce66f3799a220fbb497
     path: sources/meta-openembedded
     layers:
       meta-oe:

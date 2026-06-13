@@ -7,7 +7,7 @@ set -euo pipefail
 
 FIRMWARE_URL="https://firmware.mono.si"
 PUBKEY="/etc/firmware/firmware-signing.pub"
-DOWNLOAD_DIR="/tmp/firmware-update"
+DOWNLOAD_DIR=""  # set to a private mktemp dir in cmd_update
 ENV_SIZE=8192  # 0x2000 bytes
 ENV_OFFSET=3145728  # 0x300000
 
@@ -84,7 +84,7 @@ or rely on IPv6 SLAAC autoconfiguration."
 
 # Clean up on exit
 cleanup() {
-    rm -rf "$DOWNLOAD_DIR"
+    [ -n "$DOWNLOAD_DIR" ] && rm -rf "$DOWNLOAD_DIR"
 }
 
 # Fetch firmware + signature from the network using MAC-as-password basic auth.
@@ -331,9 +331,11 @@ cmd_update() {
         exit 0
     fi
 
-    # Stage the firmware bytes via the chosen transport
+    # Stage the firmware bytes via the chosen transport in a private temp
+    # dir (mktemp, not a fixed world-known path) so the verified image can't
+    # be swapped between the signature check and the flash write.
+    DOWNLOAD_DIR=$(mktemp -d "${TMPDIR:-/tmp}/firmware-update.XXXXXX") || die "Failed to create temp staging dir"
     trap cleanup EXIT
-    mkdir -p "$DOWNLOAD_DIR"
     local fw_file="firmware-${target}-@MACHINE@.bin"
     local sig_file="firmware-${target}-@MACHINE@.bin.sig"
 
