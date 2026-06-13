@@ -14,6 +14,13 @@ ENV_OFFSET=3145728  # 0x300000
 # eMMC device
 EMMC_DEV="/dev/mmcblk0"
 
+# Terminal colors for emphasis on the recovery console
+RED=$'\e[1;31m'
+GREEN=$'\e[1;32m'
+GRAY=$'\e[38;2;150;150;150m'
+RESET=$'\e[0m'
+CHECK="${GREEN}✓${RESET}"
+
 die() {
     echo "ERROR: $*" >&2
     exit 1
@@ -307,10 +314,10 @@ cmd_update() {
     echo "╔═════════════════════════════════════════════════════════╗"
     echo "║                    FIRMWARE UPDATE                      ║"
     echo "╠═════════════════════════════════════════════════════════╣"
-    printf "║  Booted from:   %-39s ║\n" "$boot_medium"
-    printf "║  Target:        %-39s ║\n" "$target"
-    printf "║  Source:        %-39s ║\n" "$source_label"
-    printf "║  Preserve env:  %-39s ║\n" "$env_label"
+    printf "║  Booted from:   ${GRAY}%-39s${RESET} ║\n" "$boot_medium"
+    printf "║  Target:        ${GRAY}%-39s${RESET} ║\n" "$target"
+    printf "║  Source:        ${GRAY}%-39s${RESET} ║\n" "$source_label"
+    printf "║  Preserve env:  ${GRAY}%-39s${RESET} ║\n" "$env_label"
     echo "║                                                         ║"
     echo "║  DO NOT power off or interrupt the device during the    ║"
     echo "║  update. Doing so may result in an unrecoverable state  ║"
@@ -353,7 +360,7 @@ cmd_update() {
                 "${DOWNLOAD_DIR}/${fw_file}" >/dev/null 2>&1; then
             die "Signature verification FAILED. The firmware image may be corrupted or tampered with."
         fi
-        info "Signature verified OK"
+        info "Signature verified ${CHECK}"
     else
         die "Public key not found at $PUBKEY. Cannot verify firmware integrity."
     fi
@@ -370,11 +377,11 @@ cmd_update() {
             dd if="$EMMC_DEV" of="${DOWNLOAD_DIR}/uboot-env.bin" bs=1 skip=$ENV_OFFSET count=$ENV_SIZE 2>/dev/null || \
                 die "Failed to back up U-Boot environment from $EMMC_DEV"
         fi
-        info "Environment backed up"
+        info "Environment backed up ${CHECK}"
     fi
 
     # Flash firmware
-    info "Flashing firmware to ${target} (do not interrupt)..."
+    info "Flashing firmware to ${target} (${RED}DO NOT INTERRUPT${RESET})..."
     if [ "$target" = "qspi" ]; then
         local mtd_flash
         mtd_flash=$(find_mtd "flash")
@@ -385,7 +392,7 @@ cmd_update() {
             die "Flash failed!"
         sync
     fi
-    info "Firmware flashed"
+    info "Firmware flashed ${CHECK}"
 
     # Restore U-Boot environment (only if we backed it up)
     if [ "$preserve_env" = 1 ]; then
@@ -400,7 +407,7 @@ cmd_update() {
                 die "Failed to restore U-Boot environment"
             sync
         fi
-        info "Environment restored"
+        info "Environment restored ${CHECK}"
     else
         info "Skipped u-boot environment restore (--preserve-env not set)"
     fi

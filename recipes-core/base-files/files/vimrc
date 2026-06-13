@@ -1,0 +1,5 @@
+" vim-tiny ships without runtime files, so with no vimrc present vim tries to
+" source $VIMRUNTIME/defaults.vim on startup and prints E1187. This file gives
+" vim a vimrc to find, which skips that load path. Keep it minimal: tiny vim
+" has no +syntax/+eval, so richer settings would raise their own errors.
+set nocompatible

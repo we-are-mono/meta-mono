@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-06-13 — Recovery UX polish: colored prompt, vim-tiny, firmware-tool output
+- Recovery shell prompt: colored PS1 via /etc/profile.d — orange host (matches the /etc/issue banner, signals "you're in recovery") + gray working dir
+- Add vim-tiny to the recovery image, with a minimal root vimrc so it doesn't fail to source defaults.vim (E1187) on startup
+- firmware tool: red DO NOT INTERRUPT on the flash step, green ✓ on each success line, gray banner values — one palette shared with the prompt
+- Bump FIRMWARE_VERSION to 2026.06.3
+
 ## 2026-06-13 — Security review follow-ups: supply-chain pinning, CVE scanning
 - Pin external kas layers (bitbake, openembedded-core, meta-openembedded) to explicit commits, not just moving branches — the toolchain/core recipes that build everything can no longer shift between builds; bump deliberately like nxp-base.inc
 - Enable CVE scanning via the `sbom-cve-check` fragment (`OE_FRAGMENTS` in site.conf/site.example.conf); non-gating — unpatched CVEs surface as build warnings plus a manifest in the deploy dir
