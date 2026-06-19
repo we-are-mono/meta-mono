@@ -15,4 +15,4 @@ do_deploy () {
     install -m 0644 ${B}/${FMAN_UCODE} ${DEPLOYDIR}
 }
 
-addtask deploy before do_build
+addtask deploy after do_unpack before do_build
