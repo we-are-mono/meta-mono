@@ -51,8 +51,9 @@ do_install() {
     install -m 0755 ${S}/prog/sensors/sensors ${D}${bindir}/
     install -m 0755 ${S}/prog/pwm/fancontrol ${D}${sbindir}/
 
-    # configuration
-    install -m 0644 ${UNPACKDIR}/fancontrol.conf ${D}${sysconfdir}/fancontrol
+    # configuration template; S99fancontrol resolves the hwmon indices
+    # by device name at boot and generates the runtime config from it
+    install -m 0644 ${UNPACKDIR}/fancontrol.conf ${D}${sysconfdir}/fancontrol.in
 
     install -d ${D}${sysconfdir}/init.d
     install -d ${D}${sysconfdir}/rcS.d
@@ -63,6 +64,6 @@ do_install() {
 FILES:${PN} = "${libdir}/libsensors.so.* \
                ${bindir}/sensors \
                ${sbindir}/fancontrol \
-               ${sysconfdir}/fancontrol \
+               ${sysconfdir}/fancontrol.in \
                ${sysconfdir}/init.d/S99fancontrol \
                ${sysconfdir}/rcS.d/S99fancontrol"
