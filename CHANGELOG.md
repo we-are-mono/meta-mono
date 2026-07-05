@@ -11,7 +11,8 @@
 - fancontrol: resolve emc2305/cluster_thermal hwmon by name at boot (probe-order shifts no longer kill it); startup failures print to console, output logged
 - lp5812: set led->chip before classdev registration (NULL-deref window); sfp-led: remove unreachable EPROBE_DEFER branch
 - firmware-tools: explicit openssl-bin RDEPENDS; machine-arch packaging for firmware-tools/fancontrol/status-led; fm-ucode deploy task ordering; require (not include) cve-exclusion.inc
-- Validated on hardware: QSPI flash, full self-test pass, closed-loop fan control, mt25qu512abb SPI-NOR id confirmed needed
+- MTD partitions: the kernel dts is the single source of truth — remove the never-expanded `mtdparts=${mtdparts}` from the environment (hush expands one level; the kernel always fell back to the dts table) and the mtdparts clause from the fallback CONFIG_BOOTARGS, since cmdline partitions would delete the `flash`/`backup` labels the firmware updater resolves by name
+- Validated on hardware: QSPI flash, full self-test pass, closed-loop fan control, mt25qu512abb SPI-NOR id confirmed needed, /proc/mtd partition table confirmed dts-sourced
 - Bump FIRMWARE_VERSION to 2026.07.1
 
 ## 2026-06-13 — Recovery UX polish: colored prompt, vim-tiny, firmware-tool output
