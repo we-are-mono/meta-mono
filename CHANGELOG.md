@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-07-06 — kernel: drop unloadable modules from the recovery defconfig
+- The recovery initramfs installs no kernel-module packages, so every `=m` option was built, packaged, and never loadable on the device. Remove all 17 (`AF_KCM`, `MLX4_EN`/`MLX5_CORE`, `MARVELL_PHY`, `FSL_QDMA`, `NET_DSA_MSCC_FELIX`, `NET_IPIP`, `NVMEM_LAYERSCAPE_SFP`, `CPU_FREQ_GOV_CONSERVATIVE`, six `CRYPTO_*`, `CRC_CCITT`, `CRC8`) plus the dead `MLX5_CORE_EN` bool, and pin the kconfig-defaulted `EFIVAR_FS` off
+- Add explicit `CONFIG_BPF_SYSCALL=y`: it was only in the kernel because `AF_KCM=m` selected it; without the pin, removing AF_KCM silently dropped the whole BPF cluster (`CGROUP_BPF`, `XDP_SOCKETS`) despite their explicit `=y` lines
+- Verified no-op: both defconfigs resolved via `olddefconfig` against the pinned LF source and diffed — nothing gained, no userspace-visible `=y` lost (only module-internal support code: mlx4/5 sub-options, `AUXILIARY_BUS`, `PAGE_POOL`, `PACKING`, `ASYNC_TX`/`DMA_ENGINE_RAID`); final build's `.config` has zero `=m` symbols
+
 ## 2026-07-05 — Fix the boot-script fallback chain that old hush never honored
 - environment: mkenvimage turns `\`+newline continuations into embedded newlines, and U-Boot's old hush parser (CONFIG_HUSH_OLD_PARSER) drops `&&`/`||` operators at a newline — every line of the `emmc` script ran unconditionally, so a failed kernel/dtb load still reached `booti` (booting stale DRAM contents on a warm reset instead of falling through to recovery). Each pipeline now sits on a single physical line, split into `emmc_load`/`emmc_itb` sub-variables for readability; verified via mkenvimage that no variable carries an embedded newline
 - environment-emmc/qspi: gate the `recovery` read chain with `&&` instead of `;` so a failed `sf probe`/`sf read`/`mmc read` no longer reaches `booti` with garbage
