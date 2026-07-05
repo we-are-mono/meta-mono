@@ -1,4 +1,4 @@
-From 91e013054aac5312ddc72cda774204e58d57a0d3 Mon Sep 17 00:00:00 2001
+From 5c3337ca5b36487b04fe942400e7640d529fed0f Mon Sep 17 00:00:00 2001
 From: Tomaz Zaman <tomaz@mono.si>
 Date: Sun, 19 Apr 2026 15:23:47 +0200
 Subject: [PATCH 1/7] board: freescale: gateway-dk: add board core
@@ -21,8 +21,8 @@ Signed-off-by: Tomaz Zaman <tomaz@mono.si>
  board/freescale/gateway_dk/README       |  62 +++++++++
  board/freescale/gateway_dk/ddr.c        |  19 +++
  board/freescale/gateway_dk/eth.c        |  44 ++++++
- board/freescale/gateway_dk/gateway_dk.c | 173 ++++++++++++++++++++++++
- 7 files changed, 328 insertions(+)
+ board/freescale/gateway_dk/gateway_dk.c | 175 ++++++++++++++++++++++++
+ 7 files changed, 330 insertions(+)
  create mode 100644 board/freescale/gateway_dk/Kconfig
  create mode 100644 board/freescale/gateway_dk/MAINTAINERS
  create mode 100644 board/freescale/gateway_dk/Makefile
@@ -226,10 +226,10 @@ index 00000000000..1ea74a05a4d
 +#endif
 diff --git a/board/freescale/gateway_dk/gateway_dk.c b/board/freescale/gateway_dk/gateway_dk.c
 new file mode 100644
-index 00000000000..fe120ebfaaf
+index 00000000000..53beeee70e2
 --- /dev/null
 +++ b/board/freescale/gateway_dk/gateway_dk.c
-@@ -0,0 +1,173 @@
+@@ -0,0 +1,175 @@
 +// SPDX-License-Identifier: GPL-2.0+
 +/*
 + * Copyright 2025 Mono Technologies Inc.
@@ -280,30 +280,32 @@ index 00000000000..fe120ebfaaf
 +void lp5810a_set_status(int any_test_failed);
 +
 +/*
-+ * Workaround for Erratum A-008127
-+ * Non-availability of I2C2 interface pins when RCW/PBI source is SDHC
-+ *
-+ * Description:
-+ * When booting from SDHC/eMMC, the I2C2 pins are unavailable due to pin
-+ * muxing conflicts with the SD/eMMC interface. This workaround clears the
-+ * RCW_SRC field after boot to restore I2C2 functionality.
++ * Pin-mux workaround for erratum A-010539, mirroring upstream
++ * erratum_a010539() in arch/arm/cpu/armv8/fsl-layerscape/soc.c: the
++ * RCW source field in PORSR1 drives the muxing of pins shared with
++ * the boot interface, which leaves I2C2 unavailable after SDHC/eMMC
++ * boot. Clearing RCW_SRC through the DCSR-mapped PORCR1 releases the
++ * pins. The upstream copy is only built for CONFIG_QSPI_BOOT, which
++ * TFABOOT does not define, and this board needs the workaround for
++ * eMMC boot as well, so it is carried here for both boot media.
 + */
 +
-+#define DCFG_PORSR1_OFFSET              0x000
-+#define ERRATA_A008127_TRIGGER_OFFSET   0x1A8
++#define DCFG_PORSR1_OFFSET		0x000
++#define ERRATUM_A010539_TRIGGER_OFFSET	0x1A8
 +
-+static void erratum_a008127(void)
++static void erratum_a010539(void)
 +{
-+    u32 porsr1_val;
-+    porsr1_val = in_be32((void *)(CFG_SYS_FSL_GUTS_ADDR + DCFG_PORSR1_OFFSET));
-+    porsr1_val &= ~RCW_SRC_MASK;
-+    out_be32((void *)CFG_SYS_DCSR_DCFG_ADDR, porsr1_val);
-+    out_be32((void *)(CFG_SYS_FSL_SCFG_ADDR + ERRATA_A008127_TRIGGER_OFFSET), 0xFFFFFFFF);
++	u32 porsr1_val;
++
++	porsr1_val = in_be32((void *)(CFG_SYS_FSL_GUTS_ADDR + DCFG_PORSR1_OFFSET));
++	porsr1_val &= ~RCW_SRC_MASK;
++	out_be32((void *)CFG_SYS_DCSR_DCFG_ADDR, porsr1_val);
++	out_be32((void *)(CFG_SYS_FSL_SCFG_ADDR + ERRATUM_A010539_TRIGGER_OFFSET), 0xFFFFFFFF);
 +}
 +
 +int board_early_init_f(void)
 +{
-+	erratum_a008127();
++	erratum_a010539();
 +
 +	fsl_lsch2_early_init_f();
 +

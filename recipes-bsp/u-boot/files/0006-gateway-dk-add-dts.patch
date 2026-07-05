@@ -1,4 +1,4 @@
-From 40ffa18f9ff1140dc753723771d746440b7ba0c3 Mon Sep 17 00:00:00 2001
+From 68b310d318c6a470021655c0d48b30a13c0797ac Mon Sep 17 00:00:00 2001
 From: Tomaz Zaman <tomaz@mono.si>
 Date: Sun, 19 Apr 2026 15:24:51 +0200
 Subject: [PATCH 6/7] arm: dts: add mono-gateway-dk.dts
@@ -19,7 +19,7 @@ Signed-off-by: Tomaz Zaman <tomaz@mono.si>
 
 diff --git a/arch/arm/dts/mono-gateway-dk.dts b/arch/arm/dts/mono-gateway-dk.dts
 new file mode 100644
-index 00000000000..1e2135cf226
+index 00000000000..05c2381f244
 --- /dev/null
 +++ b/arch/arm/dts/mono-gateway-dk.dts
 @@ -0,0 +1,176 @@
@@ -169,14 +169,14 @@ index 00000000000..1e2135cf226
 +		status = "okay";
 +	};
 +
-+	ethernet@f0000 { 
-+		fixed-link = <0 1 1000 0 0>;
++	ethernet@f0000 {
++		fixed-link = <0 1 10000 0 0>;
 +		phy-connection-type = "xgmii";
 +		status = "okay";
 +	};
 +
 +	ethernet@f2000 {
-+		fixed-link = <0 1 1000 0 0>;
++		fixed-link = <0 1 10000 0 0>;
 +		phy-connection-type = "xgmii";
 +		status = "okay";
 +	};
