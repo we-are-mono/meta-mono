@@ -52,7 +52,11 @@ check_size() {
 
 do_compile() {
     for d in ${BOOTTYPE}; do
-        # Create 32MB firmware image (zero-filled)
+        # Create 32MB firmware image (zero-filled). Remove any previous
+        # image first: truncate on an existing file keeps its contents,
+        # and WORKDIR persists between builds, so a shrinking component
+        # would otherwise leave the old build's tail bytes in the gaps.
+        rm -f ${WORKDIR}/firmware-${d}.bin
         truncate -s 32M ${WORKDIR}/firmware-${d}.bin
 
         # On eMMC the CPU boots from a 4KB offset to avoid the partition table region
