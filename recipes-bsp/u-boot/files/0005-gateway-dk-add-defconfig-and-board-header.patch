@@ -1,4 +1,4 @@
-From 1d89bfb57d9d32a974aeedc19c0d9853b74f90a1 Mon Sep 17 00:00:00 2001
+From 6444e973e108dfd1363eb2286d6033f1d97697b1 Mon Sep 17 00:00:00 2001
 From: Tomaz Zaman <tomaz@mono.si>
 Date: Sun, 19 Apr 2026 15:24:44 +0200
 Subject: [PATCH 5/7] configs: add Gateway-DK defconfig and board header
@@ -27,7 +27,7 @@ Signed-off-by: Tomaz Zaman <tomaz@mono.si>
 
 diff --git a/configs/mono_gateway_dk_defconfig b/configs/mono_gateway_dk_defconfig
 new file mode 100644
-index 00000000000..77db8326ade
+index 00000000000..cc4fe448e16
 --- /dev/null
 +++ b/configs/mono_gateway_dk_defconfig
 @@ -0,0 +1,113 @@
@@ -64,7 +64,7 @@ index 00000000000..77db8326ade
 +CONFIG_OF_BOARD_SETUP=y
 +CONFIG_OF_SYSTEM_SETUP=y
 +CONFIG_USE_BOOTARGS=y
-+CONFIG_BOOTARGS="console=ttyS0,115200 root=/dev/ram0 earlycon=uart8250,mmio,0x21c0500 mtdparts=1550000.spi:1m(rcw),15m(u-boot),48m(kernel.itb);7e800000.flash:16m(nand_uboot),48m(nand_kernel),448m(nand_free)"
++CONFIG_BOOTARGS="console=ttyS0,115200 root=/dev/ram0 earlycon=uart8250,mmio,0x21c0500 panic=10 mtdparts=1550000.spi:1M(rcw-bl2),2M(uboot),1M(uboot-env),1M(fman-ucode),1M(recovery-dtb),4M(unallocated),-(kernel-initramfs)"
 +CONFIG_SYS_PBSIZE=532
 +CONFIG_CYCLIC=y
 +CONFIG_ARCH_MISC_INIT=y
