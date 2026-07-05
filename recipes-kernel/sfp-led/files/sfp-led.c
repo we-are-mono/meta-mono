@@ -513,15 +513,18 @@ static int sfp_led_register_port(struct sfp_led_priv *priv,
 		of_node_put(i2c_np);
 	}
 
-	if (IS_ERR_OR_NULL(port->i2c_adapter)) {
-		int ret = PTR_ERR_OR_ZERO(port->i2c_adapter);
-
-		port->i2c_adapter = NULL;
-		if (ret != -EPROBE_DEFER)
-			dev_err(priv->dev, "port %d: i2c-bus not available\n", index);
+	/*
+	 * of_get_i2c_adapter_by_node() returns NULL, never an ERR_PTR, so
+	 * an absent adapter cannot be told apart from one that has not
+	 * probed yet and deferral is impossible here. Loading after the
+	 * I2C mux adapters exist is the loader's responsibility (S99 in
+	 * the recovery image).
+	 */
+	if (!port->i2c_adapter) {
+		dev_err(priv->dev, "port %d: i2c-bus not available\n", index);
 		of_node_put(sfp_np);
 		port->sfp_np = NULL;
-		return ret ? ret : -ENODEV;
+		return -ENODEV;
 	}
 
 	/* Get LEDs from port child node */
