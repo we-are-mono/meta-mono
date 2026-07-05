@@ -1,4 +1,4 @@
-From 3b34aa4cb4e9685a41a1bb6c5c4d4e23336c2d34 Mon Sep 17 00:00:00 2001
+From 91e013054aac5312ddc72cda774204e58d57a0d3 Mon Sep 17 00:00:00 2001
 From: Tomaz Zaman <tomaz@mono.si>
 Date: Sun, 19 Apr 2026 15:23:47 +0200
 Subject: [PATCH 1/7] board: freescale: gateway-dk: add board core
@@ -20,9 +20,9 @@ Signed-off-by: Tomaz Zaman <tomaz@mono.si>
  board/freescale/gateway_dk/Makefile     |   8 ++
  board/freescale/gateway_dk/README       |  62 +++++++++
  board/freescale/gateway_dk/ddr.c        |  19 +++
- board/freescale/gateway_dk/eth.c        |  96 +++++++++++++
- board/freescale/gateway_dk/gateway_dk.c | 175 ++++++++++++++++++++++++
- 7 files changed, 382 insertions(+)
+ board/freescale/gateway_dk/eth.c        |  44 ++++++
+ board/freescale/gateway_dk/gateway_dk.c | 173 ++++++++++++++++++++++++
+ 7 files changed, 328 insertions(+)
  create mode 100644 board/freescale/gateway_dk/Kconfig
  create mode 100644 board/freescale/gateway_dk/MAINTAINERS
  create mode 100644 board/freescale/gateway_dk/Makefile
@@ -176,25 +176,16 @@ index 00000000000..4d8356df78c
 \ No newline at end of file
 diff --git a/board/freescale/gateway_dk/eth.c b/board/freescale/gateway_dk/eth.c
 new file mode 100644
-index 00000000000..64d2da9e8ee
+index 00000000000..1ea74a05a4d
 --- /dev/null
 +++ b/board/freescale/gateway_dk/eth.c
-@@ -0,0 +1,96 @@
+@@ -0,0 +1,44 @@
 +// SPDX-License-Identifier: GPL-2.0+
 +/*
 + * Copyright 2025 Mono Technologies Inc.
 + */
 +#include <config.h>
-+#include <net.h>
-+#include <asm/io.h>
-+#include <netdev.h>
-+#include <fm_eth.h>
-+#include <fsl_dtsec.h>
-+#include <fsl_mdio.h>
-+#include <malloc.h>
-+#include <miiphy.h>
 +#include <phy.h>
-+#include <asm/arch/fsl_serdes.h>
 +#include <linux/delay.h>
 +
 +/*
@@ -216,7 +207,7 @@ index 00000000000..64d2da9e8ee
 +		/* LED 1 (green) should be on when link is up */
 +		phy_write_mmd(phydev, MDIO_MMD_VEND1, 0x01, 0x2040);
 +
-+		/* LED 2 (amber) should blink on TX/RX */ 
++		/* LED 2 (amber) should blink on TX/RX */
 +		phy_write_mmd(phydev, MDIO_MMD_VEND1, 0x02, 0x0fe0);
 +	}
 +
@@ -226,62 +217,19 @@ index 00000000000..64d2da9e8ee
 +	return 0;
 +}
 +
-+/* Attach PHYs to the MDIO bus */
-+int board_eth_init(struct bd_info *bis)
-+{
 +#ifdef CONFIG_FMAN_ENET
-+	struct memac_mdio_info dtsec_mdio_info;
-+	struct mii_dev *dev;
-+	u32 srds_s1;
-+	struct ccsr_gur *gur = (void *)(CFG_SYS_FSL_GUTS_ADDR);
-+
-+	srds_s1 = in_be32(&gur->rcwsr[4]) &
-+			FSL_CHASSIS2_RCWSR4_SRDS1_PRTCL_MASK;
-+	srds_s1 >>= FSL_CHASSIS2_RCWSR4_SRDS1_PRTCL_SHIFT;
-+
-+	/* TODO: Add a SerDes 2 check */
-+	if (srds_s1 != 0x1133) {
-+		printf("Invalid SerDes protocol 0x%x for Gateway Development Kit\n",
-+		       srds_s1);
-+	}
-+
-+	dtsec_mdio_info.regs =
-+		(struct memac_mdio_controller *)CFG_SYS_FM1_DTSEC_MDIO_ADDR;
-+
-+	dtsec_mdio_info.name = DEFAULT_FM_MDIO_NAME;
-+
-+	/* Register the 1G MDIO bus */
-+	fm_memac_mdio_init(bis, &dtsec_mdio_info);
-+
-+	/* SGMII on MAC 5, 6 (SerDes 1) and 2 (SerDes 2) */
-+	fm_info_set_phy_address(FM1_DTSEC5, SGMII_PHY1_ADDR);
-+	fm_info_set_phy_address(FM1_DTSEC6, SGMII_PHY2_ADDR);
-+	fm_info_set_phy_address(FM1_DTSEC2, SGMII_PHY3_ADDR);
-+
-+	dev = miiphy_get_dev_by_name(DEFAULT_FM_MDIO_NAME);
-+	fm_info_set_mdio(FM1_DTSEC5, dev);
-+	fm_info_set_mdio(FM1_DTSEC6, dev);
-+	fm_info_set_mdio(FM1_DTSEC2, dev);
-+
-+	cpu_eth_init(bis);
-+#endif
-+
-+	return pci_eth_init(bis);
-+}
-+
-+#ifdef CONFIG_FMAN_ENET
++/* Leave the FMan ethernet nodes in the kernel device tree untouched. */
 +int fdt_update_ethernet_dt(void *blob)
 +{
 +	return 0;
 +}
 +#endif
-+
 diff --git a/board/freescale/gateway_dk/gateway_dk.c b/board/freescale/gateway_dk/gateway_dk.c
 new file mode 100644
-index 00000000000..6c0abd61663
+index 00000000000..fe120ebfaaf
 --- /dev/null
 +++ b/board/freescale/gateway_dk/gateway_dk.c
-@@ -0,0 +1,175 @@
+@@ -0,0 +1,173 @@
 +// SPDX-License-Identifier: GPL-2.0+
 +/*
 + * Copyright 2025 Mono Technologies Inc.
@@ -310,8 +258,6 @@ index 00000000000..6c0abd61663
 +#include <fsl_csu.h>
 +#include <fsl_esdhc.h>
 +#include <fsl_dspi.h>
-+#include <wdt.h>
-+#include <watchdog.h>
 +#include <dm.h>
 +
 +#include "../common/i2c_mux.h"

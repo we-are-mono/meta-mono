@@ -1,4 +1,4 @@
-From 6444e973e108dfd1363eb2286d6033f1d97697b1 Mon Sep 17 00:00:00 2001
+From 4ab6e287649f6a033047444d01e17f286d6486b8 Mon Sep 17 00:00:00 2001
 From: Tomaz Zaman <tomaz@mono.si>
 Date: Sun, 19 Apr 2026 15:24:44 +0200
 Subject: [PATCH 5/7] configs: add Gateway-DK defconfig and board header
@@ -19,18 +19,18 @@ Upstream-Status: Inappropriate [product-specific]
 
 Signed-off-by: Tomaz Zaman <tomaz@mono.si>
 ---
- configs/mono_gateway_dk_defconfig | 113 ++++++++++++++++++++++++++++++
- include/configs/gateway_dk.h      |  76 ++++++++++++++++++++
- 2 files changed, 189 insertions(+)
+ configs/mono_gateway_dk_defconfig | 112 ++++++++++++++++++++++++++++++
+ include/configs/gateway_dk.h      |  53 ++++++++++++++
+ 2 files changed, 165 insertions(+)
  create mode 100644 configs/mono_gateway_dk_defconfig
  create mode 100644 include/configs/gateway_dk.h
 
 diff --git a/configs/mono_gateway_dk_defconfig b/configs/mono_gateway_dk_defconfig
 new file mode 100644
-index 00000000000..cc4fe448e16
+index 00000000000..90cb4338195
 --- /dev/null
 +++ b/configs/mono_gateway_dk_defconfig
-@@ -0,0 +1,113 @@
+@@ -0,0 +1,112 @@
 +CONFIG_ARM=y
 +CONFIG_COUNTER_FREQUENCY=25000000
 +CONFIG_TARGET_GATEWAY_DK=y
@@ -44,7 +44,6 @@ index 00000000000..cc4fe448e16
 +CONFIG_DM_GPIO=y
 +CONFIG_DEFAULT_DEVICE_TREE="mono-gateway-dk"
 +CONFIG_QSPI_AHB_INIT=y
-+CONFIG_WATCHDOG_TIMEOUT_MSECS=15000
 +CONFIG_ARMV8_SEC_FIRMWARE_SUPPORT=y
 +CONFIG_SEC_FIRMWARE_ARMV8_PSCI=y
 +CONFIG_PCI=y
@@ -146,10 +145,10 @@ index 00000000000..cc4fe448e16
 +CONFIG_USB_STORAGE=y
 diff --git a/include/configs/gateway_dk.h b/include/configs/gateway_dk.h
 new file mode 100644
-index 00000000000..ce1ef94c78f
+index 00000000000..10d3cd6b90f
 --- /dev/null
 +++ b/include/configs/gateway_dk.h
-@@ -0,0 +1,76 @@
+@@ -0,0 +1,53 @@
 +/* SPDX-License-Identifier: GPL-2.0+ */
 +/*
 + * Copyright 2025 Mono Technologies Inc.
@@ -168,28 +167,8 @@ index 00000000000..ce1ef94c78f
 +#define CPU_RELEASE_ADDR			secondary_boot_addr
 +#define CFG_SYS_UBOOT_BASE			0x40100000
 +
-+#define I2C0_BUS_ADDR				0x0
-+#define I2C_MUX_ADDR				0x70
-+
 +/* Serial Port */
 +#define CFG_SYS_NS16550_CLK			(get_serial_clock())
-+
-+/* I2C bus multiplexer */
-+#define I2C_MUX_PCA_ADDR_PRI		0x70 /* Primary Mux*/
-+#define I2C_MUX_CH_DEFAULT			0x1 /* Channel 0*/
-+#define I2C_MUX_CH_RTC				0x1 /* Channel 0*/
-+
-+/* I2C RGB controller */
-+#define I2C_RGB_MUX_CHAN			0x08
-+#define I2C_RGB_LED_ADDR 			0x6c
-+#define I2C_RGB_LED_CURR			0xff
-+
-+/* I2C fan controller */
-+#define I2C_FAN_ADDR				0x2e
-+
-+/* RTC */
-+#define CFG_SYS_I2C_RTC_ADDR		0x51  /* Channel 0 I2C bus 0*/
-+#define CFG_SYS_RTC_BUS_NUM			0
 +
 +/* FMan ucode */
 +#ifndef SPL_NO_FMAN
@@ -216,9 +195,6 @@ index 00000000000..ce1ef94c78f
 +
 +/* FMan */
 +#ifdef CONFIG_SYS_DPAA_FMAN
-+#define SGMII_PHY1_ADDR				0x0
-+#define SGMII_PHY2_ADDR				0x1
-+#define SGMII_PHY3_ADDR				0x2
 +#define FDT_SEQ_MACADDR_FROM_ENV
 +#endif
 +
