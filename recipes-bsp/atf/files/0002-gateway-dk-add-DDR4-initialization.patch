@@ -1,4 +1,4 @@
-From a9cd753c27bb69a7c71898f11f8bd3347042c6ab Mon Sep 17 00:00:00 2001
+From d3fe4f4d20046420ebb159fed15150bc37fd665e Mon Sep 17 00:00:00 2001
 From: Tomaz Zaman <tomaz@mono.si>
 Date: Sat, 18 Apr 2026 23:44:03 +0200
 Subject: [PATCH 2/2] plat/nxp/ls1046a/gateway-dk: add DDR4 initialization
@@ -13,17 +13,17 @@ Signed-off-by: Tomaz Zaman <tomaz@mono.si>
 ---
  plat/nxp/soc-ls1046a/gateway_dk/ddr_init.c | 113 +++++++++++++++++++++
  1 file changed, 113 insertions(+)
- create mode 100755 plat/nxp/soc-ls1046a/gateway_dk/ddr_init.c
+ create mode 100644 plat/nxp/soc-ls1046a/gateway_dk/ddr_init.c
 
 diff --git a/plat/nxp/soc-ls1046a/gateway_dk/ddr_init.c b/plat/nxp/soc-ls1046a/gateway_dk/ddr_init.c
-new file mode 100755
-index 000000000..0b75bed3c
+new file mode 100644
+index 000000000..7b02c2ce0
 --- /dev/null
 +++ b/plat/nxp/soc-ls1046a/gateway_dk/ddr_init.c
 @@ -0,0 +1,113 @@
 +/*
 +**
-+**     Copyright Copyright 2025 Mono Technologies Inc.
++**     Copyright 2025 Mono Technologies Inc.
 +**
 +**     SPDX-License-Identifier: BSD-3-Clause
 +**
