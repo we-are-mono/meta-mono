@@ -3,6 +3,10 @@ LICENSE = "MIT"
 LIC_FILES_CHKSUM = "file://${COMMON_LICENSE_DIR}/MIT;md5=0835ade698e0bcf8506ecda2f7b4f302"
 
 DEPENDS += "atf fm-ucode virtual/kernel recovery-image util-linux-native openssl-native"
+# u-boot must be explicit: do_compile reads the .env images straight from
+# u-boot's deploy, and the implicit route via atf is cut by hash
+# equivalence whenever an env-only change leaves u-boot.bin identical.
+do_compile[depends] += "u-boot:do_deploy"
 do_compile[depends] += "atf:do_deploy"
 do_compile[depends] += "fm-ucode:do_deploy"
 do_compile[depends] += "virtual/kernel:do_deploy"
