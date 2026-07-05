@@ -26,7 +26,6 @@ KCONFIG_MODE = "alldefconfig"
 SRC_URI = "git://github.com/nxp-qoriq/linux.git;protocol=https;nobranch=1 \
            file://defconfig \
            file://mono-gateway-dk.dts \
-           file://mono-gateway-dk-usdpaa-xg-only.dts \
            file://001-hwmon-ina2xx-Add-INA234-support.patch \
           "
 
