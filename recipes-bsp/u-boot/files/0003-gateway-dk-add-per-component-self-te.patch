@@ -1,4 +1,4 @@
-From 85dd8b59a363574e90022cd601ac5708e6f4e282 Mon Sep 17 00:00:00 2001
+From f7a5b6963db3604bacaf041a67fa3fdfb05e5f97 Mon Sep 17 00:00:00 2001
 From: Tomaz Zaman <tomaz@mono.si>
 Date: Sun, 19 Apr 2026 15:24:13 +0200
 Subject: [PATCH 3/7] board: freescale: gateway-dk: add per-component
@@ -33,10 +33,10 @@ Signed-off-by: Tomaz Zaman <tomaz@mono.si>
  board/freescale/gateway_dk/setup/retimer.c    |  36 ++++++
  board/freescale/gateway_dk/setup/rtc.c        |  55 +++++++++
  .../freescale/gateway_dk/setup/sfp_i2c_mux.c  |  47 ++++++++
- .../freescale/gateway_dk/setup/temp_sensors.c |  58 ++++++++++
+ .../freescale/gateway_dk/setup/temp_sensors.c |  70 ++++++++++++
  .../gateway_dk/setup/typec_controller.c       |  49 ++++++++
  .../gateway_dk/setup/voltage_sensors.c        |  97 ++++++++++++++++
- 10 files changed, 663 insertions(+)
+ 10 files changed, 675 insertions(+)
  create mode 100644 board/freescale/gateway_dk/setup/clock_gen.c
  create mode 100644 board/freescale/gateway_dk/setup/ddr_sanity.c
  create mode 100644 board/freescale/gateway_dk/setup/fan_controller.c
@@ -551,10 +551,10 @@ index 00000000000..6e4a697aa29
 +}
 diff --git a/board/freescale/gateway_dk/setup/temp_sensors.c b/board/freescale/gateway_dk/setup/temp_sensors.c
 new file mode 100644
-index 00000000000..1f1137c8735
+index 00000000000..5f71717828d
 --- /dev/null
 +++ b/board/freescale/gateway_dk/setup/temp_sensors.c
-@@ -0,0 +1,58 @@
+@@ -0,0 +1,70 @@
 +// SPDX-License-Identifier: GPL-2.0+
 +/*
 + * Copyright 2025 Mono Technologies Inc.
@@ -573,8 +573,17 @@ index 00000000000..1f1137c8735
 +#define REMOTE_TEMP_REG		0x01
 +#define LOCAL_TEMP_REG		0x00
 +
-+/* Temperature range limits (degrees Celsius) */
-+#define TEMP_MIN		15
++/*
++ * Sanity limits (degrees Celsius). The test guards against a broken
++ * or misread sensor and against cooling failure, not the operating
++ * envelope: sensor faults read as -55, -64, -128 or +127, so the
++ * floor only needs to sit below anything a working sensor can report
++ * in a home (a cold room, or a unit powered on straight after winter
++ * delivery). The fan curve keeps both sensors well below 60 in every
++ * legitimate state, including a warm reboot, so a reading above it
++ * means the fans or the sensor path are broken.
++ */
++#define TEMP_MIN		0
 +#define TEMP_MAX		60
 +
 +static int read_temperature(struct hw_test_ctx *ctx, const char *label,
@@ -591,7 +600,8 @@ index 00000000000..1f1137c8735
 +	if (ret < 0)
 +		return hw_test_fail(ctx, "%s sensor read failed", label);
 +
-+	*temp_out = (int)(uint8_t)ret;
++	/* Standard-range TMP431 readings are signed two's complement */
++	*temp_out = (int)(int8_t)ret;
 +	return 0;
 +}
 +
@@ -606,10 +616,12 @@ index 00000000000..1f1137c8735
 +		return -1;
 +
 +	if (cpu_temp < TEMP_MIN || cpu_temp > TEMP_MAX)
-+		return hw_test_fail(ctx, "CPU out of range: %d °C", cpu_temp);
++		return hw_test_fail(ctx, "CPU out of range: %d °C (0x%02x)",
++				    cpu_temp, (uint8_t)cpu_temp);
 +
 +	if (board_temp < TEMP_MIN || board_temp > TEMP_MAX)
-+		return hw_test_fail(ctx, "Board out of range: %d °C", board_temp);
++		return hw_test_fail(ctx, "Board out of range: %d °C (0x%02x)",
++				    board_temp, (uint8_t)board_temp);
 +
 +	return hw_test_pass(ctx, "CPU %d °C, Board %d °C", cpu_temp, board_temp);
 +}
