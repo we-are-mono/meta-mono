@@ -1,4 +1,4 @@
-From e7349972598c8b2e194ed199d2d8d30873b705d0 Mon Sep 17 00:00:00 2001
+From 3b34aa4cb4e9685a41a1bb6c5c4d4e23336c2d34 Mon Sep 17 00:00:00 2001
 From: Tomaz Zaman <tomaz@mono.si>
 Date: Sun, 19 Apr 2026 15:23:47 +0200
 Subject: [PATCH 1/7] board: freescale: gateway-dk: add board core
@@ -18,11 +18,11 @@ Signed-off-by: Tomaz Zaman <tomaz@mono.si>
  board/freescale/gateway_dk/Kconfig      |  16 +++
  board/freescale/gateway_dk/MAINTAINERS  |   6 +
  board/freescale/gateway_dk/Makefile     |   8 ++
- board/freescale/gateway_dk/README       |  76 ++++++++++
+ board/freescale/gateway_dk/README       |  62 +++++++++
  board/freescale/gateway_dk/ddr.c        |  19 +++
  board/freescale/gateway_dk/eth.c        |  96 +++++++++++++
  board/freescale/gateway_dk/gateway_dk.c | 175 ++++++++++++++++++++++++
- 7 files changed, 396 insertions(+)
+ 7 files changed, 382 insertions(+)
  create mode 100644 board/freescale/gateway_dk/Kconfig
  create mode 100644 board/freescale/gateway_dk/MAINTAINERS
  create mode 100644 board/freescale/gateway_dk/Makefile
@@ -82,86 +82,72 @@ index 00000000000..fe4cb4e3a7c
 +obj-y += setup/
 diff --git a/board/freescale/gateway_dk/README b/board/freescale/gateway_dk/README
 new file mode 100644
-index 00000000000..2c7c797a879
+index 00000000000..9ec23cb5502
 --- /dev/null
 +++ b/board/freescale/gateway_dk/README
-@@ -0,0 +1,76 @@
-+Overview
+@@ -0,0 +1,62 @@
++Mono Gateway Development Kit
++============================
++
++The Gateway Development Kit (Gateway-DK) is Mono's LS1046A-based
++network appliance development platform.
++
++ - NXP QorIQ LS1046A, 4x Cortex-A72
++ - 8 GB DDR4 at 2100 MT/s with ECC, soldered down (static
++   controller init in TF-A, no SPD)
++ - 3x 1 Gbit/s copper ports (SGMII, MaxLinear GPY115 PHYs)
++ - 2x 10 Gbit/s SFP+ cages (XFI, DS100DF410 retimer)
++ - 64 MB QSPI NOR flash (Micron MT25QU512ABB) and eMMC
++ - USB Type-C (HD3SS3220 controller, STUSB4500 USB-PD)
++ - Board management on I2C: PCA9545 muxes at 0x70, AT24CS32
++   board-info EEPROM, PCF2131 RTC, EMC2302 fan controller, TMP431
++   temperature sensors, INA234 rail monitors, 6V49205B clock
++   generator, LP58xx status LED controller
++
++SerDes configuration (RCW protocol 0x1133_0x5A06)
++-------------------------------------------------
++SerDes1: XFI.9, XFI.10 (SFP+ cages), SGMII.5, SGMII.6
++SerDes2: PCIe1 x1, SGMII.2, unused, PCIe3 x1
++
++Ethernet MACs map to physical ports left to right:
++fm1-mac5, fm1-mac6, fm1-mac2 (1G), fm1-mac9, fm1-mac10 (10G).
++Model, serial number and per-port MAC addresses are read from the
++board-info EEPROM into the environment at boot; the program_eeprom
++command provisions them at the factory.
++
++Boot flow
++---------
++The board boots through TF-A (TFABOOT). The SoC loads BL2 from QSPI
++or eMMC as selected by a DIP switch, BL2 loads the FIP (BL31 plus
++U-Boot as BL33), and U-Boot runs the per-component hardware
++self-test from misc_init_r() before booting Linux. The self-test
++verdict is surfaced on the status LED and passed to the kernel via
++the bootargs_hwtest environment variable.
++
++Firmware layout (32 MB image)
++-----------------------------
++Offset      Size   Content
++0x00000000  1 MB   RCW + PBI + BL2
++0x00100000  2 MB   FIP (BL31 + U-Boot)
++0x00300000  1 MB   U-Boot environment (8 KB used)
++0x00400000  1 MB   FMan microcode
++0x00500000  1 MB   Recovery device tree
++0x00600000  4 MB   Unallocated
++0x00A00000 22 MB   Recovery kernel + initramfs
++
++The eMMC layout is identical except that BL2 is written at a 4 KB
++offset (the boot ROM fetches it from there), which keeps the
++partition table sector intact.
++
++Building
 +--------
-+The LS1046A Freeway Board (iFRWY) is a high-performance computing,
-+evaluation, and development platform that supports the QorIQ LS1046A
-+LayerScape Architecture processor. The FRWY-LS1046A provides SW development
-+platform for the Freescale LS1046A processor series, with a complete
-+debugging environment. The FRWY-LS1046A  is lead-free and RoHS-compliant.
++U-Boot alone:
 +
-+LS1046A SoC Overview
-+--------------------
-+Please refer arch/arm/cpu/armv8/fsl-layerscape/doc/README.soc for LS1046A
-+SoC overview.
++    make mono_gateway_dk_defconfig
++    make
 +
-+ FRWY-LS1046A board Overview
-+ -----------------------
-+ - SERDES1 Connections, 4 lanes supporting:
-+      - Lane0: Unused
-+      - Lane1: Unused
-+      - Lane2: QSGMII
-+      - Lane3: Unused
-+ - SERDES2 Connections, 4 lanes supporting:
-+      - Lane0: Unused
-+      - Lane1: PCIe3 with PCIe x1 slot
-+      - Lane2: Unused
-+      - Lane3: PCIe3 with PCIe x1 slot
-+ - DDR Controller
-+     - 8GB 64bits DDR4 SDRAM. Support rates of up to 2133MT/s
-+ -IFC/Local Bus
-+    - One 512 MB NAND flash with ECC support
-+ - USB 3.0
-+    - Two Type A port
-+ - SDHC: connects directly to a full microSD slot
-+ - QSPI: 64 MB high-speed flash Memory for boot code and storage
-+ - 4 I2C controllers
-+ - UART
-+   - Two 4-pin serial ports at up to 115.2 Kbit/s
-+   - Two DB9 D-Type connectors supporting one Serial port each
-+ - ARM JTAG support
-+
-+Memory map from core's view
-+----------------------------
-+Start Address	 End Address	 Description		Size
-+0x00_0000_0000 - 0x00_000F_FFFF  Secure Boot ROM	1MB
-+0x00_0100_0000 - 0x00_0FFF_FFFF  CCSRBAR		240MB
-+0x00_1000_0000 - 0x00_1000_FFFF  OCRAM0			64KB
-+0x00_1001_0000 - 0x00_1001_FFFF  OCRAM1			64KB
-+0x00_2000_0000 - 0x00_20FF_FFFF  DCSR			16MB
-+0x00_7E80_0000 - 0x00_7E80_FFFF  IFC - NAND Flash	64KB
-+0x00_7FB0_0000 - 0x00_7FB0_0FFF  IFC - CPLD		4KB
-+0x00_8000_0000 - 0x00_FFFF_FFFF  DRAM1			2GB
-+0x05_0000_0000 - 0x05_07FF_FFFF  QMAN S/W Portal	128M
-+0x05_0800_0000 - 0x05_0FFF_FFFF  BMAN S/W Portal	128M
-+0x08_8000_0000 - 0x09_FFFF_FFFF  DRAM2			6GB
-+0x40_0000_0000 - 0x47_FFFF_FFFF  PCI Express1		32G
-+0x48_0000_0000 - 0x4F_FFFF_FFFF  PCI Express2		32G
-+0x50_0000_0000 - 0x57_FFFF_FFFF  PCI Express3		32G
-+
-+QSPI flash map:
-+Start Address    End Address     Description		Size
-+0x00_4000_0000 - 0x00_400F_FFFF  RCW + PBI + BL2	1MB
-+0x00_4010_0000 - 0x00_404F_FFFF  FIP Image
-+				  (Bl31 + BL32(optee.
-+				  bin) + Bl33(uboot)
-+				  + headers for secure
-+				  boot)			4MB
-+0x00_4050_0000 - 0x00_405F_FFFF  Boot Firmware Env	1MB
-+0x00_4060_0000 - 0x00_408F_FFFF  Secure boot headers	3MB
-+0x00_4090_0000 - 0x00_4093_FFFF  FMan ucode		256KB
-+0x00_4094_0000 - 0x00_4097_FFFF  QE/uQE firmware	256KB
-+0x00_409C_0000 - 0x00_409F_FFFF  Reserved		256KB
-+0x00_4100_0000 - 0x00_43FF_FFFF  FIT Image		48MB
-+
-+Booting Options
-+---------------
-+a) QSPI boot
-+b) microSD boot
++Complete firmware images are assembled by the meta-mono Yocto layer:
++https://github.com/we-are-mono/meta-mono
 diff --git a/board/freescale/gateway_dk/ddr.c b/board/freescale/gateway_dk/ddr.c
 new file mode 100644
 index 00000000000..4d8356df78c
