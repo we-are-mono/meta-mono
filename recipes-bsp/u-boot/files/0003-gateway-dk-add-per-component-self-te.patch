@@ -1,4 +1,4 @@
-From f7a5b6963db3604bacaf041a67fa3fdfb05e5f97 Mon Sep 17 00:00:00 2001
+From 32495db4e0563aec95aeb5e8fccc16d228c1aca8 Mon Sep 17 00:00:00 2001
 From: Tomaz Zaman <tomaz@mono.si>
 Date: Sun, 19 Apr 2026 15:24:13 +0200
 Subject: [PATCH 3/7] board: freescale: gateway-dk: add per-component
@@ -27,7 +27,7 @@ Upstream-Status: Inappropriate [product-specific]
 Signed-off-by: Tomaz Zaman <tomaz@mono.si>
 ---
  board/freescale/gateway_dk/setup/clock_gen.c  |  67 +++++++++++
- board/freescale/gateway_dk/setup/ddr_sanity.c |  57 +++++++++
+ board/freescale/gateway_dk/setup/ddr_sanity.c |  73 ++++++++++++
  .../gateway_dk/setup/fan_controller.c         |  89 +++++++++++++++
  .../gateway_dk/setup/led_controller.c         | 108 ++++++++++++++++++
  board/freescale/gateway_dk/setup/retimer.c    |  36 ++++++
@@ -36,7 +36,7 @@ Signed-off-by: Tomaz Zaman <tomaz@mono.si>
  .../freescale/gateway_dk/setup/temp_sensors.c |  70 ++++++++++++
  .../gateway_dk/setup/typec_controller.c       |  49 ++++++++
  .../gateway_dk/setup/voltage_sensors.c        |  97 ++++++++++++++++
- 10 files changed, 675 insertions(+)
+ 10 files changed, 691 insertions(+)
  create mode 100644 board/freescale/gateway_dk/setup/clock_gen.c
  create mode 100644 board/freescale/gateway_dk/setup/ddr_sanity.c
  create mode 100644 board/freescale/gateway_dk/setup/fan_controller.c
@@ -123,10 +123,10 @@ index 00000000000..836930d1dc1
 +}
 diff --git a/board/freescale/gateway_dk/setup/ddr_sanity.c b/board/freescale/gateway_dk/setup/ddr_sanity.c
 new file mode 100644
-index 00000000000..bb4fda089d3
+index 00000000000..586b3c8e1a4
 --- /dev/null
 +++ b/board/freescale/gateway_dk/setup/ddr_sanity.c
-@@ -0,0 +1,57 @@
+@@ -0,0 +1,73 @@
 +// SPDX-License-Identifier: GPL-2.0+
 +/*
 + * Quick verification of DDR banks.
@@ -135,6 +135,7 @@ index 00000000000..bb4fda089d3
 + */
 +
 +#include <config.h>
++#include <cpu_func.h>
 +#include <linux/kernel.h>
 +#include <asm/global_data.h>
 +#include "hw_test.h"
@@ -144,15 +145,29 @@ index 00000000000..bb4fda089d3
 +/* Probe locations chosen to be safe from u-boot's own RAM usage */
 +static const u64 bank0_locations[] = {
 +	0x80000000ULL,	/* Start */
-+	0xB0000000ULL,	/* Middle (~768MB in) */
++	0xB0000000ULL,	/* ~768MB in */
 +	0xF0000000ULL,	/* Near end */
 +};
 +
 +static const u64 bank1_locations[] = {
 +	0x880000000ULL,	/* Start */
-+	0x900000000ULL,	/* Middle (~3GB in) */
++	0x900000000ULL,	/* ~2GB in */
 +	0x9FFFF0000ULL,	/* Near end */
 +};
++
++/*
++ * Round-trip one value through the DDR chip. The dcache is on, so a
++ * plain write+readback would be served entirely from L1; the flush
++ * cleans the written line out to DRAM and invalidates it, forcing
++ * the readback to be a real DRAM fetch.
++ */
++static int probe_value(volatile uint32_t *addr, uint32_t val)
++{
++	*addr = val;
++	flush_dcache_range((unsigned long)addr,
++			   (unsigned long)addr + sizeof(*addr));
++	return *addr != val;
++}
 +
 +static int probe_bank(const u64 *locations, size_t n, uint32_t pattern)
 +{
@@ -162,9 +177,10 @@ index 00000000000..bb4fda089d3
 +	for (i = 0; i < n; i++) {
 +		volatile uint32_t *addr = (volatile uint32_t *)locations[i];
 +		uint32_t test_val = pattern ^ (i << 16);
-+		*addr = test_val;
-+		if (*addr != test_val)
-+			errors++;
++
++		/* Both polarities, so stuck-at bits fail either way */
++		errors += probe_value(addr, test_val);
++		errors += probe_value(addr, ~test_val);
 +	}
 +
 +	return errors;
