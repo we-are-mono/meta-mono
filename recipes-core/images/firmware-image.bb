@@ -39,6 +39,17 @@ python __anonymous() {
                  "or missing (%r). Devices need the pubkey to verify signatures." % pub)
 }
 
+# Fail the build if a component outgrows its flash window; dd would
+# otherwise silently overwrite the next region or grow the image past 32MB.
+check_size() {
+    file="$1"
+    window_kib="$2"
+    size=$(stat -Lc %s "$file")
+    if [ "$size" -gt "$(expr $window_kib \* 1024)" ]; then
+        bbfatal "$(basename $file) is $size bytes, exceeds its ${window_kib}KiB flash window"
+    fi
+}
+
 do_compile() {
     for d in ${BOOTTYPE}; do
         # Create 32MB firmware image (zero-filled)
@@ -50,6 +61,16 @@ do_compile() {
         else
             BL2_SEEK=0
         fi
+
+        # Windows match the mtdparts layout in the u-boot environment (and the
+        # sizes its recovery command reads back), with the kernel+initramfs
+        # window ending at the 32MB image size.
+        check_size ${DEPLOY_DIR_IMAGE}/atf/bl2_${d}.pbl $(expr 1024 - $BL2_SEEK)
+        check_size ${DEPLOY_DIR_IMAGE}/atf/fip.bin 2048
+        check_size ${DEPLOY_DIR_IMAGE}/u-boot-${d}.env 1024
+        check_size ${DEPLOY_DIR_IMAGE}/${FMAN_UCODE} 1024
+        check_size ${DEPLOY_DIR_IMAGE}/mono-gateway-dk.dtb 1024
+        check_size ${DEPLOY_DIR_IMAGE}/Image.gz-initramfs-${MACHINE}.bin 22528
 
         dd if=${DEPLOY_DIR_IMAGE}/atf/bl2_${d}.pbl of=${WORKDIR}/firmware-${d}.bin bs=1K seek=${BL2_SEEK} conv=notrunc
         dd if=${DEPLOY_DIR_IMAGE}/atf/fip.bin of=${WORKDIR}/firmware-${d}.bin bs=1K seek=1024 conv=notrunc

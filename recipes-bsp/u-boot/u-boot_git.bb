@@ -18,6 +18,9 @@ SRC_URI = "git://github.com/nxp-qoriq/u-boot;protocol=https;nobranch=1 \
            file://0005-gateway-dk-add-defconfig-and-board-header.patch \
            file://0006-gateway-dk-add-dts.patch \
            file://0007-gateway-dk-wire-into-upstream-tree.patch \
+           file://environment.txt \
+           file://environment-qspi.txt \
+           file://environment-emmc.txt \
           "
 SRCREV = "${NXP_LF_SRCREV_UBOOT}"
 
@@ -39,9 +42,8 @@ do_compile() {
     oe_runmake ${UBOOT_MACHINE}
     oe_runmake ${EXTRA_OEMAKE}
     # Build per-boottype environments (common base + boottype-specific recovery command).
-    # Templates are read directly from the layer; no SRC_URI/UNPACKDIR dance needed.
-    cat ${THISDIR}/files/environment.txt ${THISDIR}/files/environment-qspi.txt | mkenvimage -s 0x2000 -o ${B}/u-boot-qspi.env -
-    cat ${THISDIR}/files/environment.txt ${THISDIR}/files/environment-emmc.txt | mkenvimage -s 0x2000 -o ${B}/u-boot-emmc.env -
+    cat ${UNPACKDIR}/environment.txt ${UNPACKDIR}/environment-qspi.txt | mkenvimage -s 0x2000 -o ${B}/u-boot-qspi.env -
+    cat ${UNPACKDIR}/environment.txt ${UNPACKDIR}/environment-emmc.txt | mkenvimage -s 0x2000 -o ${B}/u-boot-emmc.env -
 }
 
 do_deploy() {

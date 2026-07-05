@@ -2,7 +2,11 @@ SUMMARY = "Firmware update and management utility for Mono Gateway"
 LICENSE = "MIT"
 LIC_FILES_CHKSUM = "file://${COMMON_LICENSE_DIR}/MIT;md5=0835ade698e0bcf8506ecda2f7b4f302"
 
-RDEPENDS:${PN} = "bash curl mtd-utils mmc-utils"
+RDEPENDS:${PN} = "bash curl mtd-utils mmc-utils openssl-bin"
+
+# The package embeds MACHINE and FIRMWARE_VERSION (machine-conf variables),
+# so it must not be shared across machines from tune-arch sstate.
+PACKAGE_ARCH = "${MACHINE_ARCH}"
 
 SRC_URI = "file://firmware \
            file://firmware-signing.pub \
