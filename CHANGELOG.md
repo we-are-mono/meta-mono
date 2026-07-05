@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-07-05 — Fix the boot-script fallback chain that old hush never honored
+- environment: mkenvimage turns `\`+newline continuations into embedded newlines, and U-Boot's old hush parser (CONFIG_HUSH_OLD_PARSER) drops `&&`/`||` operators at a newline — every line of the `emmc` script ran unconditionally, so a failed kernel/dtb load still reached `booti` (booting stale DRAM contents on a warm reset instead of falling through to recovery). Each pipeline now sits on a single physical line, split into `emmc_load`/`emmc_itb` sub-variables for readability; verified via mkenvimage that no variable carries an embedded newline
+- environment-emmc/qspi: gate the `recovery` read chain with `&&` instead of `;` so a failed `sf probe`/`sf read`/`mmc read` no longer reaches `booti` with garbage
+
 ## 2026-07-05 — Code review follow-ups: build correctness, patch hygiene, self-test fixes
 - firmware-image: recreate the image file every build (stale gap-residue fix), assert each component fits its flash window
 - u-boot: env templates enter the task signature (SRC_URI); editing them now retriggers the build
