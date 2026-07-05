@@ -3,6 +3,10 @@ DESCRIPTION = "Controls status LEDs with pulsing animation during boot and const
 LICENSE = "MIT"
 LIC_FILES_CHKSUM = "file://${COMMON_LICENSE_DIR}/MIT;md5=0835ade698e0bcf8506ecda2f7b4f302"
 
+# status-led.sh names this board's LED devices, so the package is
+# machine-arch rather than allarch.
+PACKAGE_ARCH = "${MACHINE_ARCH}"
+
 SRC_URI = " \
     file://status-led.sh \
     file://S95status-led \

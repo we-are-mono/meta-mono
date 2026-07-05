@@ -16,7 +16,7 @@ require conf/include/nxp-base.inc
 # Upstream's curated kernel CVE triage (not-applicable / wrong-platform /
 # historic), keyed by CVE_STATUS. Suppresses CVEs that don't apply to a
 # stock arm64 kernel so sbom-cve-check reports only the real deltas.
-include recipes-kernel/linux/cve-exclusion.inc
+require recipes-kernel/linux/cve-exclusion.inc
 
 LINUX_VERSION = "${NXP_LF_LINUX_VERSION}"
 PV = "${LINUX_VERSION}+git${SRCPV}"

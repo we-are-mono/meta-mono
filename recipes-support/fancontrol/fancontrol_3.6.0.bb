@@ -6,6 +6,10 @@ LIC_FILES_CHKSUM = "file://COPYING;md5=751419260aa954499f7abaabaa882bbe \
 
 DEPENDS = "bison-native flex-native"
 RDEPENDS:${PN} = "bash"
+
+# fancontrol.conf is board-specific (hwmon devices, fan channels), so the
+# package is machine-arch despite the generic lm-sensors binaries.
+PACKAGE_ARCH = "${MACHINE_ARCH}"
 INSANE_SKIP:${PN} += "ldflags useless-rpaths"
 
 SRC_URI = "git://github.com/lm-sensors/lm-sensors.git;protocol=https;branch=master \
