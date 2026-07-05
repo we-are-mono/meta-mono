@@ -1,9 +1,43 @@
 #!/bin/sh
+#
+# hwmon indices depend on driver probe order, so the shipped config is
+# a template: resolve the fan controller and temperature source by
+# name at every start and generate the real config from it.
+
+TEMPLATE=/etc/fancontrol.in
+CONF=/var/run/fancontrol
+LOG=/var/run/fancontrol.log
+
+find_hwmon() {
+    for h in /sys/class/hwmon/hwmon*; do
+        [ "$(cat "$h/name" 2>/dev/null)" = "$1" ] && { basename "$h"; return 0; }
+    done
+    return 1
+}
+
+generate_conf() {
+    fan=$(find_hwmon emc2305) || {
+        echo "fancontrol: no emc2305 hwmon device, not starting"
+        return 1
+    }
+    temp=$(find_hwmon cluster_thermal) || {
+        echo "fancontrol: no cluster_thermal hwmon device, not starting"
+        return 1
+    }
+    fan_path=$(readlink -f "/sys/class/hwmon/$fan/device" | sed 's|^/sys/||')
+    temp_path=$(readlink -f "/sys/class/hwmon/$temp/device" | sed 's|^/sys/||')
+    sed -e "s|@FAN@|$fan|g" \
+        -e "s|@TEMP@|$temp|g" \
+        -e "s|@FAN_PATH@|$fan_path|g" \
+        -e "s|@TEMP_PATH@|$temp_path|g" \
+        "$TEMPLATE" > "$CONF"
+}
 
 case "$1" in
     start)
         echo "Starting fancontrol"
-        /usr/sbin/fancontrol > /dev/null 2>&1 &
+        generate_conf || exit 1
+        /usr/sbin/fancontrol "$CONF" > "$LOG" 2>&1 &
         ;;
     stop)
         echo "Stopping fancontrol"
