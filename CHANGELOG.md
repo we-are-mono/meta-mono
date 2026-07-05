@@ -1,5 +1,19 @@
 # Changelog
 
+## 2026-07-05 — Code review follow-ups: build correctness, patch hygiene, self-test fixes
+- firmware-image: recreate the image file every build (stale gap-residue fix), assert each component fits its flash window
+- u-boot: env templates enter the task signature (SRC_URI); editing them now retriggers the build
+- u-boot 0007 rework: adds TARGET_GATEWAY_DK alongside ls1046afrwy instead of replacing it; drops FSL_DDR_INTERACTIVE/SUPPORT_SPL debug selects (binary-identical)
+- u-boot: fallback CONFIG_BOOTARGS matches the real 32MB flash layout (was RDB's 64MB + phantom NAND); board README rewritten for the actual hardware; dead RDB carry-over removed (board_eth_init, wrong RTC defines); erratum relabelled A-010539; XFI fixed-links 10G
+- u-boot self-tests: DDR probe flushes dcache so it round-trips real DRAM both polarities; temperature test decodes signed TMP431 values, floor 0 °C (was 15 — cold rooms no longer fail), 60 °C ceiling documented as cooling-failure bound
+- atf: drop DEBUG:=1/LOG_LEVEL:=40 leftovers (standalone builds now match the recipe); repair patch whitespace/modes (binary-identical)
+- kernel: drop MODULE_FORCE_LOAD/UNLOAD; add SENSORS_TMP401, POWER_RESET_GPIO (poweroff now works), PANIC_TIMEOUT=10; thermal governor step_wise; remove unused usdpaa dtb and dead bootmem nodes
+- fancontrol: resolve emc2305/cluster_thermal hwmon by name at boot (probe-order shifts no longer kill it); startup failures print to console, output logged
+- lp5812: set led->chip before classdev registration (NULL-deref window); sfp-led: remove unreachable EPROBE_DEFER branch
+- firmware-tools: explicit openssl-bin RDEPENDS; machine-arch packaging for firmware-tools/fancontrol/status-led; fm-ucode deploy task ordering; require (not include) cve-exclusion.inc
+- Validated on hardware: QSPI flash, full self-test pass, closed-loop fan control, mt25qu512abb SPI-NOR id confirmed needed
+- Bump FIRMWARE_VERSION to 2026.07.1
+
 ## 2026-06-13 — Recovery UX polish: colored prompt, vim-tiny, firmware-tool output
 - Recovery shell prompt: colored PS1 via /etc/profile.d — orange host (matches the /etc/issue banner, signals "you're in recovery") + gray working dir
 - Add vim-tiny to the recovery image, with a minimal root vimrc so it doesn't fail to source defaults.vim (E1187) on startup
