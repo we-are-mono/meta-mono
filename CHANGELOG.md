@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-07-06 — Remove tools/deploy (factory-floor UART flashing)
+- The tool provisioned blank devices over UART on the factory floor; it has been unrunnable since the April layer restructure (invokes deleted kas/*.yaml, expects pre-machine-suffix artifact names) and the process won't be used again. Recoverable from git history if a future production run needs it
+- Drop the tools/config.yaml entry from .gitignore
+
 ## 2026-07-06 — kernel: drop unloadable modules from the recovery defconfig
 - The recovery initramfs installs no kernel-module packages, so every `=m` option was built, packaged, and never loadable on the device. Remove all 17 (`AF_KCM`, `MLX4_EN`/`MLX5_CORE`, `MARVELL_PHY`, `FSL_QDMA`, `NET_DSA_MSCC_FELIX`, `NET_IPIP`, `NVMEM_LAYERSCAPE_SFP`, `CPU_FREQ_GOV_CONSERVATIVE`, six `CRYPTO_*`, `CRC_CCITT`, `CRC8`) plus the dead `MLX5_CORE_EN` bool, and pin the kconfig-defaulted `EFIVAR_FS` off
 - Add explicit `CONFIG_BPF_SYSCALL=y`: it was only in the kernel because `AF_KCM=m` selected it; without the pin, removing AF_KCM silently dropped the whole BPF cluster (`CGROUP_BPF`, `XDP_SOCKETS`) despite their explicit `=y` lines

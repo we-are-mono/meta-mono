@@ -7,7 +7,6 @@ bitbake-cookerdaemon.log
 
 # Developer-specific local config
 site.conf
-tools/config.yaml
 
 # Yocto outputs (in case someone builds elsewhere)
 tmp/
