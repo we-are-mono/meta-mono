@@ -40,6 +40,12 @@ EXTRA_OEMAKE += "\
     OPENSSL_DIR='${RECIPE_SYSROOT_NATIVE}/usr' \
 "
 
+# TF-A falls back to `git describe --dirty` for the version banner it
+# prints at every boot. Patches that touch tracked files leave the
+# source tree dirty, which would render as "...-2.2.0-dirty" on the
+# console, so name the release explicitly instead.
+EXTRA_OEMAKE += "BUILD_STRING='${NXP_LF_TAG}'"
+
 do_configure[noexec] = "1"
 
 do_compile() {
