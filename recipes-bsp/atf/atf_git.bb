@@ -4,7 +4,7 @@ LIC_FILES_CHKSUM = "file://docs/license.rst;md5=83b7626b8c7a37263c6a58af8d19bee1
 
 COMPATIBLE_MACHINE = "gateway-dk"
 
-DEPENDS = "u-boot-tools-native u-boot rcw"
+DEPENDS = "u-boot-tools-native openssl-native u-boot rcw"
 do_compile[depends] += "u-boot:do_deploy rcw:do_deploy"
 
 # Pinned to an NXP Linux Factory release (see conf/include/nxp-base.inc
@@ -32,6 +32,12 @@ CFLAGS[unexport] = "1"
 LDFLAGS[unexport] = "1"
 AS[unexport] = "1"
 LD[unexport] = "1"
+
+# Fix issue w/ missing paths to host toolchain and openssl-native
+EXTRA_OEMAKE += "\
+    host-cc='${BUILD_CC}' \
+    OPENSSL_DIR='${RECIPE_SYSROOT_NATIVE}/usr' \
+"
 
 do_configure[noexec] = "1"
 
