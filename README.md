@@ -52,9 +52,8 @@ The 32MB NOR flash image layout:
 | 1MB | 0x100000 | ATF FIP (BL31 + U-Boot) |
 | 3MB | 0x300000 | U-Boot Environment |
 | 4MB | 0x400000 | FMAN Microcode |
-| 5MB | 0x500000 | Device Tree |
-| 6MB | 0x600000 | Backup (reserved) |
-| 10MB | 0xA00000 | Kernel + Initramfs |
+| 5MB | 0x500000 | Backup (reserved) |
+| 10MB | 0xA00000 | Recovery FIT (kernel + initramfs + device tree) |
 
 The eMMC memory map is identical, but RCW+BL2 starts at a 4KB offset because the CPU boots from that offset on eMMC to avoid the partition table region.
 

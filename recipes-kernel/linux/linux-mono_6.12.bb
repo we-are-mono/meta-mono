@@ -4,6 +4,10 @@ LIC_FILES_CHKSUM = "file://COPYING;md5=6bc538ed5bd9a7fc9398086aedcd7e46"
 
 inherit kernel kernel-yocto
 
+# Deploy linux.bin and the dtbs so linux-mono-fitimage can assemble the FIT
+# the recovery boot path loads.
+KERNEL_CLASSES += "kernel-fit-extra-artifacts"
+
 DEPENDS += "bison-native flex-native bc-native"
 
 FILESEXTRAPATHS:prepend := "${THISDIR}/files:"

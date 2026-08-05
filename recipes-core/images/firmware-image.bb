@@ -1,15 +1,15 @@
-DESCRIPTION = "Combines RCW+BL2, ATF+U-Boot, environment, FMAN ucode, kernel + initramfs into 32MB NOR flash image"
+DESCRIPTION = "Combines RCW+BL2, ATF+U-Boot, environment, FMAN ucode and the recovery FIT into a 32MB NOR flash image"
 LICENSE = "MIT"
 LIC_FILES_CHKSUM = "file://${COMMON_LICENSE_DIR}/MIT;md5=0835ade698e0bcf8506ecda2f7b4f302"
 
-DEPENDS += "atf fm-ucode virtual/kernel recovery-image util-linux-native openssl-native"
+DEPENDS += "atf fm-ucode linux-mono-fitimage recovery-image util-linux-native openssl-native"
 # u-boot must be explicit: do_compile reads the .env images straight from
 # u-boot's deploy, and the implicit route via atf is cut by hash
 # equivalence whenever an env-only change leaves u-boot.bin identical.
 do_compile[depends] += "u-boot:do_deploy"
 do_compile[depends] += "atf:do_deploy"
 do_compile[depends] += "fm-ucode:do_deploy"
-do_compile[depends] += "virtual/kernel:do_deploy"
+do_compile[depends] += "linux-mono-fitimage:do_deploy"
 do_compile[depends] += "recovery-image:do_image_complete"
 
 inherit deploy
@@ -77,15 +77,13 @@ do_compile() {
         check_size ${DEPLOY_DIR_IMAGE}/atf/fip.bin 2048
         check_size ${DEPLOY_DIR_IMAGE}/u-boot-${d}.env 1024
         check_size ${DEPLOY_DIR_IMAGE}/${FMAN_UCODE} 1024
-        check_size ${DEPLOY_DIR_IMAGE}/mono-gateway-dk.dtb 1024
-        check_size ${DEPLOY_DIR_IMAGE}/Image.gz-initramfs-${MACHINE}.bin 22528
+        check_size ${DEPLOY_DIR_IMAGE}/fitImage 22528
 
         dd if=${DEPLOY_DIR_IMAGE}/atf/bl2_${d}.pbl of=${WORKDIR}/firmware-${d}.bin bs=1K seek=${BL2_SEEK} conv=notrunc
         dd if=${DEPLOY_DIR_IMAGE}/atf/fip.bin of=${WORKDIR}/firmware-${d}.bin bs=1K seek=1024 conv=notrunc
         dd if=${DEPLOY_DIR_IMAGE}/u-boot-${d}.env of=${WORKDIR}/firmware-${d}.bin bs=1K seek=3072 conv=notrunc
         dd if=${DEPLOY_DIR_IMAGE}/${FMAN_UCODE} of=${WORKDIR}/firmware-${d}.bin bs=1K seek=4096 conv=notrunc
-        dd if=${DEPLOY_DIR_IMAGE}/mono-gateway-dk.dtb of=${WORKDIR}/firmware-${d}.bin bs=1K seek=5120 conv=notrunc
-        dd if=${DEPLOY_DIR_IMAGE}/Image.gz-initramfs-${MACHINE}.bin of=${WORKDIR}/firmware-${d}.bin bs=1K seek=10240 conv=notrunc
+        dd if=${DEPLOY_DIR_IMAGE}/fitImage of=${WORKDIR}/firmware-${d}.bin bs=1K seek=10240 conv=notrunc
     done
 }
 
