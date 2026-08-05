@@ -9,10 +9,10 @@ stderr=serial@21c0500
 stdin=serial@21c0500
 stdout=serial@21c0500
 
-kernel_addr=0xA00000
-kernel_blk=0x5000
-kernel_size=0x1600000
-kernel_blkcnt=0xB000
+kernel_addr=0x800000
+kernel_blk=0x4000
+kernel_size=0x1800000
+kernel_blkcnt=0xC000
 
 fdt_addr_r=0x88000000
 kernel_addr_r=0x82000000

@@ -70,20 +70,20 @@ do_compile() {
             BL2_SEEK=0
         fi
 
-        # Windows match the mtdparts layout in the u-boot environment (and the
-        # sizes its recovery command reads back), with the kernel+initramfs
-        # window ending at the 32MB image size.
+        # Windows match the partition layout in the kernel device tree (and
+        # the sizes the recovery command reads back), with the FIT window
+        # ending at the 32MB image size.
         check_size ${DEPLOY_DIR_IMAGE}/atf/bl2_${d}.pbl $(expr 1024 - $BL2_SEEK)
         check_size ${DEPLOY_DIR_IMAGE}/atf/fip.bin 2048
         check_size ${DEPLOY_DIR_IMAGE}/u-boot-${d}.env 1024
         check_size ${DEPLOY_DIR_IMAGE}/${FMAN_UCODE} 1024
-        check_size ${DEPLOY_DIR_IMAGE}/fitImage 22528
+        check_size ${DEPLOY_DIR_IMAGE}/fitImage 24576
 
         dd if=${DEPLOY_DIR_IMAGE}/atf/bl2_${d}.pbl of=${WORKDIR}/firmware-${d}.bin bs=1K seek=${BL2_SEEK} conv=notrunc
         dd if=${DEPLOY_DIR_IMAGE}/atf/fip.bin of=${WORKDIR}/firmware-${d}.bin bs=1K seek=1024 conv=notrunc
         dd if=${DEPLOY_DIR_IMAGE}/u-boot-${d}.env of=${WORKDIR}/firmware-${d}.bin bs=1K seek=3072 conv=notrunc
         dd if=${DEPLOY_DIR_IMAGE}/${FMAN_UCODE} of=${WORKDIR}/firmware-${d}.bin bs=1K seek=4096 conv=notrunc
-        dd if=${DEPLOY_DIR_IMAGE}/fitImage of=${WORKDIR}/firmware-${d}.bin bs=1K seek=10240 conv=notrunc
+        dd if=${DEPLOY_DIR_IMAGE}/fitImage of=${WORKDIR}/firmware-${d}.bin bs=1K seek=8192 conv=notrunc
     done
 }
 

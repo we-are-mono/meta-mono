@@ -12,6 +12,7 @@ IMAGE_INSTALL = "busybox base-files resolv-conf-static bash shadow kmod udev \
                 e2fsprogs e2fsprogs-resize2fs mmc-utils mtd-utils i2c-tools \
                 ethtool curl gzip xz tar vim-tiny firmware-tools \
                 fancontrol sfp-led status-led lp5812-driver \
+                tcpdump iproute2 dosfstools stressapptest \
                 "
 
 # Empty root password is intentional: recovery is only reachable via
