@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-08-05 — ATF: build fixes for newer toolchains and hosts
+- Add `openssl-native` to DEPENDS and point `OPENSSL_DIR` at the native sysroot: fiptool was compiled and linked against the *host* openssl, and failed outright on hosts without openssl-dev (#20, Luke McHale)
+- Drop the unused `file_size` in `create_pbl.c` — GCC 15 tightened `-Wunused-but-set-variable` and the tool builds with `-Werror` (#16, Jens Almer)
+- Pin `BUILD_STRING` to `NXP_LF_TAG`: TF-A otherwise derives its boot banner from `git describe --dirty`, and the create_pbl patch is the first to modify a tracked file, so every boot would have printed `lf-6.12.49-2.2.0-dirty`
+- Verified no-op: BL2, FIP and both firmware images are byte-identical to 2026.07.2, so no version bump
+
 ## 2026-07-06 — Remove tools/deploy (factory-floor UART flashing)
 - The tool provisioned blank devices over UART on the factory floor; it has been unrunnable since the April layer restructure (invokes deleted kas/*.yaml, expects pre-machine-suffix artifact names) and the process won't be used again. Recoverable from git history if a future production run needs it
 - Drop the tools/config.yaml entry from .gitignore
