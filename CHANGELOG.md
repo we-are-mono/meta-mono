@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-08-05 — Recovery boots from a single FIT, gains diagnostic tools
+- Pack the recovery kernel, its initramfs and the device tree into one FIT at 8MB and boot it with `bootm`, replacing the separate dtb (5MB) and kernel (10MB) regions, the two reads they needed, and four offset variables that were each expressed twice — as byte addresses for the QSPI path and 512-byte block numbers for the eMMC one. wrynose builds FIT images from a separate recipe rather than a `KERNEL_IMAGETYPE`, hence `linux-mono-fitimage` plus `kernel-fit-extra-artifacts` on the kernel
+- `bootm` verifies a sha256 over both subimages before starting the kernel; `booti` verified nothing
+- Add tcpdump, iproute2, dosfstools and stressapptest (+2.09MB): recovery on a network appliance could not capture a packet, read link counters, check the FAT stick its own USB update path mounts, or exercise memory under load
+- Widen the FIT window to 8MB–32MB (24MB, 92% used) to fit them, taking 2MB from the unused `backup` region; `kernel-initramfs` becomes `recovery-fit`, and the never-referenced `ramdisk_addr_r` leaves the environment
+- Verified on hardware, both media: QSPI reads 25165824 bytes at 0x800000, eMMC 49152 blocks at 0x4000, both hash-verify kernel and fdt and reach the recovery login; stressapptest passes 7250MB across 4 threads at 5102MB/s with no incidents
+- Bump FIRMWARE_VERSION to 2026.08.1
+
 ## 2026-08-05 — ATF: build fixes for newer toolchains and hosts
 - Add `openssl-native` to DEPENDS and point `OPENSSL_DIR` at the native sysroot: fiptool was compiled and linked against the *host* openssl, and failed outright on hosts without openssl-dev (#20, Luke McHale)
 - Drop the unused `file_size` in `create_pbl.c` — GCC 15 tightened `-Wunused-but-set-variable` and the tool builds with `-Werror` (#16, Jens Almer)
