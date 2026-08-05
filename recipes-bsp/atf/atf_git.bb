@@ -14,6 +14,7 @@ require conf/include/nxp-base.inc
 SRC_URI = "git://github.com/nxp-qoriq/atf;protocol=https;nobranch=1 \
            file://0001-gateway-dk-add-board-support.patch \
            file://0002-gateway-dk-add-DDR4-initialization.patch \
+           file://0003-tools-nxp-create_pbl-fix-unused-variable.patch \
 "
 SRCREV = "${NXP_LF_SRCREV_ATF}"
 
