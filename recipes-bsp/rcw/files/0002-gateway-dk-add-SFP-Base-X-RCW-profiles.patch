@@ -1,7 +1,7 @@
 From 524b648d7785a5a63445f34d44466d30bd135d4a Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?M=C3=B4she=20van=20der=20Sterre?= <me@moshe.nl>
 Date: Fri, 7 Aug 2026 15:55:35 +0200
-Subject: [PATCH] board: gateway_dk: derive SFP modes from SerDes RCW
+Subject: [PATCH] gateway_dk: add SFP Base-X RCW profiles
 
 Upstream-Status: Inappropriate [product-specific]
 

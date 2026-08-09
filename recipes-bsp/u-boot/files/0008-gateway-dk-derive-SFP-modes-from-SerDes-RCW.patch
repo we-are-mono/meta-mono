@@ -1,17 +1,20 @@
-From 70baa83ef1aa138de8612053da7d5630795bc8f3 Mon Sep 17 00:00:00 2001
+From bb9e253bce57e775a05a17404b81c437c6c07be6 Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?M=C3=B4she=20van=20der=20Sterre?= <me@moshe.nl>
 Date: Fri, 7 Aug 2026 15:34:46 +0200
 Subject: [PATCH] board: gateway_dk: derive SFP modes from SerDes RCW
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
 
 Upstream-Status: Inappropriate [product-specific]
 
 Signed-off-by: Môshe van der Sterre <me@moshe.nl>
 ---
- board/freescale/gateway_dk/gateway_dk.c | 195 +++++++++++++++++++++++-
- 1 file changed, 194 insertions(+), 1 deletion(-)
+ board/freescale/gateway_dk/gateway_dk.c | 192 +++++++++++++++++++++++-
+ 1 file changed, 191 insertions(+), 1 deletion(-)
 
 diff --git a/board/freescale/gateway_dk/gateway_dk.c b/board/freescale/gateway_dk/gateway_dk.c
-index 53beeee70e2..1583b761d2e 100644
+index 53beeee70e2..02d7cc1637d 100644
 --- a/board/freescale/gateway_dk/gateway_dk.c
 +++ b/board/freescale/gateway_dk/gateway_dk.c
 @@ -27,9 +27,11 @@
@@ -26,13 +29,12 @@ index 53beeee70e2..1583b761d2e 100644
  
  DECLARE_GLOBAL_DATA_PTR;
  
-@@ -61,6 +63,32 @@ void lp5810a_set_status(int any_test_failed);
+@@ -61,6 +63,31 @@ void lp5810a_set_status(int any_test_failed);
  #define DCFG_PORSR1_OFFSET		0x000
  #define ERRATUM_A010539_TRIGGER_OFFSET	0x1A8
  
 +#define MONO_SRDS1_SFP0_10G_SFP1_10G	0x1133
 +#define MONO_SRDS1_SFP0_10G_SFP1_1G	0x1333
-+#define MONO_SRDS1_SFP0_1G_SFP1_1G	0x3333
 +
 +#define MONO_SFP0_ETH_PATH	"/soc/fman@1a00000/ethernet@f0000"
 +#define MONO_SFP1_ETH_PATH	"/soc/fman@1a00000/ethernet@f2000"
@@ -59,7 +61,7 @@ index 53beeee70e2..1583b761d2e 100644
  static void erratum_a010539(void)
  {
  	u32 porsr1_val;
-@@ -71,6 +99,169 @@ static void erratum_a010539(void)
+@@ -71,6 +98,167 @@ static void erratum_a010539(void)
  	out_be32((void *)(CFG_SYS_FSL_SCFG_ADDR + ERRATUM_A010539_TRIGGER_OFFSET), 0xFFFFFFFF);
  }
  
@@ -81,8 +83,6 @@ index 53beeee70e2..1583b761d2e 100644
 +		return MONO_SFP_MODE_10G;
 +	case MONO_SRDS1_SFP0_10G_SFP1_1G:
 +		return port == 0 ? MONO_SFP_MODE_10G : MONO_SFP_MODE_1000BASEX;
-+	case MONO_SRDS1_SFP0_1G_SFP1_1G:
-+		return MONO_SFP_MODE_1000BASEX;
 +	default:
 +		return MONO_SFP_MODE_UNKNOWN;
 +	}
@@ -190,7 +190,7 @@ index 53beeee70e2..1583b761d2e 100644
 +		return node;
 +	}
 +
-+ 	ret = fdt_setprop_string(blob, node, "phy-connection-type",
++	ret = fdt_setprop_string(blob, node, "phy-connection-type",
 +				 "1000base-x");
 +	if (ret)
 +		return ret;
@@ -229,7 +229,7 @@ index 53beeee70e2..1583b761d2e 100644
  int board_early_init_f(void)
  {
  	erratum_a010539();
-@@ -112,6 +303,7 @@ int misc_init_r(void)
+@@ -112,6 +300,7 @@ int misc_init_r(void)
  
  	hw_tests_print_banner("Boot Self-Test");
  	r = hw_tests_run(hw_tests, ARRAY_SIZE(hw_tests));
@@ -237,7 +237,7 @@ index 53beeee70e2..1583b761d2e 100644
  
  	/* Surface the aggregate result on the front-panel LED and propagate
  	 * it to the kernel via bootargs.
-@@ -170,6 +362,7 @@ int ft_board_setup(void *blob, struct bd_info *bd)
+@@ -170,6 +359,7 @@ int ft_board_setup(void *blob, struct bd_info *bd)
  #endif
  #endif
  
@@ -248,5 +248,5 @@ index 53beeee70e2..1583b761d2e 100644
 \ No newline at end of file
 +}
 -- 
-2.52.0
+2.47.3
 

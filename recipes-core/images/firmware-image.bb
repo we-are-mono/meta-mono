@@ -110,10 +110,20 @@ do_deploy() {
     install -d ${DEPLOYDIR}
 
     for d in ${BOOTTYPE}; do
-        install -m 0644 ${WORKDIR}/firmware-${d}.bin ${DEPLOYDIR}/firmware-${d}-${MACHINE}.bin
+        # 1G variants deploy under 1g/ with the canonical medium names so
+        # `firmware update --url <base>/1g` finds them: the tool appends the
+        # fixed firmware-<medium>-<machine>.bin name to whatever base URL it
+        # is given, so the directory selects the variant.
+        case $d in
+            qspi1g) subdir="1g/"; medium="qspi" ;;
+            emmc1g) subdir="1g/"; medium="emmc" ;;
+            *)      subdir="";    medium="$d" ;;
+        esac
+        install -d ${DEPLOYDIR}/${subdir}
+        install -m 0644 ${WORKDIR}/firmware-${d}.bin ${DEPLOYDIR}/${subdir}firmware-${medium}-${MACHINE}.bin
 
         if [ -f ${WORKDIR}/firmware-${d}.bin.sig ]; then
-            install -m 0644 ${WORKDIR}/firmware-${d}.bin.sig ${DEPLOYDIR}/firmware-${d}-${MACHINE}.bin.sig
+            install -m 0644 ${WORKDIR}/firmware-${d}.bin.sig ${DEPLOYDIR}/${subdir}firmware-${medium}-${MACHINE}.bin.sig
         fi
     done
 
