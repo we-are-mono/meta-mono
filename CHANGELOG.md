@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-08-09 — Selectable (but static) SFP Base-X support
+- Either SFP+ port can now ship as a 1G port via a firmware image built from a second RCW profile (#18, Môshe van der Sterre). The RCW is the single source of truth: U-Boot reads `SRDS_PRTCL_S1` back from the SerDes registers at boot and fixes up the retimer (CDR bypass) and the kernel device tree (`phy-connection-type`, `fixed-link` 1000/full) to match. The 1G profile (0x1333) puts the right-hand port in 1000Base-X; the left stays XFI
+- ATF builds the 1G PBL variants with `BOOT_MODE` still qspi/emmc (only the RCW differs), and firmware-image assembles `firmware-{qspi,emmc}1g` alongside the unchanged 10G pair
+- Follow-up: 1G images deploy under `1g/` with the canonical `firmware-<medium>-<machine>.bin` names, so `firmware update --url <base>/1g` installs them with no tool change — the same directory-selects-release mechanism the versioned archive URLs already use
+- Follow-up: drop the unused `0x3333` (1g+1g) constant and switch case — no RCW ships that profile and the mode was removed from the PR as unreliable; fix a space-before-tab and the rcw patch's copy-pasted Subject line
+- Verified on bench hardware before merge: 10G image boots with no regression, 1G image links at 1000base-x with the fixed-up device tree
+
 ## 2026-08-05 — Recovery boots from a single FIT, gains diagnostic tools
 - Pack the recovery kernel, its initramfs and the device tree into one FIT at 8MB and boot it with `bootm`, replacing the separate dtb (5MB) and kernel (10MB) regions, the two reads they needed, and four offset variables that were each expressed twice — as byte addresses for the QSPI path and 512-byte block numbers for the eMMC one. wrynose builds FIT images from a separate recipe rather than a `KERNEL_IMAGETYPE`, hence `linux-mono-fitimage` plus `kernel-fit-extra-artifacts` on the kernel
 - `bootm` verifies a sha256 over both subimages before starting the kernel; `booti` verified nothing
@@ -9,7 +16,7 @@
 - Bump FIRMWARE_VERSION to 2026.08.1
 
 ## 2026-08-05 — ATF: build fixes for newer toolchains and hosts
-- Add `openssl-native` to DEPENDS and point `OPENSSL_DIR` at the native sysroot: fiptool was compiled and linked against the *host* openssl, and failed outright on hosts without openssl-dev (#20, Luke McHale)
+- Add `openssl-native` to DEPENDS and point `OPENSSL_DIR` at the native sysroot: fiptool was compiled and linked against the *host* openssl, and failed outright on hosts without openssl-dev (#20, Luke McHale; same fix first proposed in #1, Christian Taedcke)
 - Drop the unused `file_size` in `create_pbl.c` — GCC 15 tightened `-Wunused-but-set-variable` and the tool builds with `-Werror` (#16, Jens Almer)
 - Pin `BUILD_STRING` to `NXP_LF_TAG`: TF-A otherwise derives its boot banner from `git describe --dirty`, and the create_pbl patch is the first to modify a tracked file, so every boot would have printed `lf-6.12.49-2.2.0-dirty`
 - Verified no-op: BL2, FIP and both firmware images are byte-identical to 2026.07.2, so no version bump
