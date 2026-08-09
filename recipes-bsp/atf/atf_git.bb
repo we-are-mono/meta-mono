@@ -21,7 +21,7 @@ SRCREV = "${NXP_LF_SRCREV_ATF}"
 # Local variables
 PLATFORM = "gateway_dk"
 UBOOT_BINARY = "u-boot.bin"
-BOOTTYPE ?= "qspi emmc"
+BOOTTYPE ?= "qspi emmc qspi1g emmc1g"
 
 # requires CROSS_COMPILE set by hand as there is no configure script
 export CROSS_COMPILE = "${TARGET_PREFIX}"
@@ -52,16 +52,26 @@ do_compile() {
     for d in ${BOOTTYPE}; do
         case $d in
         qspi)
+            bootmode="qspi"
             rcwimg="${RCWQSPI}"
             ;;
         emmc)
+            bootmode="emmc"
             rcwimg="${RCWEMMC}"
+            ;;
+        qspi1g)
+            bootmode="qspi"
+            rcwimg="${RCWQSPI1G}"
+            ;;
+        emmc1g)
+            bootmode="emmc"
+            rcwimg="${RCWEMMC1G}"
             ;;
         esac
 
         make V=1 realclean
-        oe_runmake pbl fip PLAT=${PLATFORM} BOOT_MODE=${d} DEBUG=0 LOG_LEVEL=20 RCW=${DEPLOY_DIR_IMAGE}/rcw/gateway_dk/${rcwimg} BL33=${DEPLOY_DIR_IMAGE}/${UBOOT_BINARY}
-        cp ${S}/build/${PLATFORM}/release/bl2_${d}.pbl .
+        oe_runmake pbl fip PLAT=${PLATFORM} BOOT_MODE=${bootmode} DEBUG=0 LOG_LEVEL=20 RCW=${DEPLOY_DIR_IMAGE}/rcw/gateway_dk/${rcwimg} BL33=${DEPLOY_DIR_IMAGE}/${UBOOT_BINARY}
+        cp ${S}/build/${PLATFORM}/release/bl2_${bootmode}.pbl ./bl2_${d}.pbl
         cp ${S}/build/${PLATFORM}/release/fip.bin .
     done
 }
