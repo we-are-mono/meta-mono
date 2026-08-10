@@ -406,6 +406,16 @@
 		#address-cells = <1>;
 		#size-cells = <0>;
 
+		/* The SFP channels carry the only field-swappable devices on
+		 * any i2c bus. Park the mux with all channels disconnected so
+		 * a misbehaving or half-inserted module can only disturb the
+		 * bus during an in-flight transfer, not while idle; the reset
+		 * line guarantees a clean mux state at probe regardless of
+		 * what the previous boot stage left selected.
+		 */
+		i2c-mux-idle-disconnect;
+		reset-gpios = <&gpio2 24 GPIO_ACTIVE_LOW>;
+
 		sfp0_i2c: i2c@0 {
 			#address-cells = <1>;
 			#size-cells = <0>;
