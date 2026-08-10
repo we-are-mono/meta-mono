@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-08-10 — dts: harden the SFP i2c mux against misbehaving modules
+- Add `i2c-mux-idle-disconnect` to the SFP mux — its channels carry the only field-swappable i2c devices, and the pollers always left one selected, so a faulty or half-inserted module could hold SDA low and wedge i2c1 with no software way out; parked disconnected, a module can only disturb the bus during an in-flight transfer. Verified on hardware: control register reads 0x0 in the channel bits while idle
+- Add `reset-gpios` (RESET# on GPIO3_24) so the driver starts from a clean mux state at probe regardless of what the previous boot stage left selected
+- Bump FIRMWARE_VERSION to 2026.08.2
+
 ## 2026-08-09 — Selectable (but static) SFP Base-X support
 - Either SFP+ port can now ship as a 1G port via a firmware image built from a second RCW profile (#18, Môshe van der Sterre). The RCW is the single source of truth: U-Boot reads `SRDS_PRTCL_S1` back from the SerDes registers at boot and fixes up the retimer (CDR bypass) and the kernel device tree (`phy-connection-type`, `fixed-link` 1000/full) to match. The 1G profile (0x1333) puts the right-hand port in 1000Base-X; the left stays XFI
 - ATF builds the 1G PBL variants with `BOOT_MODE` still qspi/emmc (only the RCW differs), and firmware-image assembles `firmware-{qspi,emmc}1g` alongside the unchanged 10G pair
