@@ -2,25 +2,31 @@
 /*
  * Mono SFP port LED controller for the DPAA SDK fixed-link configuration.
  *
- * Module presence comes from the mandatory SFP EEPROM. Link state comes
- * from the MAC's XFI PCS, for both optical modules and DACs. The monitor
- * does not configure the PCS or interact with the SFP state machine.
+ * Module presence comes from the cage's MOD_DEF0 line and link state from
+ * the MAC's XFI PCS, for both optical modules and DACs. Nothing here goes
+ * near i2c, deliberately: a module caught mid-transfer by a reset holds SDA
+ * low until it loses power, and a port whose module has done that must
+ * still light its LEDs -- as must its neighbour, which shares the bus.
+ * The monitor does not configure the PCS or interact with the SFP state
+ * machine.
  *
  * No module: both LEDs off. Module without link: solid orange. Link up:
  * green on, orange blinking on changes to the netdev packet counters.
  * User-selected LED triggers take precedence over this monitor.
  *
  * Each mono,sfp-led child references an SFP with "sfp" and its link and
- * activity LEDs with "leds". The associated fsl,fman-memac node references
- * the same SFP and identifies the XFI PCS through "pcs-handle" and
- * "pcs-handle-names". No module diagnostic support is required.
+ * activity LEDs with "leds". MOD_DEF0 comes from that SFP's own
+ * "mod-def0-gpios", shared non-exclusively with the sfp driver that owns
+ * the line. The associated fsl,fman-memac node references the same SFP and
+ * identifies the XFI PCS through "pcs-handle" and "pcs-handle-names". No
+ * module diagnostic support is required.
  *
  * Copyright 2026 Mono Technologies Inc.
  * Author: Tomaz Zaman <tomaz@mono.si>
  */
 
 #include <linux/err.h>
-#include <linux/i2c.h>
+#include <linux/gpio/consumer.h>
 #include <linux/leds.h>
 #include <linux/mdio.h>
 #include <linux/module.h>
@@ -29,16 +35,15 @@
 #include <linux/of_mdio.h>
 #include <linux/of_net.h>
 #include <linux/platform_device.h>
+#include <linux/property.h>
 #include <linux/rtnetlink.h>
-#include <linux/sfp.h>
 #include <linux/workqueue.h>
 
 #define SFP_LED_POLL_INTERVAL_MS	100
-#define SFP_LED_EEPROM_ADDR	0x50
 
 struct sfp_led_port {
 	struct device_node *mac_np;
-	struct i2c_adapter *i2c;
+	struct gpio_desc *present;
 	struct mii_bus *pcs_bus;
 	int pcs_addr;
 	struct led_classdev *link_led;
@@ -93,13 +98,10 @@ static struct net_device *sfp_led_find_netdev(struct device_node *mac_np)
 
 static bool sfp_led_module_present(struct sfp_led_port *port)
 {
-	union i2c_smbus_data data;
-	int ret;
-
-	ret = i2c_smbus_xfer(port->i2c, SFP_LED_EEPROM_ADDR, 0,
-			     I2C_SMBUS_READ, SFP_PHYS_ID,
-			     I2C_SMBUS_BYTE_DATA, &data);
-	return ret >= 0;
+	/* MOD_DEF0 is asserted by the module itself, pulled up when the cage
+	 * is empty. The dts carries the polarity, so this reads logically.
+	 */
+	return gpiod_get_value_cansleep(port->present) > 0;
 }
 
 static int sfp_led_pcs_link(struct sfp_led_port *port)
@@ -266,7 +268,7 @@ put_pcs:
 static int sfp_led_get_port(struct device *dev, struct device_node *node,
 			    struct sfp_led_port *port)
 {
-	struct device_node *sfp_np, *i2c_np;
+	struct device_node *sfp_np;
 	int ret;
 
 	sfp_np = of_parse_phandle(node, "sfp", 0);
@@ -283,22 +285,18 @@ static int sfp_led_get_port(struct device *dev, struct device_node *node,
 		goto put_sfp;
 	}
 
-	i2c_np = of_parse_phandle(sfp_np, "i2c-bus", 0);
-	if (!i2c_np) {
-		ret = -EINVAL;
-		goto put_sfp;
-	}
-	if (!of_device_is_available(i2c_np)) {
-		ret = -ENODEV;
-	} else {
-		port->i2c = of_get_i2c_adapter_by_node(i2c_np);
-		ret = port->i2c ? 0 : -EPROBE_DEFER;
-	}
-	of_node_put(i2c_np);
-	if (ret)
-		goto put_sfp;
-	if (!i2c_check_functionality(port->i2c, I2C_FUNC_SMBUS_READ_BYTE_DATA)) {
-		ret = -EOPNOTSUPP;
+	/*
+	 * The sfp driver owns this line for its own state machine, so ask for
+	 * it non-exclusively; gpiolib hands out the same descriptor rather
+	 * than -EBUSY. Only this second consumer needs the flag.
+	 */
+	port->present = devm_fwnode_gpiod_get_index(dev, of_fwnode_handle(sfp_np),
+						    "mod-def0", 0,
+						    GPIOD_IN | GPIOD_FLAGS_BIT_NONEXCLUSIVE,
+						    "sfp-led-present");
+	if (IS_ERR(port->present)) {
+		ret = PTR_ERR(port->present);
+		port->present = NULL;
 		goto put_sfp;
 	}
 
@@ -331,8 +329,6 @@ static void sfp_led_put_port(struct sfp_led_port *port)
 		led_put(port->link_led);
 	if (port->pcs_bus)
 		put_device(&port->pcs_bus->dev);
-	if (port->i2c)
-		i2c_put_adapter(port->i2c);
 	of_node_put(port->mac_np);
 }
 
