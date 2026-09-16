@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-09-16 — Keep the SFP ports working when a module jams the i2c bus
+- Reset the SFP i2c mux over its reset line when U-Boot finds the bus jammed, instead of trying to talk to the mux over the very bus that is stuck. The old recovery could never have worked, so a jammed module failed the boot self-test and left the front-panel LED red until someone pulled the power. The board now clears it on its own and says so on the console
+- Read the port LEDs' module-present signal from the cage's own presence pin instead of asking the module over i2c. A module that jams the bus cannot answer, so a port that was perfectly healthy — link up, traffic flowing — showed as an empty cage and went dark, taking its neighbour's LEDs with it. Nothing on the LED path touches i2c any more, which also removes the constant polling that made the jam likely in the first place
+- Bump FIRMWARE_VERSION to 2026.09.1
+
 ## 2026-08-10 — dts: harden the SFP i2c mux against misbehaving modules
 - Add `i2c-mux-idle-disconnect` to the SFP mux — its channels carry the only field-swappable i2c devices, and the pollers always left one selected, so a faulty or half-inserted module could hold SDA low and wedge i2c1 with no software way out; parked disconnected, a module can only disturb the bus during an in-flight transfer. Verified on hardware: control register reads 0x0 in the channel bits while idle
 - Add `reset-gpios` (RESET# on GPIO3_24) so the driver starts from a clean mux state at probe regardless of what the previous boot stage left selected
