@@ -1,4 +1,4 @@
-From 32495db4e0563aec95aeb5e8fccc16d228c1aca8 Mon Sep 17 00:00:00 2001
+From 7547623d669681b79fc3fb0011e88e24df82cb18 Mon Sep 17 00:00:00 2001
 From: Tomaz Zaman <tomaz@mono.si>
 Date: Sun, 19 Apr 2026 15:24:13 +0200
 Subject: [PATCH 3/7] board: freescale: gateway-dk: add per-component
@@ -17,26 +17,37 @@ the I2C mux and reports PASS/FAIL with a small detail string:
   - retimer.c          - DS100DF410 SerDes retimer device ID
   - rtc.c              - PCF2131 real-time clock
   - sfp_i2c_mux.c      - resets the SFP-side PCA9545 mux into a
-                         known-good state
+                         known-good state, pulsing RESET# on
+                         GPIO3_24 when a module holding SDA low has
+                         wedged i2c1
   - temp_sensors.c     - TMP431 CPU and board temperature
   - typec_controller.c - HD3SS3220/TUSB322 USB Type-C controller
   - voltage_sensors.c  - eight INA234 rails behind a PCA9545
+
+The SFP mux recovers over RESET# rather than its control register,
+because the failure it has to clear takes that register with it. A
+module caught mid-transfer by a reset keeps driving SDA low, and the
+cages stay powered across a warm reset so it never reinitialises; it
+holds the line through a channel that is still selected, so nothing on
+i2c1 answers - the mux control address included - until RESET# is
+pulsed. A bus recovered that way still passes, reported as "Reset OK
+(recovered wedged bus)" so the event stays visible.
 
 Upstream-Status: Inappropriate [product-specific]
 
 Signed-off-by: Tomaz Zaman <tomaz@mono.si>
 ---
- board/freescale/gateway_dk/setup/clock_gen.c  |  67 +++++++++++
- board/freescale/gateway_dk/setup/ddr_sanity.c |  73 ++++++++++++
- .../gateway_dk/setup/fan_controller.c         |  89 +++++++++++++++
- .../gateway_dk/setup/led_controller.c         | 108 ++++++++++++++++++
- board/freescale/gateway_dk/setup/retimer.c    |  36 ++++++
- board/freescale/gateway_dk/setup/rtc.c        |  55 +++++++++
- .../freescale/gateway_dk/setup/sfp_i2c_mux.c  |  47 ++++++++
- .../freescale/gateway_dk/setup/temp_sensors.c |  70 ++++++++++++
- .../gateway_dk/setup/typec_controller.c       |  49 ++++++++
- .../gateway_dk/setup/voltage_sensors.c        |  97 ++++++++++++++++
- 10 files changed, 691 insertions(+)
+ board/freescale/gateway_dk/setup/clock_gen.c  |  67 +++++++++
+ board/freescale/gateway_dk/setup/ddr_sanity.c |  73 ++++++++++
+ .../gateway_dk/setup/fan_controller.c         |  89 ++++++++++++
+ .../gateway_dk/setup/led_controller.c         | 108 ++++++++++++++
+ board/freescale/gateway_dk/setup/retimer.c    |  36 +++++
+ board/freescale/gateway_dk/setup/rtc.c        |  55 +++++++
+ .../freescale/gateway_dk/setup/sfp_i2c_mux.c  | 135 ++++++++++++++++++
+ .../freescale/gateway_dk/setup/temp_sensors.c |  70 +++++++++
+ .../gateway_dk/setup/typec_controller.c       |  49 +++++++
+ .../gateway_dk/setup/voltage_sensors.c        |  97 +++++++++++++
+ 10 files changed, 779 insertions(+)
  create mode 100644 board/freescale/gateway_dk/setup/clock_gen.c
  create mode 100644 board/freescale/gateway_dk/setup/ddr_sanity.c
  create mode 100644 board/freescale/gateway_dk/setup/fan_controller.c
@@ -514,24 +525,36 @@ index 00000000000..f198cb9cdaf
 +}
 diff --git a/board/freescale/gateway_dk/setup/sfp_i2c_mux.c b/board/freescale/gateway_dk/setup/sfp_i2c_mux.c
 new file mode 100644
-index 00000000000..6e4a697aa29
+index 00000000000..16bb886ccd1
 --- /dev/null
 +++ b/board/freescale/gateway_dk/setup/sfp_i2c_mux.c
-@@ -0,0 +1,47 @@
+@@ -0,0 +1,135 @@
 +// SPDX-License-Identifier: GPL-2.0+
 +/*
 + * SFP I2C Mux Reset/Self-Test
 + *
-+ * The mux can get stuck with multiple channels enabled after power glitches
-+ * or abnormal resets, causing I2C arbitration errors. Writing 0x00 disables
-+ * all channels, resetting the mux to a known good state.
++ * The SFP channels carry the only field-swappable devices on any i2c
++ * bus. A module caught mid-transfer by a reset keeps driving SDA low --
++ * the cages stay powered across a warm reset, so the module never
++ * reinitialises -- and it does so through a mux channel that is still
++ * selected, which wedges the whole of i2c1 including the mux control
++ * register. Writing 0x00 to that register cannot clear the condition,
++ * because the write needs the very bus the module is holding down.
++ *
++ * RESET# is the way out. Pulsing it disconnects every channel, which
++ * isolates the stuck module and frees the parent bus. The module keeps
++ * holding its own channel until it loses power, so that port stays
++ * unusable, but the mux and the remaining channels come back.
 + *
 + * Copyright 2025 Mono Technologies Inc.
 + */
 +
 +#include <config.h>
++#include <asm/gpio.h>
 +#include <dm.h>
 +#include <i2c.h>
++#include <linux/delay.h>
++#include <linux/errno.h>
 +#include "i2c_helpers.h"
 +#include "hw_test.h"
 +
@@ -539,15 +562,88 @@ index 00000000000..6e4a697aa29
 +#define I2C_BUS			1	/* i2c1 - SFP bus */
 +#define PCA9545_CTRL_REG	0x00
 +
++/* RESET# sits on GPIO3_24, the bank at 0x2320000 (gpio2 in dts numbering). */
++#define SFP_MUX_GPIO_BASE	0x2320000
++#define SFP_MUX_RESET_GPIO	24
++
++/*
++ * Locate the GPIO bank by register address, so the lookup does not depend
++ * on how the driver happens to name its banks.
++ */
++static int sfp_mux_gpio_bank(struct udevice **bankp)
++{
++	struct udevice *dev;
++
++	for (uclass_first_device(UCLASS_GPIO, &dev);
++	     dev;
++	     uclass_next_device(&dev)) {
++		if ((u64)dev_read_addr(dev) == SFP_MUX_GPIO_BASE) {
++			*bankp = dev;
++			return 0;
++		}
++	}
++
++	return -ENODEV;
++}
++
++/*
++ * Pulse RESET# low. The PCA9545 needs 6ns of pulse width and comes back up
++ * with every channel disconnected.
++ */
++static int sfp_mux_pulse_reset(void)
++{
++	struct gpio_desc rst;
++	struct udevice *bank;
++	int ret;
++
++	ret = sfp_mux_gpio_bank(&bank);
++	if (ret)
++		return ret;
++
++	rst.dev = bank;
++	rst.offset = SFP_MUX_RESET_GPIO;
++	rst.flags = 0;
++
++	ret = dm_gpio_request(&rst, "sfp-mux-reset");
++	if (ret)
++		return ret;
++
++	ret = dm_gpio_set_dir_flags(&rst, GPIOD_IS_OUT);
++	if (!ret) {
++		dm_gpio_set_value(&rst, 0);
++		udelay(10);
++		dm_gpio_set_value(&rst, 1);
++		udelay(10);
++	}
++
++	dm_gpio_free(bank, &rst);
++
++	return ret;
++}
++
 +int test_sfp_i2c_mux(struct hw_test_ctx *ctx)
 +{
 +	struct udevice *mux_dev;
++	bool recovered = false;
 +	uint8_t ctrl_val;
 +	int ret;
 +
-+	/* Get mux device directly (no channel selection needed) */
-+	if (i2c_get_chip_for_busnum(I2C_BUS, SFP_MUX_ADDR, 1, &mux_dev))
-+		return hw_test_fail(ctx, "Mux not found on bus %d", I2C_BUS);
++	/*
++	 * Reaching the control address doubles as the wedge check:
++	 * i2c_get_chip_for_busnum() puts a real transfer on the bus.
++	 */
++	if (i2c_get_chip_for_busnum(I2C_BUS, SFP_MUX_ADDR, 1, &mux_dev)) {
++		ret = sfp_mux_pulse_reset();
++		if (ret)
++			return hw_test_fail(ctx, "Mux unreachable, RESET# failed (%d)",
++					    ret);
++
++		if (i2c_get_chip_for_busnum(I2C_BUS, SFP_MUX_ADDR, 1, &mux_dev))
++			return hw_test_fail(ctx, "Mux not found on bus %d after RESET#",
++					    I2C_BUS);
++
++		recovered = true;
++	}
 +
 +	/* Reset mux - disable all channels */
 +	ctrl_val = 0x00;
@@ -562,6 +658,9 @@ index 00000000000..6e4a697aa29
 +	if ((ret & 0x0F) != 0x00)
 +		return hw_test_fail(ctx, "Reset verify: expected 0x00, got 0x%02x",
 +				    ret & 0x0F);
++
++	if (recovered)
++		return hw_test_pass(ctx, "Reset OK (recovered wedged bus)");
 +
 +	return hw_test_pass(ctx, "Reset OK");
 +}
@@ -799,6 +898,3 @@ index 00000000000..8bbb6c3983a
 +
 +	return failed ? -1 : 0;
 +}
--- 
-2.47.3
-

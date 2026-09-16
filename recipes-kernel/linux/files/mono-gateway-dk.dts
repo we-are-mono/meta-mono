@@ -780,12 +780,16 @@
 		status = "okay";
 	};
 
+	/* Both 10G MACs name the pcs-handle the base dtsi already supplies:
+	 * sfp-led resolves the XFI PCS by looking "xfi" up in this list and
+	 * using the index to pick the phandle.
+	 */
 	fm1_mac9: ethernet@f0000 { /* 10GEC1 */
 		/delete-property/ managed;
 		sfp = <&sfp_xfi0>;
 		fixed-link = <0 1 10000 0 0>;
 		phy-connection-type = "xgmii";
-		pcs-handle-names = "xfi";  /* Match enet7 for consistency */
+		pcs-handle-names = "xfi";
 	};
 
 	fm1_mac10: ethernet@f2000 { /* 10GEC2 */
@@ -793,6 +797,7 @@
 		sfp = <&sfp_xfi1>;
 		fixed-link = <0 1 10000 0 0>;
 		phy-connection-type = "xgmii";
+		pcs-handle-names = "xfi";
 	};
 
 	mdio@fc000 {
