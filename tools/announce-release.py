@@ -90,7 +90,13 @@ def read_webhook():
 
 
 def build_payload(version, notes):
-    install = f"`firmware update --url {BASE_URL}/{version}`"
+    # The root always holds the latest release, so publish the bare base URL.
+    # The versioned paths are for installing an older release deliberately.
+    install = (
+        f"`firmware update --url {BASE_URL} --preserve-env`\n"
+        "Always writes the medium you are *not* running from: run it under "
+        "QSPI and it updates eMMC, run it under eMMC and it updates QSPI."
+    )
 
     if len(notes) > MAX_DESCRIPTION:
         tail = "\n\n… truncated, see CHANGELOG.md for the rest."
