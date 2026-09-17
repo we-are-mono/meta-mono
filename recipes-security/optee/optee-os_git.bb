@@ -24,15 +24,35 @@ B = "${WORKDIR}/build"
 # secure world, which only touches the SoC.
 OPTEE_PLATFORM = "ls-ls1046ardb"
 
-# plat-ls implements no tee_otp_get_hw_unique_key, so the only definition
-# available is the zeros-returning stub in core/kernel/otp_stubs.c, compiled
-# solely under CFG_INSECURE. Until the OTPMK fuse is blown and CAAM supplies a
-# real key this is the honest setting: OP-TEE announces the insecure state at
-# boot rather than pretending its secure storage means anything.
+# CAAM supplies the HUK. core/drivers/crypto/caam/blob/caam_blob.c defines
+# tee_otp_get_hw_unique_key as a strong symbol, overriding the weak stub in
+# core/kernel/otp_stubs.c, and reads the key from the Master Key Verification
+# Blob. CFG_INSECURE stays set because the OTPMK fuse is unblown, so that
+# master key is not device-unique and there is no NV counter behind rollback
+# protection: OP-TEE announces the insecure state at boot rather than implying
+# its secure storage means anything. Nothing sealed now is trustworthy after
+# the fuse, having been sealed under a key the SoC did not keep secret.
+#
+# CFG_CORE_HUK_SUBKEY_COMPAT selects a derivation kept for devices already in
+# the field: huk_compat() skips the usage tag for HUK_SUBKEY_RPMB and feeds a
+# literal pattern in place of the die ID for the storage key. Both subkeys
+# differ between the two settings, and each unit is bound to whichever was in
+# force when its files were sealed and its one-shot eMMC RPMB key was written.
+# Mono has no fielded units, so take the real derivation while it is free.
+#
+# CFG_CAAM_INC_PRIBLOB raises CAAM's PRIBLOB field once OP-TEE has read the
+# master key blob, leaving nothing that runs afterwards able to read it.
+#
+# CFG_RPMB_FS keeps its default of n. Every RPMB frame is an RPC to normal
+# world (OPTEE_RPC_CMD_RPMB_FRAMES), so it needs a tee-supplicant, which the
+# recovery image does not carry; turning it on would also default
+# CFG_REE_FS_INTEGRITY_RPMB to y and anchor REE FS in an unkeyed RPMB.
 EXTRA_OEMAKE = " \
     PLATFORM=${OPTEE_PLATFORM} \
     CFG_ARM64_core=y \
     CFG_INSECURE=y \
+    CFG_CORE_HUK_SUBKEY_COMPAT=n \
+    CFG_CAAM_INC_PRIBLOB=y \
     CROSS_COMPILE=${HOST_PREFIX} \
     CROSS_COMPILE64=${HOST_PREFIX} \
     CROSS_COMPILE_core=${HOST_PREFIX} \
