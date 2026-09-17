@@ -41,6 +41,19 @@ python __anonymous() {
     if not pub or not os.path.isfile(pub):
         bb.fatal("FIRMWARE_SIGNING_REQUIRED=1 but FIRMWARE_SIGNING_PUBKEY is unset "
                  "or missing (%r). Devices need the pubkey to verify signatures." % pub)
+
+    # firmware-tools ships its own copy of the pubkey, and that copy is what
+    # ends up in /etc/firmware on the device verifying downloads. If it drifts
+    # from the key these images are signed with, every device rejects every
+    # update -- and nothing else would catch it until the field did.
+    shipped = os.path.join(d.getVar("LAYERDIR_meta-mono") or "",
+                           "recipes-support/firmware-tools/files/firmware-signing.pub")
+    if os.path.isfile(shipped):
+        with open(shipped, "rb") as f1, open(pub, "rb") as f2:
+            if f1.read().strip() != f2.read().strip():
+                bb.fatal("FIRMWARE_SIGNING_PUBKEY (%s) does not match the key "
+                         "firmware-tools installs on the device (%s). Devices "
+                         "would reject images signed by this key." % (pub, shipped))
 }
 
 # Fail the build if a component outgrows its flash window; dd would
@@ -103,6 +116,11 @@ do_sign() {
         bbnote "Signed firmware-${d}.bin"
     done
 }
+
+# Without these the task is cached against the key's *path*, so rotating the
+# key would leave the previous signatures in place.
+do_sign[vardeps] += "FIRMWARE_SIGNING_KEY FIRMWARE_SIGNING_PUBKEY"
+do_sign[file-checksums] += "${FIRMWARE_SIGNING_KEY}:True"
 
 addtask sign after do_compile before do_deploy
 

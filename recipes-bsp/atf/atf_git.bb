@@ -49,6 +49,8 @@ EXTRA_OEMAKE += "BUILD_STRING='${NXP_LF_TAG}'"
 do_configure[noexec] = "1"
 
 do_compile() {
+    rm -f ${S}/fip.bin
+
     for d in ${BOOTTYPE}; do
         case $d in
         qspi)
@@ -69,10 +71,18 @@ do_compile() {
             ;;
         esac
 
+        # BL2 is compiled for a specific boot mode, so each boot type needs
+        # its own clean build for the PBL. The FIP is not: it carries BL31
+        # and BL33, which are identical across all four boot types, so it is
+        # built during the first pass and kept for the rest.
         make V=1 realclean
-        oe_runmake pbl fip PLAT=${PLATFORM} BOOT_MODE=${bootmode} DEBUG=0 LOG_LEVEL=20 RCW=${DEPLOY_DIR_IMAGE}/rcw/gateway_dk/${rcwimg} BL33=${DEPLOY_DIR_IMAGE}/${UBOOT_BINARY}
+        if [ -f ${S}/fip.bin ]; then
+            oe_runmake pbl PLAT=${PLATFORM} BOOT_MODE=${bootmode} DEBUG=0 LOG_LEVEL=20 RCW=${DEPLOY_DIR_IMAGE}/rcw/gateway_dk/${rcwimg} BL33=${DEPLOY_DIR_IMAGE}/${UBOOT_BINARY}
+        else
+            oe_runmake pbl fip PLAT=${PLATFORM} BOOT_MODE=${bootmode} DEBUG=0 LOG_LEVEL=20 RCW=${DEPLOY_DIR_IMAGE}/rcw/gateway_dk/${rcwimg} BL33=${DEPLOY_DIR_IMAGE}/${UBOOT_BINARY}
+            cp ${S}/build/${PLATFORM}/release/fip.bin ${S}/fip.bin
+        fi
         cp ${S}/build/${PLATFORM}/release/bl2_${bootmode}.pbl ./bl2_${d}.pbl
-        cp ${S}/build/${PLATFORM}/release/fip.bin .
     done
 }
 

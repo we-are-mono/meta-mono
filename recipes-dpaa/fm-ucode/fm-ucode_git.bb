@@ -12,7 +12,7 @@ SRCREV = "41d603a1ad78e0bb61365500828d9f484bf9bf10"
 
 do_deploy () {
     install -d ${DEPLOYDIR}/
-    install -m 0644 ${B}/${FMAN_UCODE} ${DEPLOYDIR}
+    install -m 0644 ${B}/${FMAN_UCODE_SRC} ${DEPLOYDIR}/${FMAN_UCODE}
 }
 
 addtask deploy after do_unpack before do_build
