@@ -381,14 +381,16 @@
 				fan0: fan@0 {
 					reg = <0>;
 					label = "System Fan 1";
-					pwms = <&fan_controller 26000 1 1>;
+					pwms = <&fan_controller 26000 PWM_POLARITY_INVERTED 1>;
+					microchip,pwm-min = <51>;
 					#cooling-cells = <2>;
 				};
 
 				fan1: fan@1 {
 					reg = <1>;
 					label = "System Fan 2";
-					pwms = <&fan_controller 26000 1 1>;
+					pwms = <&fan_controller 26000 PWM_POLARITY_INVERTED 1>;
+					microchip,pwm-min = <51>;
 					#cooling-cells = <2>;
 				};
 			};
@@ -1039,4 +1041,39 @@
 
 &fsldpaa {
 	dma-coherent;
+};
+
+/* The fans are driven by the kernel's linear governor rather than a userspace
+ * daemon: it interpolates each active map between its limits, so duty tracks
+ * temperature continuously instead of stepping. The inherited map0 keeps CPU
+ * throttling at 85 C.
+ */
+&{/thermal-zones/cluster-thermal} {
+	polling-delay = <1000>;
+
+	trips {
+		fan_curve_start: fan-curve-start {
+			temperature = <40000>;
+			hysteresis = <0>;
+			type = "active";
+		};
+
+		fan_curve_full: fan-curve-full {
+			temperature = <80000>;
+			hysteresis = <0>;
+			type = "active";
+		};
+	};
+
+	cooling-maps {
+		map-fan-start {
+			trip = <&fan_curve_start>;
+			cooling-device = <&fan0 2 10>, <&fan1 2 10>;
+		};
+
+		map-fan-full {
+			trip = <&fan_curve_full>;
+			cooling-device = <&fan0 10 10>, <&fan1 10 10>;
+		};
+	};
 };

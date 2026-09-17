@@ -1,0 +1,104 @@
+From: Tomaz Zaman <tomaz@mono.si>
+Date: Thu, 17 Sep 2026 01:44:22 +0200
+Subject: [PATCH] hwmon: emc2305: read a per-channel minimum PWM from the
+ device tree
+
+The driver already carries a per-channel pwm_min and applies it in both the
+hwmon and cooling paths, but it can only be set through platform data. A
+device-tree probe therefore always lands on EMC2305_FAN_MIN, so boards whose
+fans stall below a documented minimum duty have no way to express that.
+
+Read an optional microchip,pwm-min from each fan child. The defaults move
+into emc2305_probe_childs_from_dt() so a child can override them, and the
+device-tree branch of probe no longer resets pwm_min afterwards -- pwm_freq,
+the polarity mask and the output mask already survive that branch, and
+pwm_min was the sole exception.
+
+A thermal trip cannot substitute for this. It would bound only what the
+governor asks for, leaving a direct hwmon write free to take the fan below
+the minimum, including to zero.
+
+Upstream-Status: Pending
+Signed-off-by: Tomaz Zaman <tomaz@mono.si>
+---
+ .../bindings/hwmon/microchip,emc2305.yaml     |  9 ++++++++
+ drivers/hwmon/emc2305.c                       | 22 ++++++++++++++++---
+ 2 files changed, 28 insertions(+), 3 deletions(-)
+
+diff --git a/Documentation/devicetree/bindings/hwmon/microchip,emc2305.yaml b/Documentation/devicetree/bindings/hwmon/microchip,emc2305.yaml
+index d3f06ebc19fa..2437228e32db 100644
+--- a/Documentation/devicetree/bindings/hwmon/microchip,emc2305.yaml
++++ b/Documentation/devicetree/bindings/hwmon/microchip,emc2305.yaml
+@@ -54,6 +54,15 @@ patternProperties:
+           The fan number used to determine the associated PWM channel.
+         maxItems: 1
+ 
++      microchip,pwm-min:
++        description:
++          Minimum PWM duty for this channel, as the raw 0-255 register value.
++          Requests below it, including zero, are raised to this floor. Use it
++          for fans that stall or fail to start below a documented minimum.
++        $ref: /schemas/types.yaml#/definitions/uint32
++        maximum: 255
++        default: 0
++
+     required:
+       - reg
+ 
+diff --git a/drivers/hwmon/emc2305.c b/drivers/hwmon/emc2305.c
+index 60809289f816..1b2122b29b5b 100644
+--- a/drivers/hwmon/emc2305.c
++++ b/drivers/hwmon/emc2305.c
+@@ -538,7 +538,7 @@ static int emc2305_identify(struct device *dev)
+ static int emc2305_of_parse_pwm_child(struct device *dev,
+ 				      struct device_node *child,
+ 				      struct emc2305_data *data)
+-{	u32 ch;
++{	u32 ch, pwm_min;
+ 	int ret;
+ 	struct of_phandle_args args;
+ 
+@@ -578,6 +578,21 @@ static int emc2305_of_parse_pwm_child(struct device *dev,
+ 		data->pwm_output_mask |= EMC2305_OPEN_DRAIN << ch;
+ 	}
+ 
++	/*
++	 * Optional per-channel minimum duty. A fan that stalls below a
++	 * documented minimum needs that floor to hold on every request, so it
++	 * is kept in pwm_min and applied by the hwmon and cooling paths alike
++	 * rather than being expressed as a thermal trip.
++	 */
++	if (!of_property_read_u32(child, "microchip,pwm-min", &pwm_min)) {
++		if (pwm_min > EMC2305_FAN_MAX) {
++			dev_err(dev, "Invalid microchip,pwm-min %u of %pOFn\n",
++				pwm_min, child);
++			return -EINVAL;
++		}
++		data->pwm_min[ch] = pwm_min;
++	}
++
+ 	return 0;
+ }
+ 
+@@ -586,9 +601,12 @@ static int emc2305_probe_childs_from_dt(struct device *dev)
+ 	struct emc2305_data *data = dev_get_drvdata(dev);
+ 	struct device_node *child;
+ 	int ret, count = 0;
++	int i;
+ 
+ 	data->pwm_output_mask = 0x0;
+ 	data->pwm_polarity_mask = 0x0;
++	for (i = 0; i < EMC2305_PWM_MAX; i++)
++		data->pwm_min[i] = EMC2305_FAN_MIN;
+ 
+ 	for_each_child_of_node(dev->of_node, child) {
+ 		if (of_property_present(child, "reg")) {
+@@ -670,8 +688,6 @@ static int emc2305_probe(struct i2c_client *client)
+ 	} else {
+ 		data->max_state = EMC2305_FAN_MAX_STATE;
+ 		data->pwm_separate = false;
+-		for (i = 0; i < EMC2305_PWM_MAX; i++)
+-			data->pwm_min[i] = EMC2305_FAN_MIN;
+ 	}
+ 
+ 	data->hwmon_dev = devm_hwmon_device_register_with_info(dev, "emc2305", data,
