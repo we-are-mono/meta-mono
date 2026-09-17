@@ -31,6 +31,13 @@ inherit kernel-arch deploy
 
 UBOOT_MACHINE = "mono_gateway_dk_defconfig"
 
+# setlocalversion appends the scm hash and a -dirty marker, because OE applies
+# the board port with quilt and so leaves tracked files modified. Name the LF
+# release the port is based on instead, the way atf_git.bb does for TF-A's
+# banner. The defconfig turns LOCALVERSION_AUTO off; setting LOCALVERSION here
+# also suppresses the "+" that setlocalversion would otherwise append.
+export LOCALVERSION = "-${NXP_LF_TAG}"
+
 EXTRA_OEMAKE = 'CROSS_COMPILE=${TARGET_PREFIX} V=1'
 EXTRA_OEMAKE += 'CC="${TARGET_PREFIX}gcc ${TOOLCHAIN_OPTIONS} ${DEBUG_PREFIX_MAP}"'
 EXTRA_OEMAKE += 'HOSTCC="${BUILD_CC} ${BUILD_CFLAGS} ${BUILD_LDFLAGS}"'

@@ -1,4 +1,4 @@
-From c491fca2bfa65272603f39f6198cb6c1c3e21b8c Mon Sep 17 00:00:00 2001
+From 00474ddc6b152fad1966442814f94def00944faa Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?M=C3=B4she=20van=20der=20Sterre?= <me@moshe.nl>
 Date: Fri, 7 Aug 2026 15:34:46 +0200
 Subject: [PATCH 8/8] board: gateway_dk: derive SFP modes from SerDes RCW

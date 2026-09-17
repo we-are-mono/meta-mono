@@ -1,4 +1,4 @@
-From f04ec3956b3c202e574424edcd8c3e94cf652761 Mon Sep 17 00:00:00 2001
+From 237a6dbfb73a5df4250329c46b95764d90559b01 Mon Sep 17 00:00:00 2001
 From: Tomaz Zaman <tomaz@mono.si>
 Date: Sun, 19 Apr 2026 15:24:44 +0200
 Subject: [PATCH 5/8] configs: add Gateway-DK defconfig and board header
@@ -19,19 +19,20 @@ Upstream-Status: Inappropriate [product-specific]
 
 Signed-off-by: Tomaz Zaman <tomaz@mono.si>
 ---
- configs/mono_gateway_dk_defconfig | 114 ++++++++++++++++++++++++++++++
+ configs/mono_gateway_dk_defconfig | 115 ++++++++++++++++++++++++++++++
  include/configs/gateway_dk.h      |  53 ++++++++++++++
- 2 files changed, 167 insertions(+)
+ 2 files changed, 168 insertions(+)
  create mode 100644 configs/mono_gateway_dk_defconfig
  create mode 100644 include/configs/gateway_dk.h
 
 diff --git a/configs/mono_gateway_dk_defconfig b/configs/mono_gateway_dk_defconfig
 new file mode 100644
-index 00000000000..7337f88bab8
+index 00000000000..13429a121c8
 --- /dev/null
 +++ b/configs/mono_gateway_dk_defconfig
-@@ -0,0 +1,114 @@
+@@ -0,0 +1,115 @@
 +CONFIG_ARM=y
++# CONFIG_LOCALVERSION_AUTO is not set
 +CONFIG_COUNTER_FREQUENCY=25000000
 +CONFIG_TARGET_GATEWAY_DK=y
 +CONFIG_TFABOOT=y
