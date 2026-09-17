@@ -18,6 +18,7 @@ NXP_LF_SRCREV_ATF   = "0779f89a5475a03193f7707f3bbb50cec11707c0"
 NXP_LF_SRCREV_RCW   = "82fa0c6d03b00dc84b6a64ba91f42c35762dd903"
 NXP_LF_SRCREV_UBOOT = "6eeef838dac4ddbc06ff14450531a95e8c5cb346"
 NXP_LF_SRCREV_LINUX = "b096ce610e956cc2596006343df8a2a26ed6e019"
+NXP_LF_SRCREV_OPTEE = "37c7fbf84c40eb9e5828532972ffb133b4917390"
 
 # Kernel version baked into PV. Bump in lockstep with NXP_LF_SRCREV_LINUX
 # so the package metadata reflects the actual kernel.

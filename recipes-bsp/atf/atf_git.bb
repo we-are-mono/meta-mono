@@ -5,7 +5,7 @@ LIC_FILES_CHKSUM = "file://docs/license.rst;md5=83b7626b8c7a37263c6a58af8d19bee1
 COMPATIBLE_MACHINE = "gateway-dk"
 
 DEPENDS = "u-boot-tools-native openssl-native u-boot rcw"
-do_compile[depends] += "u-boot:do_deploy rcw:do_deploy"
+do_compile[depends] += "u-boot:do_deploy rcw:do_deploy optee-os:do_deploy"
 
 # Pinned to an NXP Linux Factory release (see conf/include/nxp-base.inc
 # for the tag and SHA). Mono's Gateway-DK board support is applied
@@ -20,6 +20,8 @@ SRCREV = "${NXP_LF_SRCREV_ATF}"
 
 # Local variables
 PLATFORM = "gateway_dk"
+# OP-TEE is the secure payload; opteed is TF-A's dispatcher for it.
+OPTEE_BL32 = "${DEPLOY_DIR_IMAGE}/optee/tee-raw.bin"
 UBOOT_BINARY = "u-boot.bin"
 BOOTTYPE ?= "qspi emmc qspi1g emmc1g"
 
@@ -77,9 +79,9 @@ do_compile() {
         # built during the first pass and kept for the rest.
         make V=1 realclean
         if [ -f ${S}/fip.bin ]; then
-            oe_runmake pbl PLAT=${PLATFORM} BOOT_MODE=${bootmode} DEBUG=0 LOG_LEVEL=20 RCW=${DEPLOY_DIR_IMAGE}/rcw/gateway_dk/${rcwimg} BL33=${DEPLOY_DIR_IMAGE}/${UBOOT_BINARY}
+            oe_runmake pbl PLAT=${PLATFORM} BOOT_MODE=${bootmode} DEBUG=0 LOG_LEVEL=20 SPD=opteed BL32=${OPTEE_BL32} RCW=${DEPLOY_DIR_IMAGE}/rcw/gateway_dk/${rcwimg} BL33=${DEPLOY_DIR_IMAGE}/${UBOOT_BINARY}
         else
-            oe_runmake pbl fip PLAT=${PLATFORM} BOOT_MODE=${bootmode} DEBUG=0 LOG_LEVEL=20 RCW=${DEPLOY_DIR_IMAGE}/rcw/gateway_dk/${rcwimg} BL33=${DEPLOY_DIR_IMAGE}/${UBOOT_BINARY}
+            oe_runmake pbl fip PLAT=${PLATFORM} BOOT_MODE=${bootmode} DEBUG=0 LOG_LEVEL=20 SPD=opteed BL32=${OPTEE_BL32} RCW=${DEPLOY_DIR_IMAGE}/rcw/gateway_dk/${rcwimg} BL33=${DEPLOY_DIR_IMAGE}/${UBOOT_BINARY}
             cp ${S}/build/${PLATFORM}/release/fip.bin ${S}/fip.bin
         fi
         cp ${S}/build/${PLATFORM}/release/bl2_${bootmode}.pbl ./bl2_${d}.pbl
