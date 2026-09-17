@@ -1,5 +1,20 @@
 # Changelog
 
+## 2026-09-17 — Kernel 6.18, thermal governor, recovery tooling
+- Track NXP Linux Factory 6.18.20: kernel 6.12.49 to 6.18.20, U-Boot to 2026.04, and the U-Boot board port moves to `board/mono/gateway_dk`
+- Hand the fans to the kernel thermal governor and drop the fancontrol daemon; a linear governor interpolates duty between trips rather than stepping, 20% at 40 °C to 100% at 80 °C
+- Read the EMC2305 per-channel minimum duty from `microchip,pwm-min`, so the 20% stall floor holds on a direct hwmon write and not only on what the governor asks for
+- Restructure sfp-led into one device per port: `of_led_get()` is private in 6.18 and every exported getter resolves against the port's own node
+- Add `fw_printenv` and `fw_setenv`, with `/etc/fw_env.config` generated at boot for the medium the board actually booted from
+- Add `lspci`, `lsusb` and `devmem`; add `dropbear`, installed but not started, since root has no password here
+- Give BusyBox `dd` the `conv=` options, so writing flash no longer needs a trailing `sync`
+- Drop eudev from the recovery image: it was installed but never started, and `/dev` comes from devtmpfs
+- Fix `INITRAMFS_MAXSIZE`, which was expressed in bytes against a check that reads KiB and so never fired
+- Fail the build when the signing pubkey disagrees with the one firmware-tools installs, which would otherwise have devices reject every update
+- Build the ATF FIP once rather than four times, and deploy the FMan microcode under a name that does not claim a version
+- Add a `make announce` target for posting releases to Discord
+- Bump FIRMWARE_VERSION to 2026.09.2
+
 ## 2026-09-16 — Keep the SFP ports working when a module jams the i2c bus
 - Reset the SFP i2c mux over its reset line when U-Boot finds the bus jammed, instead of trying to talk to the mux over the very bus that is stuck. The old recovery could never have worked, so a jammed module failed the boot self-test and left the front-panel LED red until someone pulled the power. The board now clears it on its own and says so on the console
 - Read the port LEDs' module-present signal from the cage's own presence pin instead of asking the module over i2c. A module that jams the bus cannot answer, so a port that was perfectly healthy — link up, traffic flowing — showed as an empty cage and went dark, taking its neighbour's LEDs with it. Nothing on the LED path touches i2c any more, which also removes the constant polling that made the jam likely in the first place
