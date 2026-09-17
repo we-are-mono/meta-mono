@@ -8,7 +8,9 @@ COMPATIBLE_MACHINE = "gateway-dk"
 # (see conf/include/nxp-base.inc). NXP tags optee_os alongside atf, rcw,
 # u-boot and linux, so it bumps with them rather than on its own schedule.
 require conf/include/nxp-base.inc
-SRC_URI = "git://github.com/nxp-qoriq/optee_os;protocol=https;nobranch=1"
+SRC_URI = "git://github.com/nxp-qoriq/optee_os;protocol=https;nobranch=1 \
+           file://0001-plat-ls-refuse-to-program-the-RPMB-key-until-OTPMK-i.patch \
+           "
 SRCREV = "${NXP_LF_SRCREV_OPTEE}"
 
 PV = "${NXP_LF_TAG}"
