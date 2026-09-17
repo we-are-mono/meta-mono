@@ -1,0 +1,3 @@
+#!/bin/sh
+# Point fw_printenv/fw_setenv at the u-boot environment of the booted medium
+/usr/sbin/firmware env-config

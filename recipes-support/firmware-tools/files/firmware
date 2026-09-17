@@ -10,6 +10,7 @@ PUBKEY="/etc/firmware/firmware-signing.pub"
 DOWNLOAD_DIR=""  # set to a private mktemp dir in cmd_update
 ENV_SIZE=8192  # 0x2000 bytes
 ENV_OFFSET=3145728  # 0x300000
+ENV_SECT_SIZE=65536  # 0x10000, the QSPI erase block
 
 # eMMC device
 EMMC_DEV="/dev/mmcblk0"
@@ -440,6 +441,36 @@ cmd_backup() {
     info "Backup saved to $backup_file ($((size / 1024 / 1024)) MB)"
 }
 
+# Point fw_printenv/fw_setenv at the environment belonging to the medium we
+# booted from. U-Boot keeps an environment on both QSPI and eMMC, so without
+# this the tools would read, and worse write, the copy nothing is booting.
+# The geometry comes from the constants above rather than a second hard-coded
+# copy, so it cannot drift from what update and backup use.
+cmd_env_config() {
+    local boot_medium out="/etc/fw_env.config"
+
+    boot_medium=$(detect_boot_medium)
+
+    case "$boot_medium" in
+        qspi)
+            # The environment sits at the start of its own MTD partition, so
+            # the offset is relative to that partition, not to the whole chip.
+            printf '%s 0x0 0x%x 0x%x\n' \
+                "$(find_mtd "uboot-env")" "$ENV_SIZE" "$ENV_SECT_SIZE" > "$out"
+            ;;
+        emmc)
+            printf '%s 0x%x 0x%x\n' \
+                "$EMMC_DEV" "$ENV_OFFSET" "$ENV_SIZE" > "$out"
+            ;;
+        *)
+            die "Unknown boot medium '$boot_medium', cannot write $out"
+            ;;
+    esac
+
+    info "fw_printenv/fw_setenv pointed at the ${boot_medium} environment:"
+    sed 's/^/     /' "$out"
+}
+
 cmd_version() {
     local version="unknown"
     if [ -f /etc/firmware/version ]; then
@@ -454,6 +485,7 @@ cmd_help() {
     echo "Commands:"
     echo "  update [opts]   Verify and flash firmware to the inactive medium"
     echo "  backup          Back up the inactive medium's firmware to /tmp"
+    echo "  env-config      Regenerate /etc/fw_env.config for this boot medium"
     echo "  version         Show firmware version"
     echo "  help            Show this help message"
     echo ""
@@ -496,6 +528,7 @@ cmd_help() {
 case "${1:-help}" in
     update)  shift; cmd_update "$@" ;;
     backup)  shift; cmd_backup "$@" ;;
+    env-config) cmd_env_config ;;
     version) cmd_version ;;
     help|--help|-h) cmd_help ;;
     *) die "Unknown command: $1. Run 'firmware help' for usage." ;;

@@ -14,12 +14,20 @@ IMAGE_INSTALL = "busybox base-files resolv-conf-static bash shadow kmod \
                 ethtool curl gzip xz tar vim-tiny firmware-tools \
                 lmsensors-sensors sfp-led status-led lp5812-driver \
                 tcpdump iproute2 dosfstools stressapptest \
+                pciutils usbutils dropbear \
                 "
+
+# usbutils recommends udev-hwdb, which resolves to eudev-hwdb and brings back
+# the daemon plus a 9MB hwdb.bin; dropbear recommends xauth. lsusb falls back
+# to numeric IDs, and there is no X11 here. Name the packages, not the provide.
+BAD_RECOMMENDATIONS += "eudev-hwdb xauth"
 
 # Empty root password is intentional: recovery is only reachable via
 # `run recovery` from the u-boot console, which itself requires UART
 # (physical) access. A password wouldn't add any security beyond what
-# physical access to the device already implies.
+# physical access to the device already implies. That holds only while
+# nothing listens on the network, which is why dropbear is installed but
+# not started -- set a root password before starting it by hand.
 IMAGE_FEATURES += "empty-root-password"
 
 # Strip locale, saves us ~3MB
@@ -48,6 +56,15 @@ PACKAGE_EXCLUDE += "kernel-image-image*"
 # We have bash in this image, might as well use it
 ROOTFS_POSTPROCESS_COMMAND += "fix_root_shell;"
 
+# dropbear must never listen by default: root has no password here. Nothing
+# links its init script today (no sysvinit in DISTRO_FEATURES, so update-rc.d
+# is absent), and rcS runs rc5.d -- this guards against that changing.
+ROOTFS_POSTPROCESS_COMMAND += "disable_dropbear_autostart;"
+
 fix_root_shell() {
     sed -i '/^root:/s|sh$|bash|' ${IMAGE_ROOTFS}/etc/passwd
+}
+
+disable_dropbear_autostart() {
+    rm -f ${IMAGE_ROOTFS}${sysconfdir}/rc5.d/S??dropbear
 }
