@@ -2,12 +2,13 @@ DESCRIPTION = "Minimal BusyBox initramfs for Gateway Development Kit"
 LICENSE = "GPL-2.0-only"
 LIC_FILES_CHKSUM = "file://${COMMON_LICENSE_DIR}/GPL-2.0-only;md5=801f80980d171dd6425610833a22dbe6"
 
-# Inherit initramfs image class (leaner) instead of core-image
+# Plain image, not core-image: core-image pulls in packagegroup-base and
+# a set of IMAGE_FEATURES this rescue system has no use for.
 inherit image
 
 # Keep it minimal - just BusyBox and essential packages that should be
 # sufficient for a rescue system; Basic networking, partitioning and compression.
-IMAGE_INSTALL = "busybox base-files resolv-conf-static bash shadow kmod udev \
+IMAGE_INSTALL = "busybox base-files resolv-conf-static bash shadow kmod \
                 parted util-linux-fdisk util-linux-lsblk util-linux-blkid \
                 e2fsprogs e2fsprogs-resize2fs mmc-utils mtd-utils i2c-tools \
                 ethtool curl gzip xz tar vim-tiny firmware-tools \
@@ -48,5 +49,5 @@ PACKAGE_EXCLUDE += "kernel-image-image*"
 ROOTFS_POSTPROCESS_COMMAND += "fix_root_shell;"
 
 fix_root_shell() {
-    sed -i '1s|sh$|bash|' ${IMAGE_ROOTFS}/etc/passwd
+    sed -i '/^root:/s|sh$|bash|' ${IMAGE_ROOTFS}/etc/passwd
 }
