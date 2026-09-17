@@ -1,7 +1,7 @@
 arch=arm
 cpu=armv8
 soc=fsl-layerscape
-vendor=freescale
+vendor=mono
 board=gateway_dk
 board_name=gateway_dk
 baudrate=115200

@@ -1,7 +1,7 @@
-From 68b310d318c6a470021655c0d48b30a13c0797ac Mon Sep 17 00:00:00 2001
+From 636615fedc25ba716e1aba2a647571244a35809f Mon Sep 17 00:00:00 2001
 From: Tomaz Zaman <tomaz@mono.si>
 Date: Sun, 19 Apr 2026 15:24:51 +0200
-Subject: [PATCH 6/7] arm: dts: add mono-gateway-dk.dts
+Subject: [PATCH 6/8] arm: dts: add mono-gateway-dk.dts
 
 Adds the U-Boot device tree for the Mono Gateway Development Kit. It
 references the LS1046A SoC dtsi from upstream and adds the board's

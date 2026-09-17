@@ -12,13 +12,13 @@
 # upstream context drift on additive patches. If a patch ever fails to
 # apply after a bump, fix that single patch in place, not the whole set.
 
-NXP_LF_TAG = "lf-6.12.49-2.2.0"
+NXP_LF_TAG = "lf-6.18.20-2.0.0"
 
-NXP_LF_SRCREV_ATF   = "a266ff458c2526a6474036a5c6648be6fdc54fe3"
+NXP_LF_SRCREV_ATF   = "0779f89a5475a03193f7707f3bbb50cec11707c0"
 NXP_LF_SRCREV_RCW   = "82fa0c6d03b00dc84b6a64ba91f42c35762dd903"
-NXP_LF_SRCREV_UBOOT = "4ddbad60eff308a5b356fb9ab8734ac382ddd692"
-NXP_LF_SRCREV_LINUX = "df24f9428e38740256a410b983003a478e72a7c0"
+NXP_LF_SRCREV_UBOOT = "6eeef838dac4ddbc06ff14450531a95e8c5cb346"
+NXP_LF_SRCREV_LINUX = "b096ce610e956cc2596006343df8a2a26ed6e019"
 
 # Kernel version baked into PV. Bump in lockstep with NXP_LF_SRCREV_LINUX
 # so the package metadata reflects the actual kernel.
-NXP_LF_LINUX_VERSION = "6.12.49"
+NXP_LF_LINUX_VERSION = "6.18.20"

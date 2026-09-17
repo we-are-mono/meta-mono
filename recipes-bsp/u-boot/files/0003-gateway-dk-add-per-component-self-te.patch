@@ -1,8 +1,7 @@
-From 7547623d669681b79fc3fb0011e88e24df82cb18 Mon Sep 17 00:00:00 2001
+From 86bc8e6c76c4d90904fac3f09da2ab07666dc127 Mon Sep 17 00:00:00 2001
 From: Tomaz Zaman <tomaz@mono.si>
 Date: Sun, 19 Apr 2026 15:24:13 +0200
-Subject: [PATCH 3/7] board: freescale: gateway-dk: add per-component
- self-tests
+Subject: [PATCH 3/8] board: mono: gateway-dk: add per-component self-tests
 
 Adds the ten per-chip self-test modules invoked from misc_init_r() via
 the harness in the previous patch. Each one probes its target through
@@ -37,33 +36,33 @@ Upstream-Status: Inappropriate [product-specific]
 
 Signed-off-by: Tomaz Zaman <tomaz@mono.si>
 ---
- board/freescale/gateway_dk/setup/clock_gen.c  |  67 +++++++++
- board/freescale/gateway_dk/setup/ddr_sanity.c |  73 ++++++++++
- .../gateway_dk/setup/fan_controller.c         |  89 ++++++++++++
- .../gateway_dk/setup/led_controller.c         | 108 ++++++++++++++
- board/freescale/gateway_dk/setup/retimer.c    |  36 +++++
- board/freescale/gateway_dk/setup/rtc.c        |  55 +++++++
- .../freescale/gateway_dk/setup/sfp_i2c_mux.c  | 135 ++++++++++++++++++
- .../freescale/gateway_dk/setup/temp_sensors.c |  70 +++++++++
- .../gateway_dk/setup/typec_controller.c       |  49 +++++++
- .../gateway_dk/setup/voltage_sensors.c        |  97 +++++++++++++
+ board/mono/gateway_dk/setup/clock_gen.c       |  67 +++++++++
+ board/mono/gateway_dk/setup/ddr_sanity.c      |  73 ++++++++++
+ board/mono/gateway_dk/setup/fan_controller.c  |  89 ++++++++++++
+ board/mono/gateway_dk/setup/led_controller.c  | 108 ++++++++++++++
+ board/mono/gateway_dk/setup/retimer.c         |  36 +++++
+ board/mono/gateway_dk/setup/rtc.c             |  55 +++++++
+ board/mono/gateway_dk/setup/sfp_i2c_mux.c     | 135 ++++++++++++++++++
+ board/mono/gateway_dk/setup/temp_sensors.c    |  70 +++++++++
+ .../mono/gateway_dk/setup/typec_controller.c  |  49 +++++++
+ board/mono/gateway_dk/setup/voltage_sensors.c |  97 +++++++++++++
  10 files changed, 779 insertions(+)
- create mode 100644 board/freescale/gateway_dk/setup/clock_gen.c
- create mode 100644 board/freescale/gateway_dk/setup/ddr_sanity.c
- create mode 100644 board/freescale/gateway_dk/setup/fan_controller.c
- create mode 100644 board/freescale/gateway_dk/setup/led_controller.c
- create mode 100644 board/freescale/gateway_dk/setup/retimer.c
- create mode 100644 board/freescale/gateway_dk/setup/rtc.c
- create mode 100644 board/freescale/gateway_dk/setup/sfp_i2c_mux.c
- create mode 100644 board/freescale/gateway_dk/setup/temp_sensors.c
- create mode 100644 board/freescale/gateway_dk/setup/typec_controller.c
- create mode 100644 board/freescale/gateway_dk/setup/voltage_sensors.c
+ create mode 100644 board/mono/gateway_dk/setup/clock_gen.c
+ create mode 100644 board/mono/gateway_dk/setup/ddr_sanity.c
+ create mode 100644 board/mono/gateway_dk/setup/fan_controller.c
+ create mode 100644 board/mono/gateway_dk/setup/led_controller.c
+ create mode 100644 board/mono/gateway_dk/setup/retimer.c
+ create mode 100644 board/mono/gateway_dk/setup/rtc.c
+ create mode 100644 board/mono/gateway_dk/setup/sfp_i2c_mux.c
+ create mode 100644 board/mono/gateway_dk/setup/temp_sensors.c
+ create mode 100644 board/mono/gateway_dk/setup/typec_controller.c
+ create mode 100644 board/mono/gateway_dk/setup/voltage_sensors.c
 
-diff --git a/board/freescale/gateway_dk/setup/clock_gen.c b/board/freescale/gateway_dk/setup/clock_gen.c
+diff --git a/board/mono/gateway_dk/setup/clock_gen.c b/board/mono/gateway_dk/setup/clock_gen.c
 new file mode 100644
 index 00000000000..836930d1dc1
 --- /dev/null
-+++ b/board/freescale/gateway_dk/setup/clock_gen.c
++++ b/board/mono/gateway_dk/setup/clock_gen.c
 @@ -0,0 +1,67 @@
 +// SPDX-License-Identifier: GPL-2.0+
 +/*
@@ -132,11 +131,11 @@ index 00000000000..836930d1dc1
 +
 +	return hw_test_pass(ctx, "100 MHz output");
 +}
-diff --git a/board/freescale/gateway_dk/setup/ddr_sanity.c b/board/freescale/gateway_dk/setup/ddr_sanity.c
+diff --git a/board/mono/gateway_dk/setup/ddr_sanity.c b/board/mono/gateway_dk/setup/ddr_sanity.c
 new file mode 100644
 index 00000000000..586b3c8e1a4
 --- /dev/null
-+++ b/board/freescale/gateway_dk/setup/ddr_sanity.c
++++ b/board/mono/gateway_dk/setup/ddr_sanity.c
 @@ -0,0 +1,73 @@
 +// SPDX-License-Identifier: GPL-2.0+
 +/*
@@ -211,11 +210,11 @@ index 00000000000..586b3c8e1a4
 +			    gd->bd->bi_dram[0].size / (1024 * 1024),
 +			    gd->bd->bi_dram[1].size / (1024 * 1024));
 +}
-diff --git a/board/freescale/gateway_dk/setup/fan_controller.c b/board/freescale/gateway_dk/setup/fan_controller.c
+diff --git a/board/mono/gateway_dk/setup/fan_controller.c b/board/mono/gateway_dk/setup/fan_controller.c
 new file mode 100644
 index 00000000000..72e83a6e507
 --- /dev/null
-+++ b/board/freescale/gateway_dk/setup/fan_controller.c
++++ b/board/mono/gateway_dk/setup/fan_controller.c
 @@ -0,0 +1,89 @@
 +// SPDX-License-Identifier: GPL-2.0+
 +/*
@@ -306,11 +305,11 @@ index 00000000000..72e83a6e507
 +
 +	return hw_test_pass(ctx, "%u RPM (Fan 1)", rpm);
 +}
-diff --git a/board/freescale/gateway_dk/setup/led_controller.c b/board/freescale/gateway_dk/setup/led_controller.c
+diff --git a/board/mono/gateway_dk/setup/led_controller.c b/board/mono/gateway_dk/setup/led_controller.c
 new file mode 100644
 index 00000000000..9637716518c
 --- /dev/null
-+++ b/board/freescale/gateway_dk/setup/led_controller.c
++++ b/board/mono/gateway_dk/setup/led_controller.c
 @@ -0,0 +1,108 @@
 +// SPDX-License-Identifier: GPL-2.0+
 +/*
@@ -420,11 +419,11 @@ index 00000000000..9637716518c
 +		env_set("bootargs_hwtest", "hwtest_status=pass");
 +	}
 +}
-diff --git a/board/freescale/gateway_dk/setup/retimer.c b/board/freescale/gateway_dk/setup/retimer.c
+diff --git a/board/mono/gateway_dk/setup/retimer.c b/board/mono/gateway_dk/setup/retimer.c
 new file mode 100644
 index 00000000000..4b2ed146550
 --- /dev/null
-+++ b/board/freescale/gateway_dk/setup/retimer.c
++++ b/board/mono/gateway_dk/setup/retimer.c
 @@ -0,0 +1,36 @@
 +// SPDX-License-Identifier: GPL-2.0+
 +/*
@@ -462,11 +461,11 @@ index 00000000000..4b2ed146550
 +
 +	return hw_test_pass(ctx, "ID 0x%02x", id);
 +}
-diff --git a/board/freescale/gateway_dk/setup/rtc.c b/board/freescale/gateway_dk/setup/rtc.c
+diff --git a/board/mono/gateway_dk/setup/rtc.c b/board/mono/gateway_dk/setup/rtc.c
 new file mode 100644
 index 00000000000..f198cb9cdaf
 --- /dev/null
-+++ b/board/freescale/gateway_dk/setup/rtc.c
++++ b/board/mono/gateway_dk/setup/rtc.c
 @@ -0,0 +1,55 @@
 +// SPDX-License-Identifier: GPL-2.0+
 +/*
@@ -523,11 +522,11 @@ index 00000000000..f198cb9cdaf
 +			    tm.tm_year, tm.tm_mon, tm.tm_mday,
 +			    tm.tm_hour, tm.tm_min, tm.tm_sec);
 +}
-diff --git a/board/freescale/gateway_dk/setup/sfp_i2c_mux.c b/board/freescale/gateway_dk/setup/sfp_i2c_mux.c
+diff --git a/board/mono/gateway_dk/setup/sfp_i2c_mux.c b/board/mono/gateway_dk/setup/sfp_i2c_mux.c
 new file mode 100644
 index 00000000000..16bb886ccd1
 --- /dev/null
-+++ b/board/freescale/gateway_dk/setup/sfp_i2c_mux.c
++++ b/board/mono/gateway_dk/setup/sfp_i2c_mux.c
 @@ -0,0 +1,135 @@
 +// SPDX-License-Identifier: GPL-2.0+
 +/*
@@ -664,11 +663,11 @@ index 00000000000..16bb886ccd1
 +
 +	return hw_test_pass(ctx, "Reset OK");
 +}
-diff --git a/board/freescale/gateway_dk/setup/temp_sensors.c b/board/freescale/gateway_dk/setup/temp_sensors.c
+diff --git a/board/mono/gateway_dk/setup/temp_sensors.c b/board/mono/gateway_dk/setup/temp_sensors.c
 new file mode 100644
 index 00000000000..5f71717828d
 --- /dev/null
-+++ b/board/freescale/gateway_dk/setup/temp_sensors.c
++++ b/board/mono/gateway_dk/setup/temp_sensors.c
 @@ -0,0 +1,70 @@
 +// SPDX-License-Identifier: GPL-2.0+
 +/*
@@ -740,11 +739,11 @@ index 00000000000..5f71717828d
 +
 +	return hw_test_pass(ctx, "CPU %d °C, Board %d °C", cpu_temp, board_temp);
 +}
-diff --git a/board/freescale/gateway_dk/setup/typec_controller.c b/board/freescale/gateway_dk/setup/typec_controller.c
+diff --git a/board/mono/gateway_dk/setup/typec_controller.c b/board/mono/gateway_dk/setup/typec_controller.c
 new file mode 100644
 index 00000000000..cb241c2a814
 --- /dev/null
-+++ b/board/freescale/gateway_dk/setup/typec_controller.c
++++ b/board/mono/gateway_dk/setup/typec_controller.c
 @@ -0,0 +1,49 @@
 +// SPDX-License-Identifier: GPL-2.0+
 +/*
@@ -795,11 +794,11 @@ index 00000000000..cb241c2a814
 +
 +	return hw_test_pass(ctx, "%s", ascii);
 +}
-diff --git a/board/freescale/gateway_dk/setup/voltage_sensors.c b/board/freescale/gateway_dk/setup/voltage_sensors.c
+diff --git a/board/mono/gateway_dk/setup/voltage_sensors.c b/board/mono/gateway_dk/setup/voltage_sensors.c
 new file mode 100644
 index 00000000000..8bbb6c3983a
 --- /dev/null
-+++ b/board/freescale/gateway_dk/setup/voltage_sensors.c
++++ b/board/mono/gateway_dk/setup/voltage_sensors.c
 @@ -0,0 +1,97 @@
 +// SPDX-License-Identifier: GPL-2.0+
 +/*
@@ -898,3 +897,6 @@ index 00000000000..8bbb6c3983a
 +
 +	return failed ? -1 : 0;
 +}
+-- 
+2.47.3
+

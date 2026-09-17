@@ -1,7 +1,7 @@
-From 872a018f362829fa90665e82bfcd5b3d720fe5d8 Mon Sep 17 00:00:00 2001
+From f04ec3956b3c202e574424edcd8c3e94cf652761 Mon Sep 17 00:00:00 2001
 From: Tomaz Zaman <tomaz@mono.si>
 Date: Sun, 19 Apr 2026 15:24:44 +0200
-Subject: [PATCH 5/7] configs: add Gateway-DK defconfig and board header
+Subject: [PATCH 5/8] configs: add Gateway-DK defconfig and board header
 
 Adds the build-time configuration for the Gateway-DK target:
 
@@ -19,18 +19,18 @@ Upstream-Status: Inappropriate [product-specific]
 
 Signed-off-by: Tomaz Zaman <tomaz@mono.si>
 ---
- configs/mono_gateway_dk_defconfig | 113 ++++++++++++++++++++++++++++++
+ configs/mono_gateway_dk_defconfig | 114 ++++++++++++++++++++++++++++++
  include/configs/gateway_dk.h      |  53 ++++++++++++++
- 2 files changed, 166 insertions(+)
+ 2 files changed, 167 insertions(+)
  create mode 100644 configs/mono_gateway_dk_defconfig
  create mode 100644 include/configs/gateway_dk.h
 
 diff --git a/configs/mono_gateway_dk_defconfig b/configs/mono_gateway_dk_defconfig
 new file mode 100644
-index 00000000000..c39fed5ba6b
+index 00000000000..7337f88bab8
 --- /dev/null
 +++ b/configs/mono_gateway_dk_defconfig
-@@ -0,0 +1,113 @@
+@@ -0,0 +1,114 @@
 +CONFIG_ARM=y
 +CONFIG_COUNTER_FREQUENCY=25000000
 +CONFIG_TARGET_GATEWAY_DK=y
@@ -101,6 +101,7 @@ index 00000000000..c39fed5ba6b
 +CONFIG_CHIP_SELECTS_PER_CTRL=1
 +CONFIG_DDR_ECC=y
 +CONFIG_ECC_INIT_VIA_DDRCONTROLLER=y
++CONFIG_MPC8XXX_GPIO=y
 +CONFIG_MPC8XXX_GPIO=y
 +CONFIG_DM_I2C=y
 +CONFIG_I2C_SET_DEFAULT_BUS_NUM=y
@@ -203,3 +204,6 @@ index 00000000000..10d3cd6b90f
 +#include <asm/arch/soc.h>
 +
 +#endif /* __GATEWAY_DK_H__ */
+-- 
+2.47.3
+

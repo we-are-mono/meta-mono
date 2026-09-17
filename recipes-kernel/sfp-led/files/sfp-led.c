@@ -34,6 +34,7 @@
 #include <linux/of.h>
 #include <linux/of_mdio.h>
 #include <linux/of_net.h>
+#include <linux/of_platform.h>
 #include <linux/platform_device.h>
 #include <linux/property.h>
 #include <linux/rtnetlink.h>
@@ -54,11 +55,6 @@ struct sfp_led_port {
 	int last_ifindex;
 	u64 last_tx_packets;
 	u64 last_rx_packets;
-};
-
-struct sfp_led_priv {
-	unsigned int num_ports;
-	struct sfp_led_port *ports;
 };
 
 static void sfp_led_set(struct led_classdev *led, bool on)
@@ -265,13 +261,12 @@ put_pcs:
 	return ret;
 }
 
-static int sfp_led_get_port(struct device *dev, struct device_node *node,
-			    struct sfp_led_port *port)
+static int sfp_led_get_port(struct device *dev, struct sfp_led_port *port)
 {
 	struct device_node *sfp_np;
 	int ret;
 
-	sfp_np = of_parse_phandle(node, "sfp", 0);
+	sfp_np = of_parse_phandle(dev->of_node, "sfp", 0);
 	if (!sfp_np)
 		return -EINVAL;
 	if (!of_device_is_available(sfp_np)) {
@@ -287,8 +282,8 @@ static int sfp_led_get_port(struct device *dev, struct device_node *node,
 
 	/*
 	 * The sfp driver owns this line for its own state machine, so ask for
-	 * it non-exclusively; gpiolib hands out the same descriptor rather
-	 * than -EBUSY. Only this second consumer needs the flag.
+	 * it non-exclusively; gpiolib returns the same descriptor instead of
+	 * -EBUSY. Only this second consumer needs the flag.
 	 */
 	port->present = devm_fwnode_gpiod_get_index(dev, of_fwnode_handle(sfp_np),
 						    "mod-def0", 0,
@@ -304,16 +299,18 @@ static int sfp_led_get_port(struct device *dev, struct device_node *node,
 	if (ret)
 		goto put_sfp;
 
-	port->link_led = of_led_get(node, 0);
+	port->link_led = devm_of_led_get(dev, 0);
 	if (IS_ERR(port->link_led)) {
 		ret = PTR_ERR(port->link_led);
 		port->link_led = NULL;
 		goto put_sfp;
 	}
-	port->activity_led = of_led_get(node, 1);
+	port->activity_led = devm_of_led_get_optional(dev, 1);
 	if (IS_ERR(port->activity_led)) {
 		ret = PTR_ERR(port->activity_led);
 		port->activity_led = NULL;
+	} else {
+		ret = 0;
 	}
 
 put_sfp:
@@ -323,74 +320,64 @@ put_sfp:
 
 static void sfp_led_put_port(struct sfp_led_port *port)
 {
-	if (port->activity_led)
-		led_put(port->activity_led);
-	if (port->link_led)
-		led_put(port->link_led);
 	if (port->pcs_bus)
 		put_device(&port->pcs_bus->dev);
 	of_node_put(port->mac_np);
 }
 
-static int sfp_led_probe(struct platform_device *pdev)
+static int sfp_led_port_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
-	struct sfp_led_priv *priv;
-	struct device_node *child;
-	unsigned int i = 0;
+	struct sfp_led_port *port;
 	int ret;
 
-	priv = devm_kzalloc(dev, sizeof(*priv), GFP_KERNEL);
-	if (!priv)
-		return -ENOMEM;
-	priv->num_ports = of_get_available_child_count(dev->of_node);
-	if (!priv->num_ports)
-		return -ENODEV;
-	priv->ports = devm_kcalloc(dev, priv->num_ports, sizeof(*priv->ports),
-				   GFP_KERNEL);
-	if (!priv->ports)
+	port = devm_kzalloc(dev, sizeof(*port), GFP_KERNEL);
+	if (!port)
 		return -ENOMEM;
 
-	/*
-	 * Acquire every port before starting work: a deferred probe must not
-	 * leave a partially running monitor behind.
-	 */
-	for_each_available_child_of_node(dev->of_node, child) {
-		ret = sfp_led_get_port(dev, child, &priv->ports[i++]);
-		if (ret) {
-			dev_err_probe(dev, ret, "cannot acquire resources for %pOFn\n",
-				      child);
-			of_node_put(child);
-			goto put_ports;
-		}
-	}
+	ret = sfp_led_get_port(dev, port);
+	if (ret)
+		return dev_err_probe(dev, ret, "cannot acquire port resources\\n");
 
-	platform_set_drvdata(pdev, priv);
-	for (i = 0; i < priv->num_ports; i++) {
-		INIT_DELAYED_WORK(&priv->ports[i].poll_work, sfp_led_poll);
-		schedule_delayed_work(&priv->ports[i].poll_work, 0);
-	}
+	platform_set_drvdata(pdev, port);
+	INIT_DELAYED_WORK(&port->poll_work, sfp_led_poll);
+	schedule_delayed_work(&port->poll_work, 0);
 	return 0;
-
-put_ports:
-	while (i)
-		sfp_led_put_port(&priv->ports[--i]);
-	return ret;
 }
 
-static void sfp_led_remove(struct platform_device *pdev)
+static void sfp_led_port_remove(struct platform_device *pdev)
 {
-	struct sfp_led_priv *priv = platform_get_drvdata(pdev);
-	unsigned int i;
+	struct sfp_led_port *port = platform_get_drvdata(pdev);
 
-	for (i = 0; i < priv->num_ports; i++) {
-		struct sfp_led_port *port = &priv->ports[i];
+	cancel_delayed_work_sync(&port->poll_work);
+	sfp_led_set(port->link_led, false);
+	sfp_led_set(port->activity_led, false);
+	sfp_led_put_port(port);
+}
 
-		cancel_delayed_work_sync(&port->poll_work);
-		sfp_led_set(port->link_led, false);
-		sfp_led_set(port->activity_led, false);
-		sfp_led_put_port(port);
-	}
+static const struct of_device_id sfp_led_port_of_match[] = {
+	{ .compatible = "mono,sfp-led-port" },
+	{ }
+};
+MODULE_DEVICE_TABLE(of, sfp_led_port_of_match);
+
+static struct platform_driver sfp_led_port_driver = {
+	.probe = sfp_led_port_probe,
+	.remove = sfp_led_port_remove,
+	.driver = {
+		.name = "sfp-led-port",
+		.of_match_table = sfp_led_port_of_match,
+	},
+};
+
+/*
+ * The controller exists only to bring its port children up as devices of their
+ * own. Every exported LED getter resolves against dev->of_node, so a port has
+ * to be a device to reach the "leds" phandles in its own node.
+ */
+static int sfp_led_probe(struct platform_device *pdev)
+{
+	return devm_of_platform_populate(&pdev->dev);
 }
 
 static const struct of_device_id sfp_led_of_match[] = {
@@ -401,13 +388,30 @@ MODULE_DEVICE_TABLE(of, sfp_led_of_match);
 
 static struct platform_driver sfp_led_driver = {
 	.probe = sfp_led_probe,
-	.remove = sfp_led_remove,
 	.driver = {
 		.name = "sfp-led",
 		.of_match_table = sfp_led_of_match,
 	},
 };
-module_platform_driver(sfp_led_driver);
+
+static struct platform_driver * const sfp_led_drivers[] = {
+	&sfp_led_driver,
+	&sfp_led_port_driver,
+};
+
+static int __init sfp_led_init(void)
+{
+	return platform_register_drivers(sfp_led_drivers,
+					 ARRAY_SIZE(sfp_led_drivers));
+}
+module_init(sfp_led_init);
+
+static void __exit sfp_led_exit(void)
+{
+	platform_unregister_drivers(sfp_led_drivers,
+				    ARRAY_SIZE(sfp_led_drivers));
+}
+module_exit(sfp_led_exit);
 
 MODULE_AUTHOR("Tomaz Zaman <tomaz@mono.si>");
 MODULE_DESCRIPTION("Mono SFP port LED controller");

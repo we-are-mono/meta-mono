@@ -1,7 +1,7 @@
-From 818536bfc6072f4f63cb3d6fcc9dfe4f65640046 Mon Sep 17 00:00:00 2001
+From dff07661cbcbb5bc2133921fc0ff34af905e3822 Mon Sep 17 00:00:00 2001
 From: Tomaz Zaman <tomaz@mono.si>
 Date: Sun, 19 Apr 2026 15:23:57 +0200
-Subject: [PATCH 2/7] board: freescale: gateway-dk: add hw self-test harness
+Subject: [PATCH 2/8] board: mono: gateway-dk: add hw self-test harness
 
 Adds the small infrastructure that the per-chip self-tests in the
 follow-up patch depend on:
@@ -20,23 +20,23 @@ Upstream-Status: Inappropriate [product-specific]
 
 Signed-off-by: Tomaz Zaman <tomaz@mono.si>
 ---
- board/freescale/gateway_dk/setup/Makefile     | 18 ++++
- board/freescale/gateway_dk/setup/hw_test.c    | 95 +++++++++++++++++++
- board/freescale/gateway_dk/setup/hw_test.h    | 93 ++++++++++++++++++
- .../freescale/gateway_dk/setup/i2c_helpers.c  | 21 ++++
- .../freescale/gateway_dk/setup/i2c_helpers.h  | 17 ++++
+ board/mono/gateway_dk/setup/Makefile      | 18 +++++
+ board/mono/gateway_dk/setup/hw_test.c     | 95 +++++++++++++++++++++++
+ board/mono/gateway_dk/setup/hw_test.h     | 93 ++++++++++++++++++++++
+ board/mono/gateway_dk/setup/i2c_helpers.c | 21 +++++
+ board/mono/gateway_dk/setup/i2c_helpers.h | 17 ++++
  5 files changed, 244 insertions(+)
- create mode 100644 board/freescale/gateway_dk/setup/Makefile
- create mode 100644 board/freescale/gateway_dk/setup/hw_test.c
- create mode 100644 board/freescale/gateway_dk/setup/hw_test.h
- create mode 100644 board/freescale/gateway_dk/setup/i2c_helpers.c
- create mode 100644 board/freescale/gateway_dk/setup/i2c_helpers.h
+ create mode 100644 board/mono/gateway_dk/setup/Makefile
+ create mode 100644 board/mono/gateway_dk/setup/hw_test.c
+ create mode 100644 board/mono/gateway_dk/setup/hw_test.h
+ create mode 100644 board/mono/gateway_dk/setup/i2c_helpers.c
+ create mode 100644 board/mono/gateway_dk/setup/i2c_helpers.h
 
-diff --git a/board/freescale/gateway_dk/setup/Makefile b/board/freescale/gateway_dk/setup/Makefile
+diff --git a/board/mono/gateway_dk/setup/Makefile b/board/mono/gateway_dk/setup/Makefile
 new file mode 100644
 index 00000000000..71dde20b63c
 --- /dev/null
-+++ b/board/freescale/gateway_dk/setup/Makefile
++++ b/board/mono/gateway_dk/setup/Makefile
 @@ -0,0 +1,18 @@
 +# SPDX-License-Identifier: GPL-2.0+
 +#
@@ -57,11 +57,11 @@ index 00000000000..71dde20b63c
 +obj-y += temp_sensors.o
 +obj-y += sfp_i2c_mux.o
 \ No newline at end of file
-diff --git a/board/freescale/gateway_dk/setup/hw_test.c b/board/freescale/gateway_dk/setup/hw_test.c
+diff --git a/board/mono/gateway_dk/setup/hw_test.c b/board/mono/gateway_dk/setup/hw_test.c
 new file mode 100644
 index 00000000000..aa935db5439
 --- /dev/null
-+++ b/board/freescale/gateway_dk/setup/hw_test.c
++++ b/board/mono/gateway_dk/setup/hw_test.c
 @@ -0,0 +1,95 @@
 +// SPDX-License-Identifier: GPL-2.0+
 +/*
@@ -158,11 +158,11 @@ index 00000000000..aa935db5439
 +
 +	return r;
 +}
-diff --git a/board/freescale/gateway_dk/setup/hw_test.h b/board/freescale/gateway_dk/setup/hw_test.h
+diff --git a/board/mono/gateway_dk/setup/hw_test.h b/board/mono/gateway_dk/setup/hw_test.h
 new file mode 100644
 index 00000000000..63804f642af
 --- /dev/null
-+++ b/board/freescale/gateway_dk/setup/hw_test.h
++++ b/board/mono/gateway_dk/setup/hw_test.h
 @@ -0,0 +1,93 @@
 +/* SPDX-License-Identifier: GPL-2.0+ */
 +/*
@@ -257,11 +257,11 @@ index 00000000000..63804f642af
 +	__attribute__((format(printf, 2, 3)));
 +
 +#endif /* HW_TEST_H */
-diff --git a/board/freescale/gateway_dk/setup/i2c_helpers.c b/board/freescale/gateway_dk/setup/i2c_helpers.c
+diff --git a/board/mono/gateway_dk/setup/i2c_helpers.c b/board/mono/gateway_dk/setup/i2c_helpers.c
 new file mode 100644
 index 00000000000..f6a09d69214
 --- /dev/null
-+++ b/board/freescale/gateway_dk/setup/i2c_helpers.c
++++ b/board/mono/gateway_dk/setup/i2c_helpers.c
 @@ -0,0 +1,21 @@
 +#include <config.h>
 +#include <dm.h>
@@ -285,11 +285,11 @@ index 00000000000..f6a09d69214
 +	return i2c_get_chip_for_busnum(bus, dev_addr, 1, dev);
 +}
 \ No newline at end of file
-diff --git a/board/freescale/gateway_dk/setup/i2c_helpers.h b/board/freescale/gateway_dk/setup/i2c_helpers.h
+diff --git a/board/mono/gateway_dk/setup/i2c_helpers.h b/board/mono/gateway_dk/setup/i2c_helpers.h
 new file mode 100644
 index 00000000000..2fa88505524
 --- /dev/null
-+++ b/board/freescale/gateway_dk/setup/i2c_helpers.h
++++ b/board/mono/gateway_dk/setup/i2c_helpers.h
 @@ -0,0 +1,17 @@
 +#ifndef I2C_HELPERS_H
 +#define I2C_HELPERS_H

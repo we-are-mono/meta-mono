@@ -1,5 +1,5 @@
 From: Tomaz Zaman <tomaz@mono.si>
-Date: Thu, 17 Sep 2026 01:44:22 +0200
+Date: Thu, 17 Sep 2026 13:04:34 +0200
 Subject: [PATCH] hwmon: emc2305: read a per-channel minimum PWM from the
  device tree
 
@@ -18,12 +18,15 @@ A thermal trip cannot substitute for this. It would bound only what the
 governor asks for, leaving a direct hwmon write free to take the fan below
 the minimum, including to zero.
 
+emc2305_of_parse_pwm_child() releases args.np before returning as of 6.18,
+so the rejection path for an out-of-range value releases it too.
+
 Upstream-Status: Pending
 Signed-off-by: Tomaz Zaman <tomaz@mono.si>
 ---
  .../bindings/hwmon/microchip,emc2305.yaml     |  9 ++++++++
- drivers/hwmon/emc2305.c                       | 22 ++++++++++++++++---
- 2 files changed, 28 insertions(+), 3 deletions(-)
+ drivers/hwmon/emc2305.c                       | 23 ++++++++++++++++---
+ 2 files changed, 29 insertions(+), 3 deletions(-)
 
 diff --git a/Documentation/devicetree/bindings/hwmon/microchip,emc2305.yaml b/Documentation/devicetree/bindings/hwmon/microchip,emc2305.yaml
 index d3f06ebc19fa..2437228e32db 100644
@@ -46,7 +49,7 @@ index d3f06ebc19fa..2437228e32db 100644
        - reg
  
 diff --git a/drivers/hwmon/emc2305.c b/drivers/hwmon/emc2305.c
-index 60809289f816..1b2122b29b5b 100644
+index 67e82021da21..a775c3ad0573 100644
 --- a/drivers/hwmon/emc2305.c
 +++ b/drivers/hwmon/emc2305.c
 @@ -538,7 +538,7 @@ static int emc2305_identify(struct device *dev)
@@ -58,7 +61,7 @@ index 60809289f816..1b2122b29b5b 100644
  	int ret;
  	struct of_phandle_args args;
  
-@@ -578,6 +578,21 @@ static int emc2305_of_parse_pwm_child(struct device *dev,
+@@ -578,6 +578,22 @@ static int emc2305_of_parse_pwm_child(struct device *dev,
  		data->pwm_output_mask |= EMC2305_OPEN_DRAIN << ch;
  	}
  
@@ -72,15 +75,16 @@ index 60809289f816..1b2122b29b5b 100644
 +		if (pwm_min > EMC2305_FAN_MAX) {
 +			dev_err(dev, "Invalid microchip,pwm-min %u of %pOFn\n",
 +				pwm_min, child);
++			of_node_put(args.np);
 +			return -EINVAL;
 +		}
 +		data->pwm_min[ch] = pwm_min;
 +	}
 +
+ 	of_node_put(args.np);
  	return 0;
  }
- 
-@@ -586,9 +601,12 @@ static int emc2305_probe_childs_from_dt(struct device *dev)
+@@ -587,9 +603,12 @@ static int emc2305_probe_childs_from_dt(struct device *dev)
  	struct emc2305_data *data = dev_get_drvdata(dev);
  	struct device_node *child;
  	int ret, count = 0;
@@ -93,7 +97,7 @@ index 60809289f816..1b2122b29b5b 100644
  
  	for_each_child_of_node(dev->of_node, child) {
  		if (of_property_present(child, "reg")) {
-@@ -670,8 +688,6 @@ static int emc2305_probe(struct i2c_client *client)
+@@ -669,8 +688,6 @@ static int emc2305_probe(struct i2c_client *client)
  	} else {
  		data->max_state = EMC2305_FAN_MAX_STATE;
  		data->pwm_separate = false;
@@ -102,3 +106,6 @@ index 60809289f816..1b2122b29b5b 100644
  	}
  
  	data->hwmon_dev = devm_hwmon_device_register_with_info(dev, "emc2305", data,
+-- 
+2.47.3
+

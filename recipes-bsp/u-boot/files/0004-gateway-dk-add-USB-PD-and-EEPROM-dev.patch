@@ -1,8 +1,8 @@
-From b09f9a30704626f961e4d8bb35ef1085e596c6b2 Mon Sep 17 00:00:00 2001
+From 9a28752af59876607a8830f3e2eb9ab14a637857 Mon Sep 17 00:00:00 2001
 From: Tomaz Zaman <tomaz@mono.si>
 Date: Sun, 19 Apr 2026 15:24:27 +0200
-Subject: [PATCH 4/7] board: freescale: gateway-dk: add USB PD and EEPROM
- device programming
+Subject: [PATCH 4/8] board: mono: gateway-dk: add USB PD and EEPROM device
+ programming
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit
@@ -32,18 +32,18 @@ Upstream-Status: Inappropriate [product-specific]
 Signed-off-by: Tomaz Zaman <tomaz@mono.si>
 ---
  .../gateway_dk/setup/NVM_config_STUSB45.h     |  12 +
- board/freescale/gateway_dk/setup/eeprom.c     | 462 ++++++++++++++
- .../gateway_dk/setup/usbpd_controller.c       | 568 ++++++++++++++++++
+ board/mono/gateway_dk/setup/eeprom.c          | 462 ++++++++++++++
+ .../mono/gateway_dk/setup/usbpd_controller.c  | 568 ++++++++++++++++++
  3 files changed, 1042 insertions(+)
- create mode 100644 board/freescale/gateway_dk/setup/NVM_config_STUSB45.h
- create mode 100644 board/freescale/gateway_dk/setup/eeprom.c
- create mode 100644 board/freescale/gateway_dk/setup/usbpd_controller.c
+ create mode 100644 board/mono/gateway_dk/setup/NVM_config_STUSB45.h
+ create mode 100644 board/mono/gateway_dk/setup/eeprom.c
+ create mode 100644 board/mono/gateway_dk/setup/usbpd_controller.c
 
-diff --git a/board/freescale/gateway_dk/setup/NVM_config_STUSB45.h b/board/freescale/gateway_dk/setup/NVM_config_STUSB45.h
+diff --git a/board/mono/gateway_dk/setup/NVM_config_STUSB45.h b/board/mono/gateway_dk/setup/NVM_config_STUSB45.h
 new file mode 100644
 index 00000000000..4e0bb8ef961
 --- /dev/null
-+++ b/board/freescale/gateway_dk/setup/NVM_config_STUSB45.h
++++ b/board/mono/gateway_dk/setup/NVM_config_STUSB45.h
 @@ -0,0 +1,12 @@
 +#ifndef NVM_CONFIG_STUSB45_H
 +#define NVM_CONFIG_STUSB45_H
@@ -58,11 +58,11 @@ index 00000000000..4e0bb8ef961
 +
 +#endif
 \ No newline at end of file
-diff --git a/board/freescale/gateway_dk/setup/eeprom.c b/board/freescale/gateway_dk/setup/eeprom.c
+diff --git a/board/mono/gateway_dk/setup/eeprom.c b/board/mono/gateway_dk/setup/eeprom.c
 new file mode 100644
 index 00000000000..deb58f6ce7c
 --- /dev/null
-+++ b/board/freescale/gateway_dk/setup/eeprom.c
++++ b/board/mono/gateway_dk/setup/eeprom.c
 @@ -0,0 +1,462 @@
 +/*
 + * U-Boot command to program EEPROM with board information
@@ -527,11 +527,11 @@ index 00000000000..deb58f6ce7c
 +	"      Port 4 (fm1-mac10): 02:4D:4F:4E:4F:05"
 +);
 \ No newline at end of file
-diff --git a/board/freescale/gateway_dk/setup/usbpd_controller.c b/board/freescale/gateway_dk/setup/usbpd_controller.c
+diff --git a/board/mono/gateway_dk/setup/usbpd_controller.c b/board/mono/gateway_dk/setup/usbpd_controller.c
 new file mode 100644
 index 00000000000..caa06ac5a81
 --- /dev/null
-+++ b/board/freescale/gateway_dk/setup/usbpd_controller.c
++++ b/board/mono/gateway_dk/setup/usbpd_controller.c
 @@ -0,0 +1,568 @@
 +/*
 + * STUSB4500 USB PD Controller NVM Programming

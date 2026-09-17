@@ -1,7 +1,7 @@
-From bb9e253bce57e775a05a17404b81c437c6c07be6 Mon Sep 17 00:00:00 2001
+From c491fca2bfa65272603f39f6198cb6c1c3e21b8c Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?M=C3=B4she=20van=20der=20Sterre?= <me@moshe.nl>
 Date: Fri, 7 Aug 2026 15:34:46 +0200
-Subject: [PATCH] board: gateway_dk: derive SFP modes from SerDes RCW
+Subject: [PATCH 8/8] board: gateway_dk: derive SFP modes from SerDes RCW
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit
@@ -10,26 +10,25 @@ Upstream-Status: Inappropriate [product-specific]
 
 Signed-off-by: Môshe van der Sterre <me@moshe.nl>
 ---
- board/freescale/gateway_dk/gateway_dk.c | 192 +++++++++++++++++++++++-
+ board/mono/gateway_dk/gateway_dk.c | 192 ++++++++++++++++++++++++++++-
  1 file changed, 191 insertions(+), 1 deletion(-)
 
-diff --git a/board/freescale/gateway_dk/gateway_dk.c b/board/freescale/gateway_dk/gateway_dk.c
-index 53beeee70e2..02d7cc1637d 100644
---- a/board/freescale/gateway_dk/gateway_dk.c
-+++ b/board/freescale/gateway_dk/gateway_dk.c
-@@ -27,9 +27,11 @@
+diff --git a/board/mono/gateway_dk/gateway_dk.c b/board/mono/gateway_dk/gateway_dk.c
+index 17e469a4c7b..0f96d15407c 100644
+--- a/board/mono/gateway_dk/gateway_dk.c
++++ b/board/mono/gateway_dk/gateway_dk.c
+@@ -27,8 +27,10 @@
  #include <fsl_esdhc.h>
  #include <fsl_dspi.h>
  #include <dm.h>
 +#include <linux/libfdt.h>
  
- #include "../common/i2c_mux.h"
  #include "setup/hw_test.h"
 +#include "setup/i2c_helpers.h"
  
  DECLARE_GLOBAL_DATA_PTR;
  
-@@ -61,6 +63,31 @@ void lp5810a_set_status(int any_test_failed);
+@@ -60,6 +62,31 @@ void lp5810a_set_status(int any_test_failed);
  #define DCFG_PORSR1_OFFSET		0x000
  #define ERRATUM_A010539_TRIGGER_OFFSET	0x1A8
  
@@ -61,7 +60,7 @@ index 53beeee70e2..02d7cc1637d 100644
  static void erratum_a010539(void)
  {
  	u32 porsr1_val;
-@@ -71,6 +98,167 @@ static void erratum_a010539(void)
+@@ -70,6 +97,167 @@ static void erratum_a010539(void)
  	out_be32((void *)(CFG_SYS_FSL_SCFG_ADDR + ERRATUM_A010539_TRIGGER_OFFSET), 0xFFFFFFFF);
  }
  
@@ -229,7 +228,7 @@ index 53beeee70e2..02d7cc1637d 100644
  int board_early_init_f(void)
  {
  	erratum_a010539();
-@@ -112,6 +300,7 @@ int misc_init_r(void)
+@@ -111,6 +299,7 @@ int misc_init_r(void)
  
  	hw_tests_print_banner("Boot Self-Test");
  	r = hw_tests_run(hw_tests, ARRAY_SIZE(hw_tests));
@@ -237,7 +236,7 @@ index 53beeee70e2..02d7cc1637d 100644
  
  	/* Surface the aggregate result on the front-panel LED and propagate
  	 * it to the kernel via bootargs.
-@@ -170,6 +359,7 @@ int ft_board_setup(void *blob, struct bd_info *bd)
+@@ -169,6 +358,7 @@ int ft_board_setup(void *blob, struct bd_info *bd)
  #endif
  #endif
  

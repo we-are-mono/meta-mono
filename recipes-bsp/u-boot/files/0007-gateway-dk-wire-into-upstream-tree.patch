@@ -1,7 +1,7 @@
-From 49bcdac57de9cb7177c27e36e0da4aeae3c155c1 Mon Sep 17 00:00:00 2001
+From 17cff629b38766b5fa996a565d1e9e3e9fd6d5a1 Mon Sep 17 00:00:00 2001
 From: Tomaz Zaman <tomaz@mono.si>
 Date: Sun, 19 Apr 2026 15:25:02 +0200
-Subject: [PATCH 7/7] arm, mtd: wire Gateway-DK into the upstream tree
+Subject: [PATCH 7/8] arm, mtd: wire Gateway-DK into the upstream tree
 
 Three small upstream-side hooks needed to pick up everything the
 previous patches added:
@@ -25,10 +25,10 @@ Signed-off-by: Tomaz Zaman <tomaz@mono.si>
  3 files changed, 22 insertions(+)
 
 diff --git a/arch/arm/Kconfig b/arch/arm/Kconfig
-index 2a16a7e31c4..c353de95ae8 100644
+index 7d6d3394797..489169afbca 100644
 --- a/arch/arm/Kconfig
 +++ b/arch/arm/Kconfig
-@@ -1895,6 +1895,22 @@ config TARGET_LS1046AFRWY
+@@ -1918,6 +1918,22 @@ config TARGET_LS1046AFRWY
  	  development platform that supports the QorIQ LS1046A
  	  Layerscape Architecture processor.
  
@@ -51,19 +51,19 @@ index 2a16a7e31c4..c353de95ae8 100644
  config ARCH_SC5XX
  	bool "Analog Devices SC5XX-processor family"
  	select ADI_SC5XX_TIMER
-@@ -2417,6 +2433,7 @@ source "board/freescale/ls1046aqds/Kconfig"
- source "board/freescale/ls1043ardb/Kconfig"
- source "board/freescale/ls1046ardb/Kconfig"
- source "board/freescale/ls1046afrwy/Kconfig"
-+source "board/freescale/gateway_dk/Kconfig"
- source "board/freescale/ls1012aqds/Kconfig"
- source "board/freescale/ls1012ardb/Kconfig"
- source "board/freescale/ls1012afrdm/Kconfig"
+@@ -2446,6 +2462,7 @@ source "board/hisilicon/hikey960/Kconfig"
+ source "board/hisilicon/poplar/Kconfig"
+ source "board/isee/igep003x/Kconfig"
+ source "board/kontron/sl28/Kconfig"
++source "board/mono/gateway_dk/Kconfig"
+ source "board/myir/mys_6ulx/Kconfig"
+ source "board/samsung/common/Kconfig"
+ source "board/siemens/common/Kconfig"
 diff --git a/arch/arm/dts/Makefile b/arch/arm/dts/Makefile
-index 090bf4e6b24..1b3e88aa65d 100644
+index 947e1b24514..c2292695012 100644
 --- a/arch/arm/dts/Makefile
 +++ b/arch/arm/dts/Makefile
-@@ -517,6 +517,8 @@ dtb-$(CONFIG_TARGET_SL28) += fsl-ls1028a-kontron-sl28.dtb \
+@@ -537,6 +537,8 @@ dtb-$(CONFIG_TARGET_SL28) += fsl-ls1028a-kontron-sl28.dtb \
  
  dtb-$(CONFIG_TARGET_TEN64) += fsl-ls1088a-ten64.dtb
  
@@ -71,9 +71,9 @@ index 090bf4e6b24..1b3e88aa65d 100644
 +
  dtb-$(CONFIG_TARGET_STEMMY) += ste-ux500-samsung-stemmy.dtb
  
- dtb-$(CONFIG_STM32F4) += stm32f429-disco.dtb \
+ dtb-$(CONFIG_MACH_SUN4I) += \
 diff --git a/drivers/mtd/spi/spi-nor-ids.c b/drivers/mtd/spi/spi-nor-ids.c
-index 0361551763e..6043b1dcd72 100644
+index a9f1b5faf2c..ddaf4568712 100644
 --- a/drivers/mtd/spi/spi-nor-ids.c
 +++ b/drivers/mtd/spi/spi-nor-ids.c
 @@ -355,6 +355,9 @@ const struct flash_info spi_nor_ids[] = {

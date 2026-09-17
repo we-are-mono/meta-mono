@@ -1,5 +1,5 @@
 From: Tomaz Zaman <tomaz@mono.si>
-Date: Tue, 21 Oct 2025 12:00:00 +0000
+Date: Thu, 17 Sep 2026 13:00:44 +0200
 Subject: [PATCH] hwmon: ina2xx: Add INA234 support as INA226 variant
 
 Add support for the Texas Instruments INA234 power monitor.
@@ -9,30 +9,36 @@ The key difference is the bus voltage LSB: INA234 uses 3.125mV which
 becomes 1.6mV effective LSB due to the 12-bit format (data in bits
 [15:4] with bits [3:0] reserved).
 
+Since 6.18 the driver selects alert and limit behaviour from a has_alerts
+flag in the per-chip config rather than comparing against ina226 at each
+site, so the six chip comparisons this used to add collapse into one flag.
+Only hwmon_chip_update_interval still tests the id directly, and INA234
+belongs there because it shares the INA226 CONFIG register layout.
+
 Datasheet: https://www.ti.com/product/ina234
 
 Upstream-Status: Inappropriate [embedded specific]
 Signed-off-by: Tomaz Zaman <tomaz@mono.si>
 ---
- drivers/hwmon/ina2xx.c | 27 ++++++++++++++++++++-------
- 1 file changed, 20 insertions(+), 7 deletions(-)
+ drivers/hwmon/ina2xx.c | 20 ++++++++++++++++++--
+ 1 file changed, 18 insertions(+), 2 deletions(-)
 
 diff --git a/drivers/hwmon/ina2xx.c b/drivers/hwmon/ina2xx.c
-index xxxxxxxx..xxxxxxxx 100644
+index bc3c1f7314b3..aa7f92ac5818 100644
 --- a/drivers/hwmon/ina2xx.c
 +++ b/drivers/hwmon/ina2xx.c
-@@ -125,7 +125,7 @@
+@@ -135,7 +135,7 @@ static const struct regmap_config ina2xx_regmap_config = {
  	.writeable_reg = ina2xx_writeable_reg,
  };
  
--enum ina2xx_ids { ina219, ina226 };
-+enum ina2xx_ids { ina219, ina226, ina234 };
+-enum ina2xx_ids { ina219, ina226, ina260, sy24655 };
++enum ina2xx_ids { ina219, ina226, ina260, sy24655, ina234 };
  
  struct ina2xx_config {
  	u16 config_default;
-@@ -164,6 +164,14 @@
- 		.bus_voltage_lsb = 1250,
- 		.power_lsb_factor = 25,
+@@ -205,6 +205,17 @@ static const struct ina2xx_config ina2xx_config[] = {
+ 		.has_ishunt = false,
+ 		.has_power_average = true,
  	},
 +	[ina234] = {
 +		.config_default = INA226_CONFIG_DEFAULT,
@@ -41,81 +47,31 @@ index xxxxxxxx..xxxxxxxx 100644
 +		.bus_voltage_shift = 4,
 +		.bus_voltage_lsb = 25600,
 +		.power_lsb_factor = 32,
++		.has_alerts = true,
++		.has_ishunt = false,
++		.has_power_average = false,
 +	},
  };
  
  /*
-@@ -633,12 +641,12 @@
- 			return 0444;
- 		case hwmon_in_lcrit:
- 		case hwmon_in_crit:
--			if (chip == ina226)
-+			if (chip == ina226 || chip == ina234)
- 				return 0644;
- 			break;
- 		case hwmon_in_lcrit_alarm:
- 		case hwmon_in_crit_alarm:
--			if (chip == ina226)
-+			if (chip == ina226 || chip == ina234)
- 				return 0444;
- 			break;
- 		default:
-@@ -651,12 +659,12 @@
- 			return 0444;
- 		case hwmon_curr_lcrit:
- 		case hwmon_curr_crit:
--			if (chip == ina226)
-+			if (chip == ina226 || chip == ina234)
- 				return 0644;
- 			break;
- 		case hwmon_curr_lcrit_alarm:
- 		case hwmon_curr_crit_alarm:
--			if (chip == ina226)
-+			if (chip == ina226 || chip == ina234)
- 				return 0444;
- 			break;
- 		default:
-@@ -668,11 +676,11 @@
- 		case hwmon_power_input:
- 			return 0444;
- 		case hwmon_power_crit:
--			if (chip == ina226)
-+			if (chip == ina226 || chip == ina234)
- 				return 0644;
- 			break;
- 		case hwmon_power_crit_alarm:
--			if (chip == ina226)
-+			if (chip == ina226 || chip == ina234)
- 				return 0444;
- 			break;
- 		default:
-@@ -682,7 +690,7 @@
+@@ -775,7 +786,7 @@ static umode_t ina2xx_is_visible(const void *_data, enum hwmon_sensor_types type
  	case hwmon_chip:
  		switch (attr) {
  		case hwmon_chip_update_interval:
--			if (chip == ina226)
-+			if (chip == ina226 || chip == ina234)
+-			if (chip == ina226 || chip == ina260)
++			if (chip == ina226 || chip == ina260 || chip == ina234)
  				return 0644;
  			break;
  		default:
-@@ -802,7 +810,7 @@
- 	if (ret < 0)
- 		return ret;
- 
--	if (data->chip == ina226) {
-+	if (data->chip == ina226 || data->chip == ina234) {
- 		bool active_high = device_property_read_bool(dev, "ti,alert-polarity-active-high");
- 
- 		regmap_update_bits(regmap, INA226_MASK_ENABLE,
-@@ -872,6 +880,7 @@
+@@ -990,6 +1001,7 @@ static const struct i2c_device_id ina2xx_id[] = {
  	{ "ina226", ina226 },
  	{ "ina230", ina226 },
  	{ "ina231", ina226 },
 +	{ "ina234", ina234 },
+ 	{ "ina260", ina260 },
+ 	{ "sy24655", sy24655 },
  	{ }
- };
- MODULE_DEVICE_TABLE(i2c, ina2xx_id);
-@@ -897,6 +906,10 @@
+@@ -1021,6 +1033,10 @@ static const struct of_device_id __maybe_unused ina2xx_of_match[] = {
  		.compatible = "ti,ina231",
  		.data = (void *)ina226
  	},
@@ -123,6 +79,9 @@ index xxxxxxxx..xxxxxxxx 100644
 +		.compatible = "ti,ina234",
 +		.data = (void *)ina234
 +	},
- 	{ },
- };
- MODULE_DEVICE_TABLE(of, ina2xx_of_match);
+ 	{
+ 		.compatible = "ti,ina260",
+ 		.data = (void *)ina260
+-- 
+2.47.3
+
