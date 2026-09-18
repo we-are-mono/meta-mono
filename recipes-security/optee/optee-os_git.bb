@@ -45,16 +45,20 @@ OPTEE_PLATFORM = "ls-ls1046ardb"
 # CFG_CAAM_INC_PRIBLOB raises CAAM's PRIBLOB field once OP-TEE has read the
 # master key blob, leaving nothing that runs afterwards able to read it.
 #
-# CFG_RPMB_FS keeps its default of n. Every RPMB frame is an RPC to normal
-# world (OPTEE_RPC_CMD_RPMB_FRAMES), so it needs a tee-supplicant, which the
-# recovery image does not carry; turning it on would also default
-# CFG_REE_FS_INTEGRITY_RPMB to y and anchor REE FS in an unkeyed RPMB.
+# CFG_RPMB_FS and CFG_RPMB_WRITE_KEY are both on so that one image serves a
+# board whether or not its OTPMK fuse is blown. Unfused, plat_rpmb_key_is_ready()
+# refuses and the eMMC's one-shot RPMB key is left unwritten; fused, the same
+# image keys RPMB on first use. Recovery carries the kernel RPMB class, and on
+# this kernel OP-TEE reaches the eMMC through it (OPTEE_RPC_CMD_RPMB_FRAMES)
+# rather than through a tee-supplicant.
 EXTRA_OEMAKE = " \
     PLATFORM=${OPTEE_PLATFORM} \
     CFG_ARM64_core=y \
     CFG_INSECURE=y \
     CFG_CORE_HUK_SUBKEY_COMPAT=n \
     CFG_CAAM_INC_PRIBLOB=y \
+    CFG_RPMB_FS=y \
+    CFG_RPMB_WRITE_KEY=y \
     CROSS_COMPILE=${HOST_PREFIX} \
     CROSS_COMPILE64=${HOST_PREFIX} \
     CROSS_COMPILE_core=${HOST_PREFIX} \

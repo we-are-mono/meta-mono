@@ -1,4 +1,4 @@
-From 046c43cefef6547e2d4e1ad8aca7e46cf7b0533b Mon Sep 17 00:00:00 2001
+From e7a76262b2ad744fd9a8eaa4ebf9d44bc087e41a Mon Sep 17 00:00:00 2001
 From: Tomaz Zaman <tomaz@mono.si>
 Date: Thu, 17 Sep 2026 20:38:57 +0200
 Subject: [PATCH] plat-ls: refuse to program the RPMB key until OTPMK is blown
@@ -27,12 +27,12 @@ Upstream-Status: Pending
 
 Signed-off-by: Tomaz Zaman <tomaz@mono.si>
 ---
- core/arch/arm/plat-ls/main.c            | 49 +++++++++++++++++++++++++
+ core/arch/arm/plat-ls/main.c            | 50 +++++++++++++++++++++++++
  core/arch/arm/plat-ls/platform_config.h |  1 +
- 2 files changed, 50 insertions(+)
+ 2 files changed, 51 insertions(+)
 
 diff --git a/core/arch/arm/plat-ls/main.c b/core/arch/arm/plat-ls/main.c
-index 7e013f9c2..ab7852205 100644
+index 7e013f9c2..5c44ce4a5 100644
 --- a/core/arch/arm/plat-ls/main.c
 +++ b/core/arch/arm/plat-ls/main.c
 @@ -49,6 +49,7 @@
@@ -53,7 +53,7 @@ index 7e013f9c2..ab7852205 100644
  
  #ifdef CFG_ARM32_core
  void plat_primary_init_early(void)
-@@ -212,3 +216,48 @@ void boot_secondary_init_intc(void)
+@@ -212,3 +216,49 @@ void boot_secondary_init_intc(void)
  {
  	gic_init_per_cpu();
  }
@@ -101,6 +101,7 @@ index 7e013f9c2..ab7852205 100644
 +
 +	return true;
 +}
++
 +#endif /* SNVS_BASE && CFG_RPMB_FS */
 diff --git a/core/arch/arm/plat-ls/platform_config.h b/core/arch/arm/plat-ls/platform_config.h
 index 3924b5be5..d8f152670 100644
