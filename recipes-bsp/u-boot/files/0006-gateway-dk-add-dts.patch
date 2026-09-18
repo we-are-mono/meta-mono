@@ -1,4 +1,4 @@
-From 6a50d96227f42dcacae0b045c4fdb4041e51a975 Mon Sep 17 00:00:00 2001
+From 712435b48cf030770f93ec1493e12bfef1c8db0a Mon Sep 17 00:00:00 2001
 From: Tomaz Zaman <tomaz@mono.si>
 Date: Sun, 19 Apr 2026 15:24:51 +0200
 Subject: [PATCH 6/8] arm: dts: add mono-gateway-dk.dts

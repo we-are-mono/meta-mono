@@ -1,4 +1,4 @@
-From fc1bafdb50be8b606dc20da03d6b907188e6844a Mon Sep 17 00:00:00 2001
+From 6e0cf145fd04f13662065d088eec64208292a511 Mon Sep 17 00:00:00 2001
 From: Tomaz Zaman <tomaz@mono.si>
 Date: Sun, 19 Apr 2026 15:25:02 +0200
 Subject: [PATCH 7/8] arm, mtd: wire Gateway-DK into the upstream tree
