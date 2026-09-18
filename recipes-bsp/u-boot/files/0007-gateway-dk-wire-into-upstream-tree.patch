@@ -1,19 +1,26 @@
-From 6e0cf145fd04f13662065d088eec64208292a511 Mon Sep 17 00:00:00 2001
+From aa2102202ea5089eef574767edb015403ecd5e76 Mon Sep 17 00:00:00 2001
 From: Tomaz Zaman <tomaz@mono.si>
 Date: Sun, 19 Apr 2026 15:25:02 +0200
-Subject: [PATCH 7/8] arm, mtd: wire Gateway-DK into the upstream tree
+Subject: [PATCH 7/8] arm, mtd, misc: wire Gateway-DK into the upstream tree
 
-Three small upstream-side hooks needed to pick up everything the
-previous patches added:
+Adds the board to arch/arm/Kconfig and the dts Makefile, and adds the
+board's SPI-NOR part to spi-nor-ids.c.
 
-  - arch/arm/Kconfig: add the CONFIG_TARGET_GATEWAY_DK entry
-    alongside the existing LS1046A boards and source the new board
-    Kconfig. Upstream targets are untouched so the patch stays
-    purely additive across NXP LF rebases.
-  - arch/arm/dts/Makefile: build mono-gateway-dk.dtb when the new
-    Kconfig is selected.
-  - drivers/mtd/spi/spi-nor-ids.c: add the MT25QU512ABB SPI-NOR id
-    used by the Gateway-DK QSPI flash.
+Also makes ls2_sfp probe on a board with no switched programming supply.
+device_get_supply_regulator() returns -ENOENT when the phandle property
+is simply absent, which the driver did not tolerate alongside -ENODEV and
+-ENOSYS, so probe failed and no SFP device bound at all. The supply is
+optional everywhere it is used -- both regulator_set_enable() calls are
+guarded by if (priv->supply) -- so an absent one should not be fatal.
+
+This board deliberately has no such regulator: POVDD stays a bare test
+point so that software cannot raise the fuse programming voltage, since
+anything able to do so could set ITS on a unit with a blank SRK hash and
+brick it permanently with no recovery. Any Layerscape board making that
+same choice hits this.
+
+That hunk is upstreamable on its own and is only carried here to keep the
+series at eight patches; it is not product-specific like the rest.
 
 Upstream-Status: Inappropriate [product-specific]
 
@@ -21,8 +28,9 @@ Signed-off-by: Tomaz Zaman <tomaz@mono.si>
 ---
  arch/arm/Kconfig              | 17 +++++++++++++++++
  arch/arm/dts/Makefile         |  2 ++
+ drivers/misc/ls2_sfp.c        |  2 +-
  drivers/mtd/spi/spi-nor-ids.c |  3 +++
- 3 files changed, 22 insertions(+)
+ 4 files changed, 23 insertions(+), 1 deletion(-)
 
 diff --git a/arch/arm/Kconfig b/arch/arm/Kconfig
 index 7d6d3394797..489169afbca 100644
@@ -72,6 +80,19 @@ index 947e1b24514..c2292695012 100644
  dtb-$(CONFIG_TARGET_STEMMY) += ste-ux500-samsung-stemmy.dtb
  
  dtb-$(CONFIG_MACH_SUN4I) += \
+diff --git a/drivers/misc/ls2_sfp.c b/drivers/misc/ls2_sfp.c
+index 8cb6e999bed..7e3b388ed01 100644
+--- a/drivers/misc/ls2_sfp.c
++++ b/drivers/misc/ls2_sfp.c
+@@ -229,7 +229,7 @@ static int ls2_sfp_probe(struct udevice *dev)
+ 	}
+ 
+ 	ret = device_get_supply_regulator(dev, "ta-sfp-prog-supply", &priv->supply);
+-	if (ret && ret != -ENODEV && ret != -ENOSYS) {
++	if (ret && ret != -ENODEV && ret != -ENOSYS && ret != -ENOENT) {
+ 		dev_dbg(dev, "problem getting supply (err %d)\n", ret);
+ 		return ret;
+ 	}
 diff --git a/drivers/mtd/spi/spi-nor-ids.c b/drivers/mtd/spi/spi-nor-ids.c
 index a9f1b5faf2c..ddaf4568712 100644
 --- a/drivers/mtd/spi/spi-nor-ids.c
