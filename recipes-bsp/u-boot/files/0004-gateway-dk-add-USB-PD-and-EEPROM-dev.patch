@@ -1,4 +1,4 @@
-From 9a28752af59876607a8830f3e2eb9ab14a637857 Mon Sep 17 00:00:00 2001
+From 64ab3d8e1a3cc98ff5083093ef67d35f7ce64724 Mon Sep 17 00:00:00 2001
 From: Tomaz Zaman <tomaz@mono.si>
 Date: Sun, 19 Apr 2026 15:24:27 +0200
 Subject: [PATCH 4/8] board: mono: gateway-dk: add USB PD and EEPROM device

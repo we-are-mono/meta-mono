@@ -1,4 +1,4 @@
-From 237a6dbfb73a5df4250329c46b95764d90559b01 Mon Sep 17 00:00:00 2001
+From bb6b3b3e7b7531b11a2f80e63a950a1254be2f4f Mon Sep 17 00:00:00 2001
 From: Tomaz Zaman <tomaz@mono.si>
 Date: Sun, 19 Apr 2026 15:24:44 +0200
 Subject: [PATCH 5/8] configs: add Gateway-DK defconfig and board header

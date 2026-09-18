@@ -1,4 +1,4 @@
-From 29c4b9ffd1affe693da79e3c358629371638edd8 Mon Sep 17 00:00:00 2001
+From f3f3b971a818505cba468329f30a2c97a167e269 Mon Sep 17 00:00:00 2001
 From: Tomaz Zaman <tomaz@mono.si>
 Date: Sun, 19 Apr 2026 15:23:47 +0200
 Subject: [PATCH 1/8] board: mono: gateway-dk: add board core
@@ -21,8 +21,8 @@ Signed-off-by: Tomaz Zaman <tomaz@mono.si>
  board/mono/gateway_dk/README       |  62 ++++++++++
  board/mono/gateway_dk/ddr.c        |  19 ++++
  board/mono/gateway_dk/eth.c        |  44 ++++++++
- board/mono/gateway_dk/gateway_dk.c | 174 +++++++++++++++++++++++++++++
- 7 files changed, 336 insertions(+)
+ board/mono/gateway_dk/gateway_dk.c | 176 +++++++++++++++++++++++++++++
+ 7 files changed, 338 insertions(+)
  create mode 100644 board/mono/gateway_dk/Kconfig
  create mode 100644 board/mono/gateway_dk/MAINTAINERS
  create mode 100644 board/mono/gateway_dk/Makefile
@@ -233,10 +233,10 @@ index 00000000000..1ea74a05a4d
 +#endif
 diff --git a/board/mono/gateway_dk/gateway_dk.c b/board/mono/gateway_dk/gateway_dk.c
 new file mode 100644
-index 00000000000..17e469a4c7b
+index 00000000000..cd258fb5ae7
 --- /dev/null
 +++ b/board/mono/gateway_dk/gateway_dk.c
-@@ -0,0 +1,174 @@
+@@ -0,0 +1,176 @@
 +// SPDX-License-Identifier: GPL-2.0+
 +/*
 + * Copyright 2025 Mono Technologies Inc.
@@ -283,6 +283,7 @@ index 00000000000..17e469a4c7b
 +int test_emc2302_fan(struct hw_test_ctx *ctx);
 +int test_tmp431_temperatures(struct hw_test_ctx *ctx);
 +int test_lp5810a_led(struct hw_test_ctx *ctx);
++int test_security_fuses(struct hw_test_ctx *ctx);
 +void lp5810a_set_status(int any_test_failed);
 +
 +/*
@@ -342,6 +343,7 @@ index 00000000000..17e469a4c7b
 +	{ "Clock generator",   test_6v49205b_clkgen },
 +	{ "Fan controller",    test_emc2302_fan },
 +	{ "LED controller",    test_lp5810a_led },
++	{ "Security fuses",    test_security_fuses },
 +};
 +
 +int misc_init_r(void)

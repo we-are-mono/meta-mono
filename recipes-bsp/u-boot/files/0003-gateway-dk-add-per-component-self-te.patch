@@ -1,4 +1,4 @@
-From 86bc8e6c76c4d90904fac3f09da2ab07666dc127 Mon Sep 17 00:00:00 2001
+From 545bfc5d1fda434bb711d3a1ea52414c6b780974 Mon Sep 17 00:00:00 2001
 From: Tomaz Zaman <tomaz@mono.si>
 Date: Sun, 19 Apr 2026 15:24:13 +0200
 Subject: [PATCH 3/8] board: mono: gateway-dk: add per-component self-tests
@@ -42,17 +42,19 @@ Signed-off-by: Tomaz Zaman <tomaz@mono.si>
  board/mono/gateway_dk/setup/led_controller.c  | 108 ++++++++++++++
  board/mono/gateway_dk/setup/retimer.c         |  36 +++++
  board/mono/gateway_dk/setup/rtc.c             |  55 +++++++
+ board/mono/gateway_dk/setup/security_fuses.c  |  83 +++++++++++
  board/mono/gateway_dk/setup/sfp_i2c_mux.c     | 135 ++++++++++++++++++
  board/mono/gateway_dk/setup/temp_sensors.c    |  70 +++++++++
  .../mono/gateway_dk/setup/typec_controller.c  |  49 +++++++
  board/mono/gateway_dk/setup/voltage_sensors.c |  97 +++++++++++++
- 10 files changed, 779 insertions(+)
+ 11 files changed, 862 insertions(+)
  create mode 100644 board/mono/gateway_dk/setup/clock_gen.c
  create mode 100644 board/mono/gateway_dk/setup/ddr_sanity.c
  create mode 100644 board/mono/gateway_dk/setup/fan_controller.c
  create mode 100644 board/mono/gateway_dk/setup/led_controller.c
  create mode 100644 board/mono/gateway_dk/setup/retimer.c
  create mode 100644 board/mono/gateway_dk/setup/rtc.c
+ create mode 100644 board/mono/gateway_dk/setup/security_fuses.c
  create mode 100644 board/mono/gateway_dk/setup/sfp_i2c_mux.c
  create mode 100644 board/mono/gateway_dk/setup/temp_sensors.c
  create mode 100644 board/mono/gateway_dk/setup/typec_controller.c
@@ -521,6 +523,95 @@ index 00000000000..f198cb9cdaf
 +	return hw_test_pass(ctx, "%04d-%02d-%02d %02d:%02d:%02d",
 +			    tm.tm_year, tm.tm_mon, tm.tm_mday,
 +			    tm.tm_hour, tm.tm_min, tm.tm_sec);
++}
+diff --git a/board/mono/gateway_dk/setup/security_fuses.c b/board/mono/gateway_dk/setup/security_fuses.c
+new file mode 100644
+index 00000000000..6122e72cb16
+--- /dev/null
++++ b/board/mono/gateway_dk/setup/security_fuses.c
+@@ -0,0 +1,83 @@
++// SPDX-License-Identifier: GPL-2.0+
++/*
++ * Copyright 2025 Mono Technologies Inc.
++ */
++
++#include <config.h>
++#include <asm/io.h>
++#include <asm/arch/immap_lsch2.h>
++#include <linux/bitops.h>
++#include "hw_test.h"
++
++/*
++ * Security Fuse Processor and Secure Non-Volatile Storage.
++ *
++ * Both blocks are big-endian on this SoC, so every access goes through
++ * in_be32(). u-boot's fsl_sfp.h describes the fuse block but is gated on
++ * CONFIG_SYS_FSL_SFP_*, which this board does not select, and it covers
++ * neither SVHESR nor SNVS -- hence the local offsets. They hang off
++ * CFG_SYS_SFP_ADDR, which already points at the fuse register block at
++ * SFP + 0x200.
++ */
++#define SFP_SVHESR		((ulong)CFG_SYS_SFP_ADDR - 0x200 + 0x024)
++#define SFP_OSPR		((ulong)CFG_SYS_SFP_ADDR)
++#define SFP_SRKHR(n)		((ulong)CFG_SYS_SFP_ADDR + 0x054 + (n) * 4)
++#define SFP_NUM_SRKHR		8
++
++#define SVHESR_DRV_MASK		0x0000007F
++#define SVHESR_OTPMK_MASK	0x0007FC00
++
++#define OSPR_ITS		BIT(2)
++#define OSPR_WP			BIT(0)
++
++#define SNVS_HPSR		((ulong)CONFIG_SYS_IMMR + 0xe90014)
++#define HPSR_OTPMK_ZERO		BIT(27)
++
++int test_security_fuses(struct hw_test_ctx *ctx)
++{
++	u32 svhesr, ospr, hpsr;
++	bool otpmk, srk, its, wp;
++	int i;
++
++	/*
++	 * OTPMK and the debug response value are Hamming protected, so an
++	 * error here means the fuse block is corrupt. That is a fault on any
++	 * board, whether or not it was ever meant to be fused.
++	 */
++	svhesr = in_be32((void *)SFP_SVHESR);
++	if (svhesr & (SVHESR_OTPMK_MASK | SVHESR_DRV_MASK))
++		return hw_test_fail(ctx, "Hamming error, SVHESR 0x%08x", svhesr);
++
++	hpsr = in_be32((void *)SNVS_HPSR);
++	otpmk = !(hpsr & HPSR_OTPMK_ZERO);
++
++	ospr = in_be32((void *)SFP_OSPR);
++	its = !!(ospr & OSPR_ITS);
++	wp = !!(ospr & OSPR_WP);
++
++	srk = false;
++	for (i = 0; i < SFP_NUM_SRKHR; i++)
++		if (in_be32((void *)SFP_SRKHR(i)))
++			srk = true;
++
++	/*
++	 * Whether a unit is fused is a customer decision, so neither answer
++	 * is a failure. Two combinations cannot have been intended, though:
++	 * ITS commits the part to verified boot, so with no key hash it can
++	 * never boot again, and a key hash without OTPMK is a provisioning
++	 * run that stopped halfway.
++	 */
++	if (its && !srk)
++		return hw_test_fail(ctx, "ITS set with blank SRK hash");
++	if (srk && !otpmk)
++		return hw_test_fail(ctx, "SRK hash set with blank OTPMK");
++
++	if (!otpmk && !srk && !its && !wp)
++		return hw_test_pass(ctx, "open, no fuses blown");
++
++	return hw_test_pass(ctx, "OTPMK %s, SRK %s, ITS %s%s",
++			    otpmk ? "set" : "blank",
++			    srk ? "set" : "blank",
++			    its ? "enforced" : "off",
++			    wp ? ", write-protected" : "");
 +}
 diff --git a/board/mono/gateway_dk/setup/sfp_i2c_mux.c b/board/mono/gateway_dk/setup/sfp_i2c_mux.c
 new file mode 100644

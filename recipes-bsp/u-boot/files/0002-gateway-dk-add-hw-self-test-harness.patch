@@ -1,4 +1,4 @@
-From dff07661cbcbb5bc2133921fc0ff34af905e3822 Mon Sep 17 00:00:00 2001
+From a1c0592dd71a2eadd38ad4a882ed4fab5b4415bf Mon Sep 17 00:00:00 2001
 From: Tomaz Zaman <tomaz@mono.si>
 Date: Sun, 19 Apr 2026 15:23:57 +0200
 Subject: [PATCH 2/8] board: mono: gateway-dk: add hw self-test harness
@@ -20,12 +20,12 @@ Upstream-Status: Inappropriate [product-specific]
 
 Signed-off-by: Tomaz Zaman <tomaz@mono.si>
 ---
- board/mono/gateway_dk/setup/Makefile      | 18 +++++
+ board/mono/gateway_dk/setup/Makefile      | 19 +++++
  board/mono/gateway_dk/setup/hw_test.c     | 95 +++++++++++++++++++++++
  board/mono/gateway_dk/setup/hw_test.h     | 93 ++++++++++++++++++++++
  board/mono/gateway_dk/setup/i2c_helpers.c | 21 +++++
  board/mono/gateway_dk/setup/i2c_helpers.h | 17 ++++
- 5 files changed, 244 insertions(+)
+ 5 files changed, 245 insertions(+)
  create mode 100644 board/mono/gateway_dk/setup/Makefile
  create mode 100644 board/mono/gateway_dk/setup/hw_test.c
  create mode 100644 board/mono/gateway_dk/setup/hw_test.h
@@ -34,10 +34,10 @@ Signed-off-by: Tomaz Zaman <tomaz@mono.si>
 
 diff --git a/board/mono/gateway_dk/setup/Makefile b/board/mono/gateway_dk/setup/Makefile
 new file mode 100644
-index 00000000000..71dde20b63c
+index 00000000000..e796c219108
 --- /dev/null
 +++ b/board/mono/gateway_dk/setup/Makefile
-@@ -0,0 +1,18 @@
+@@ -0,0 +1,19 @@
 +# SPDX-License-Identifier: GPL-2.0+
 +#
 +# Copyright 2025 Mono Technologies Inc.
@@ -56,7 +56,7 @@ index 00000000000..71dde20b63c
 +obj-y += fan_controller.o
 +obj-y += temp_sensors.o
 +obj-y += sfp_i2c_mux.o
-\ No newline at end of file
++obj-y += security_fuses.o
 diff --git a/board/mono/gateway_dk/setup/hw_test.c b/board/mono/gateway_dk/setup/hw_test.c
 new file mode 100644
 index 00000000000..aa935db5439
