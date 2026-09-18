@@ -1,49 +1,63 @@
-From b43063e1cb151b839f91ce5f95e4f87b16d33a00 Mon Sep 17 00:00:00 2001
+From be7652d7c5073103a7edf8458f2174266472981e Mon Sep 17 00:00:00 2001
 From: Tomaz Zaman <tomaz@mono.si>
 Date: Thu, 17 Sep 2026 20:38:57 +0200
-Subject: [PATCH] plat-ls: refuse to program the RPMB key until OTPMK is blown
+Subject: [PATCH] plat-ls: refuse to program the RPMB key unless OTPMK was
+ blown at boot
 
 The eMMC accepts an RPMB authentication key exactly once for the life of
 the part, and OP-TEE derives that key from the HUK, which CAAM takes from
 the OTPMK fuse. With CFG_RPMB_WRITE_KEY enabled on a board whose OTPMK is
-still blank, the first RPMB access therefore binds the part forever to a
-key the SoC never kept secret -- and blowing the fuse afterwards changes
-the HUK, leaving RPMB permanently unreachable. Every development kit would
-destroy its own RPMB the first time secure storage was touched.
+blank, the first RPMB access binds the part forever to a key the SoC never
+kept secret -- and blowing the fuse afterwards changes the HUK, leaving
+RPMB permanently unreachable.
 
-Implement the plat_rpmb_key_is_ready() hook for ls1046ardb so that cannot
-happen. SNVS_HPSR bit 27 (OTPMK_ZERO) reads 1 while the fuse is all zeros,
-which is a direct statement about the fuse and needs no cooperation from
-firmware. The SNVS block is big-endian on this SoC, so the read is byte
-swapped.
+Implement the plat_rpmb_key_is_ready() hook for ls1046ardb against
+SNVS_HPSR bit 27 (OTPMK_ZERO), which reads 1 while the fuse is blank. The
+SNVS block is big-endian on this SoC, so the read is byte swapped.
+
+Sample it at boot rather than when the gate is consulted. OP-TEE caches
+the HUK from CAAM during boot, so the question is not whether OTPMK is
+blown now but whether it was blown when the key in hand was derived.
+Those differ, because HPSR reflects the SFP mirror registers and u-boot
+runs afterwards: loading an OTPMK into the mirrors without programming any
+fuse makes a blank part look fused. A gate reading HPSR at call time would
+open on that and write the one-shot key under the earlier, unfused HUK. No
+hardware bit separates a programmed fuse from a written mirror -- after the
+boot-time fuse read they are the same thing -- so the distinction has to be
+temporal.
 
 The imx, versal and zynqmp platforms gate on the SNVS state machine having
-reached Trusted or Secure. That test does not carry over to Layerscape:
-TF-A compiles snvs_init() only under TRUSTED_BOARD_BOOT and never calls
+reached Trusted or Secure. That does not carry over to Layerscape: TF-A
+compiles snvs_init() only under TRUSTED_BOARD_BOOT and never calls
 transition_snvs_trusted() anywhere, so the state machine is left wherever
-reset put it and the gate would never open regardless of fuse state.
+reset put it. Observed on hardware, an unfused board sits in Non-Secure
+(HPSR 0x88002b00, SSM 0xB), from which that transition is not possible at
+all.
 
 Upstream-Status: Pending
 
 Signed-off-by: Tomaz Zaman <tomaz@mono.si>
 ---
- core/arch/arm/plat-ls/main.c            | 50 +++++++++++++++++++++++++
+ core/arch/arm/plat-ls/main.c            | 67 +++++++++++++++++++++++++
  core/arch/arm/plat-ls/platform_config.h |  1 +
- 2 files changed, 51 insertions(+)
+ 2 files changed, 68 insertions(+)
 
 diff --git a/core/arch/arm/plat-ls/main.c b/core/arch/arm/plat-ls/main.c
-index 7e013f9c2..a014f6066 100644
+index 7e013f9c2..98ec4617a 100644
 --- a/core/arch/arm/plat-ls/main.c
 +++ b/core/arch/arm/plat-ls/main.c
-@@ -49,6 +49,7 @@
+@@ -47,8 +47,10 @@
+ #include <libfdt.h>
+ #include <mm/core_memprot.h>
  #include <sm/optee_smc.h>
++#include <initcall.h>
  #include <kernel/tee_common_otp.h>
  #include <mm/core_mmu.h>
 +#include <tee/tee_fs.h>
  
  #ifdef CFG_PL011
  static struct pl011_data console_data;
-@@ -71,6 +72,9 @@ register_ddr(CFG_DRAM1_BASE, CFG_DRAM1_SIZE);
+@@ -71,6 +73,9 @@ register_ddr(CFG_DRAM1_BASE, CFG_DRAM1_SIZE);
  #ifdef DCFG_BASE
  register_phys_mem_pgdir(MEM_AREA_IO_NSEC, DCFG_BASE, CORE_MMU_PGDIR_SIZE);
  #endif
@@ -53,7 +67,7 @@ index 7e013f9c2..a014f6066 100644
  
  #ifdef CFG_ARM32_core
  void plat_primary_init_early(void)
-@@ -212,3 +216,49 @@ void boot_secondary_init_intc(void)
+@@ -212,3 +217,65 @@ void boot_secondary_init_intc(void)
  {
  	gic_init_per_cpu();
  }
@@ -62,46 +76,62 @@ index 7e013f9c2..a014f6066 100644
 +#define SNVS_HPSR_OFFSET	0x14
 +#define SNVS_HPSR_OTPMK_ZERO	BIT32(27)
 +
++static bool otpmk_blown_at_boot;
++
 +/*
-+ * Gate programming of the eMMC RPMB authentication key on the OTPMK fuse
-+ * being blown.
++ * Sample the fuse state once, here, rather than when the gate is consulted.
 + *
-+ * That key is derived from the HUK, which CAAM takes from OTPMK, and the
-+ * eMMC accepts it exactly once for the life of the part. Programming it
-+ * while OTPMK is still blank therefore binds RPMB forever to a key this SoC
-+ * never kept secret, and blowing the fuse afterwards leaves RPMB permanently
-+ * unreachable. Refusing here keeps an unfused board -- every development kit
-+ * -- from destroying its own RPMB on first use.
++ * OP-TEE reads the HUK from CAAM during boot and caches it, so the question
++ * the gate has to answer is not "is OTPMK blown now" but "was it blown when
++ * the key now in hand was derived". Those differ: SNVS_HPSR reports what the
++ * SFP mirror registers hold, and u-boot -- which runs after this -- can load
++ * an OTPMK into the mirrors without programming a single fuse. A gate reading
++ * HPSR at call time would see that and open, and OP-TEE would then write the
++ * eMMC's one-shot RPMB key derived from the earlier, unfused HUK. There is no
++ * second chance at that key, and no hardware bit distinguishing a programmed
++ * fuse from a written mirror, because after the boot-time fuse read they are
++ * the same thing.
 + *
-+ * SNVS_HPSR bit 27 (OTPMK_ZERO) reads 1 while the fuse is all zeros. The
-+ * block is big-endian on this SoC, hence the byte swap. The imx, versal and
-+ * zynqmp platforms gate on the SNVS state machine reaching Trusted or Secure
-+ * instead; that test does not carry over, because nothing here transitions
-+ * the state machine -- TF-A compiles snvs_init() only under
-+ * TRUSTED_BOARD_BOOT and never calls transition_snvs_trusted() at all.
++ * Sampling at boot makes the gate and the HUK consistent by construction:
++ * both are fixed before anything else can touch the mirrors.
 + */
-+bool plat_rpmb_key_is_ready(void)
++static TEE_Result sample_otpmk_state(void)
 +{
 +	vaddr_t snvs = core_mmu_get_va(SNVS_BASE, MEM_AREA_IO_SEC,
 +				       SNVS_HPSR_OFFSET + sizeof(uint32_t));
 +	uint32_t hpsr = 0;
 +
 +	if (!snvs) {
-+		EMSG("SNVS is not mapped, refusing to program the RPMB key");
-+		return false;
++		EMSG("SNVS is not mapped, treating OTPMK as blank");
++		return TEE_SUCCESS;
 +	}
 +
 +	hpsr = __builtin_bswap32(io_read32(snvs + SNVS_HPSR_OFFSET));
-+	DMSG("SNVS HPSR: %#"PRIx32, hpsr);
++	DMSG("SNVS HPSR at boot: %#"PRIx32, hpsr);
++	otpmk_blown_at_boot = !(hpsr & SNVS_HPSR_OTPMK_ZERO);
 +
-+	if (hpsr & SNVS_HPSR_OTPMK_ZERO) {
-+		EMSG("OTPMK is blank, refusing to program the RPMB key");
++	return TEE_SUCCESS;
++}
++
++service_init(sample_otpmk_state);
++
++/*
++ * Refuse the one-shot eMMC RPMB key write unless OTPMK was blown at boot.
++ *
++ * That key is derived from the HUK and the eMMC accepts it exactly once for
++ * the life of the part, so programming it while OTPMK is blank binds RPMB
++ * forever to a key this SoC never kept secret, and blowing the fuse
++ * afterwards leaves RPMB permanently unreachable.
++ */
++bool plat_rpmb_key_is_ready(void)
++{
++	if (!otpmk_blown_at_boot) {
++		EMSG("OTPMK was blank at boot, refusing to program the RPMB key");
 +		return false;
 +	}
 +
 +	return true;
 +}
-+
 +#endif /* SNVS_BASE && CFG_RPMB_FS */
 diff --git a/core/arch/arm/plat-ls/platform_config.h b/core/arch/arm/plat-ls/platform_config.h
 index 3924b5be5..d8f152670 100644
