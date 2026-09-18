@@ -1,4 +1,4 @@
-From e7a76262b2ad744fd9a8eaa4ebf9d44bc087e41a Mon Sep 17 00:00:00 2001
+From b43063e1cb151b839f91ce5f95e4f87b16d33a00 Mon Sep 17 00:00:00 2001
 From: Tomaz Zaman <tomaz@mono.si>
 Date: Thu, 17 Sep 2026 20:38:57 +0200
 Subject: [PATCH] plat-ls: refuse to program the RPMB key until OTPMK is blown
@@ -32,7 +32,7 @@ Signed-off-by: Tomaz Zaman <tomaz@mono.si>
  2 files changed, 51 insertions(+)
 
 diff --git a/core/arch/arm/plat-ls/main.c b/core/arch/arm/plat-ls/main.c
-index 7e013f9c2..5c44ce4a5 100644
+index 7e013f9c2..a014f6066 100644
 --- a/core/arch/arm/plat-ls/main.c
 +++ b/core/arch/arm/plat-ls/main.c
 @@ -49,6 +49,7 @@
@@ -95,7 +95,7 @@ index 7e013f9c2..5c44ce4a5 100644
 +	DMSG("SNVS HPSR: %#"PRIx32, hpsr);
 +
 +	if (hpsr & SNVS_HPSR_OTPMK_ZERO) {
-+		IMSG("OTPMK is blank, refusing to program the RPMB key");
++		EMSG("OTPMK is blank, refusing to program the RPMB key");
 +		return false;
 +	}
 +
