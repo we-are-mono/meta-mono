@@ -1,4 +1,4 @@
-From 22da88612855cd5faa7ee09746ef56bae099d1ef Mon Sep 17 00:00:00 2001
+From 1f3ef32a0186f468a14e503c74e0f3b7f52189ec Mon Sep 17 00:00:00 2001
 From: Tomaz Zaman <tomaz@mono.si>
 Date: Sun, 19 Apr 2026 15:24:13 +0200
 Subject: [PATCH 3/8] board: mono: gateway-dk: add per-component self-tests
@@ -37,18 +37,18 @@ Upstream-Status: Inappropriate [product-specific]
 Signed-off-by: Tomaz Zaman <tomaz@mono.si>
 ---
  board/mono/gateway_dk/setup/clock_gen.c       |  67 +++++++
- board/mono/gateway_dk/setup/cmd_otpmk.c       | 164 ++++++++++++++++++
+ board/mono/gateway_dk/setup/cmd_otpmk.c       | 173 ++++++++++++++++++
  board/mono/gateway_dk/setup/ddr_sanity.c      |  73 ++++++++
- board/mono/gateway_dk/setup/fan_controller.c  |  89 ++++++++++
- board/mono/gateway_dk/setup/led_controller.c  | 108 ++++++++++++
+ board/mono/gateway_dk/setup/fan_controller.c  |  89 +++++++++
+ board/mono/gateway_dk/setup/led_controller.c  | 108 +++++++++++
  board/mono/gateway_dk/setup/retimer.c         |  36 ++++
  board/mono/gateway_dk/setup/rtc.c             |  55 ++++++
  board/mono/gateway_dk/setup/security_fuses.c  |  83 +++++++++
  board/mono/gateway_dk/setup/sfp_i2c_mux.c     | 135 ++++++++++++++
- board/mono/gateway_dk/setup/temp_sensors.c    |  70 ++++++++
- .../mono/gateway_dk/setup/typec_controller.c  |  49 ++++++
- board/mono/gateway_dk/setup/voltage_sensors.c |  97 +++++++++++
- 12 files changed, 1026 insertions(+)
+ board/mono/gateway_dk/setup/temp_sensors.c    |  70 +++++++
+ .../mono/gateway_dk/setup/typec_controller.c  |  49 +++++
+ board/mono/gateway_dk/setup/voltage_sensors.c |  97 ++++++++++
+ 12 files changed, 1035 insertions(+)
  create mode 100644 board/mono/gateway_dk/setup/clock_gen.c
  create mode 100644 board/mono/gateway_dk/setup/cmd_otpmk.c
  create mode 100644 board/mono/gateway_dk/setup/ddr_sanity.c
@@ -137,10 +137,10 @@ index 00000000000..836930d1dc1
 +}
 diff --git a/board/mono/gateway_dk/setup/cmd_otpmk.c b/board/mono/gateway_dk/setup/cmd_otpmk.c
 new file mode 100644
-index 00000000000..7f6cf96851e
+index 00000000000..2ea45562849
 --- /dev/null
 +++ b/board/mono/gateway_dk/setup/cmd_otpmk.c
-@@ -0,0 +1,164 @@
+@@ -0,0 +1,173 @@
 +// SPDX-License-Identifier: GPL-2.0+
 +/*
 + * Copyright 2025 Mono Technologies Inc.
@@ -161,6 +161,9 @@ index 00000000000..7f6cf96851e
 + * That is the point of doing this on the board rather than pasting words in
 + * from a host: the OTPMK is what every device-unique secret derives from, and
 + * a value that has been through a terminal is not one.
++ *
++ * The OTPMK mirror registers are write-only: they read back as all ones,
++ * so a load is confirmed through SNVS_HPSR rather than by reading them.
 + *
 + * Mirror words are numbered from the fuse block at SFP + 0x200, so OTPMKR0
 + * (0x1E80234) is word 13 and the eight registers run to word 20.
@@ -241,8 +244,12 @@ index 00000000000..7f6cf96851e
 +	}
 +
 +	printf("otpmk: generated and loaded into the fuse mirror registers.\n");
-+	printf("otpmk: not yet permanent -- a power cycle discards it.\n");
-+	printf("otpmk: do NOT run 'fuse read', it reloads the mirrors from the fuses.\n");
++	printf("otpmk: nothing is committed yet -- ANY reset discards it, and so\n");
++	printf("otpmk: does 'fuse read', which reloads the mirrors from the fuses.\n");
++	printf("otpmk: the OTPMK registers do not read back, they return all ones.\n");
++	printf("otpmk: confirm it loaded with: md.l 0x01E90014 1\n");
++	printf("otpmk: SNVS_HPSR bit 27 (OTPMK_ZERO) clears. The register is\n");
++	printf("otpmk: big-endian, so md.l shows it byte-swapped.\n");
 +
 +out:
 +	memset(otpmk, 0, sizeof(otpmk));
@@ -298,9 +305,11 @@ index 00000000000..7f6cf96851e
 +	"One Time Programmable Master Key",
 +	"gen - draw 256 bits from the CAAM RNG, Hamming encode them, and\n"
 +	"    load the fuse mirror registers. The key is never printed and\n"
-+	"    never leaves the chip. Discarded by a power cycle. Note that\n"
-+	"    'fuse read' reloads the mirrors from the fuses and so discards\n"
-+	"    it too; use 'fuse sense' to inspect them.\n"
++	"    cannot be read back: the OTPMK registers return all ones, so\n"
++	"    'fuse sense' will not show it. Confirm it loaded by reading\n"
++	"    SNVS_HPSR, where bit 27 (OTPMK_ZERO) clears. ANY reset discards\n"
++	"    the mirrors, including 'fuse read', which reloads them from the\n"
++	"    fuses -- so gen and commit must run without a reset between.\n"
 +	"otpmk commit - program the mirror registers into fuses (PERMANENT).\n"
 +	"    Requires 1.8 V on the TA_PROG_SFP test point, and spends one of\n"
 +	"    the six programming cycles the chip allows in its lifetime.\n"
