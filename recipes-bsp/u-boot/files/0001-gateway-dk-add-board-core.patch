@@ -1,15 +1,16 @@
 From f3f3b971a818505cba468329f30a2c97a167e269 Mon Sep 17 00:00:00 2001
 From: Tomaz Zaman <tomaz@mono.si>
 Date: Sun, 19 Apr 2026 15:23:47 +0200
-Subject: [PATCH 1/8] board: mono: gateway-dk: add board core
+Subject: [PATCH 1/7] board: mono: gateway-dk: add board core
 
 Adds the Mono Gateway Development Kit board directory with its Kconfig
 entry, build glue, README, MAINTAINERS, board init, DDR setup, and
 ethernet plumbing. The hardware is an LS1046A SoC with both QSPI and
 eMMC boot paths.
 
-Subsequent patches add the per-component self-tests, defconfig, device
-tree, and the upstream-side hooks that wire this board into the build.
+Subsequent patches add the per-component self-tests, the board header,
+and the upstream-side hooks that wire this board into the build; the
+defconfig and device tree are plain files in the layer.
 
 Upstream-Status: Inappropriate [product-specific]
 

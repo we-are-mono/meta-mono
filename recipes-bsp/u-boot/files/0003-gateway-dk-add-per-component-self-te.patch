@@ -1,7 +1,7 @@
 From 1f3ef32a0186f468a14e503c74e0f3b7f52189ec Mon Sep 17 00:00:00 2001
 From: Tomaz Zaman <tomaz@mono.si>
 Date: Sun, 19 Apr 2026 15:24:13 +0200
-Subject: [PATCH 3/8] board: mono: gateway-dk: add per-component self-tests
+Subject: [PATCH 3/7] board: mono: gateway-dk: add per-component self-tests
 
 Adds the ten per-chip self-test modules invoked from misc_init_r() via
 the harness in the previous patch. Each one probes its target through

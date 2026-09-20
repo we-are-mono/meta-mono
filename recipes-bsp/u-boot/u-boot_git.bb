@@ -15,10 +15,11 @@ SRC_URI = "git://github.com/nxp-qoriq/u-boot;protocol=https;nobranch=1 \
            file://0002-gateway-dk-add-hw-self-test-harness.patch \
            file://0003-gateway-dk-add-per-component-self-te.patch \
            file://0004-gateway-dk-add-USB-PD-and-EEPROM-dev.patch \
-           file://0005-gateway-dk-add-defconfig-and-board-header.patch \
-           file://0006-gateway-dk-add-dts.patch \
-           file://0007-gateway-dk-wire-into-upstream-tree.patch \
-           file://0008-gateway-dk-derive-SFP-modes-from-SerDes-RCW.patch \
+           file://0005-gateway-dk-add-board-header.patch \
+           file://0006-gateway-dk-wire-into-upstream-tree.patch \
+           file://0007-gateway-dk-derive-SFP-modes-from-SerDes-RCW.patch \
+           file://mono-gateway-dk.dts \
+           file://mono_gateway_dk_defconfig \
            file://environment.txt \
            file://environment-qspi.txt \
            file://environment-emmc.txt \
@@ -41,6 +42,14 @@ export LOCALVERSION = "-${NXP_LF_TAG}"
 EXTRA_OEMAKE = 'CROSS_COMPILE=${TARGET_PREFIX} V=1'
 EXTRA_OEMAKE += 'CC="${TARGET_PREFIX}gcc ${TOOLCHAIN_OPTIONS} ${DEBUG_PREFIX_MAP}"'
 EXTRA_OEMAKE += 'HOSTCC="${BUILD_CC} ${BUILD_CFLAGS} ${BUILD_LDFLAGS}"'
+
+do_configure:prepend() {
+    install -m 0644 ${UNPACKDIR}/mono-gateway-dk.dts \
+        ${S}/arch/arm/dts/mono-gateway-dk.dts
+
+    install -m 0644 ${UNPACKDIR}/mono_gateway_dk_defconfig \
+        ${S}/configs/mono_gateway_dk_defconfig
+}
 
 do_compile() {
     unset LDFLAGS

@@ -1,0 +1,81 @@
+From a6b5409dd2684329f477ea88cdafccc5dd3f45c6 Mon Sep 17 00:00:00 2001
+From: Tomaz Zaman <tomaz@mono.si>
+Date: Sun, 19 Apr 2026 15:24:44 +0200
+Subject: [PATCH 5/7] configs: add Gateway-DK board header
+
+Adds include/configs/gateway_dk.h, the compile-time defaults for the
+Gateway-DK target: memory map, environment variable layout, default boot
+script, and the rest of the board's non-Kconfig parameters. The defconfig
+and the device tree are plain files in the layer, installed into
+configs/ and arch/arm/dts/ at configure time.
+
+Upstream-Status: Inappropriate [product-specific]
+
+Signed-off-by: Tomaz Zaman <tomaz@mono.si>
+---
+ include/configs/gateway_dk.h | 53 +++++++++++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 53 insertions(+)
+ create mode 100644 include/configs/gateway_dk.h
+
+diff --git a/include/configs/gateway_dk.h b/include/configs/gateway_dk.h
+new file mode 100644
+index 00000000000..10d3cd6b90f
+--- /dev/null
++++ b/include/configs/gateway_dk.h
+@@ -0,0 +1,53 @@
++/* SPDX-License-Identifier: GPL-2.0+ */
++/*
++ * Copyright 2025 Mono Technologies Inc.
++ */
++
++#ifndef __GATEWAY_DK_H__
++#define __GATEWAY_DK_H__
++
++#include <asm/arch/config.h>
++#include <asm/arch/stream_id_lsch2.h>
++
++#define CFG_SYS_DDR_SDRAM_BASE		0x80000000
++#define CFG_SYS_FSL_DDR_SDRAM_BASE_PHY	0
++#define CFG_SYS_SDRAM_BASE			CFG_SYS_DDR_SDRAM_BASE
++#define CFG_SYS_DDR_BLOCK2_BASE		0x880000000ULL
++#define CPU_RELEASE_ADDR			secondary_boot_addr
++#define CFG_SYS_UBOOT_BASE			0x40100000
++
++/* Serial Port */
++#define CFG_SYS_NS16550_CLK			(get_serial_clock())
++
++/* FMan ucode */
++#ifndef SPL_NO_FMAN
++#ifdef CONFIG_SYS_DPAA_FMAN
++#define CFG_SYS_FM_MURAM_SIZE		0x60000
++#endif
++#endif
++
++/* Misc */
++#define HWCONFIG_BUFFER_SIZE		128
++
++/*
++ * Environment
++ */
++#define CFG_SYS_FSL_QSPI_BASE		0x40000000
++
++#undef BOOT_TARGET_DEVICES
++#define BOOT_TARGET_DEVICES(func) \
++	func(MMC, mmc, 0) \
++	func(USB, usb, 0) \
++	func(DHCP, dhcp, na)
++
++#include <config_distro_bootcmd.h>
++
++/* FMan */
++#ifdef CONFIG_SYS_DPAA_FMAN
++#define FDT_SEQ_MACADDR_FROM_ENV
++#endif
++
++#include <asm/fsl_secure_boot.h>
++#include <asm/arch/soc.h>
++
++#endif /* __GATEWAY_DK_H__ */
+-- 
+2.47.3
+

@@ -1,7 +1,7 @@
 From 56714a6102c5b612699162a04eb53d88a7d5a943 Mon Sep 17 00:00:00 2001
 From: Tomaz Zaman <tomaz@mono.si>
 Date: Sun, 19 Apr 2026 15:23:57 +0200
-Subject: [PATCH 2/8] board: mono: gateway-dk: add hw self-test harness
+Subject: [PATCH 2/7] board: mono: gateway-dk: add hw self-test harness
 
 Adds the small infrastructure that the per-chip self-tests in the
 follow-up patch depend on:
