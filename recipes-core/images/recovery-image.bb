@@ -12,7 +12,7 @@ IMAGE_INSTALL = "busybox base-files resolv-conf-static bash shadow kmod \
                 parted util-linux-fdisk util-linux-lsblk util-linux-blkid \
                 e2fsprogs e2fsprogs-resize2fs mmc-utils mtd-utils i2c-tools \
                 ethtool curl gzip xz tar vim-tiny firmware-tools \
-                lmsensors-sensors sfp-led status-led lp5812-driver \
+                lmsensors-sensors sfp-led status-led \
                 tcpdump iproute2 dosfstools stressapptest \
                 pciutils usbutils dropbear \
                 "
@@ -46,9 +46,8 @@ USE_DEVFS = "0"
 # Optional, but if we don't set it, it has machine in the name by default
 IMAGE_NAME = "${IMAGE_BASENAME}${IMAGE_NAME_SUFFIX}"
 
-# This is an initramfs image, bundled into the kernel.
-# By including the kernel module for lp5812 above, bitbake
-# will try to pull the same kernel into /boot. Kernelception!
+# This is an initramfs image, bundled into the kernel, so we need
+# to stop bitbake from baking kernel into it. Kernelception!
 PACKAGE_EXCLUDE += "kernel-${KERNEL_VERSION}"
 PACKAGE_EXCLUDE += "kernel-image-${KERNEL_VERSION}"
 PACKAGE_EXCLUDE += "kernel-image-image*"

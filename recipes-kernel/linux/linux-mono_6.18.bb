@@ -33,6 +33,7 @@ SRC_URI = "git://github.com/nxp-qoriq/linux.git;protocol=https;nobranch=1 \
            file://001-hwmon-ina2xx-Add-INA234-support.patch \
            file://002-hwmon-emc2305-read-pwm-min-from-dt.patch \
            file://003-thermal-add-linear-governor.patch \
+           file://0004-leds-lp5812.patch \
           "
 
 SRCREV = "${NXP_LF_SRCREV_LINUX}"

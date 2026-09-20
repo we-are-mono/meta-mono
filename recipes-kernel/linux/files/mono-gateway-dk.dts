@@ -535,35 +535,35 @@
 			#size-cells = <0>;
 			reg = <3>;
 
-			lp5810@6c {
+			lp5810@1b {
 				compatible = "ti,lp5812";
-				reg = <0x6c>;
+				reg = <0x1b>;
 				#address-cells = <1>;
 				#size-cells = <0>;
 
 				led@0 {
-					reg = <0>;
+					reg = <0x0>;
 					color = <LED_COLOR_ID_WHITE>;
 					label = "status:white";
 					led-max-microamp = <25500>;
 				};
 
 				led@1 {
-					reg = <1>;
+					reg = <0x1>;
 					color = <LED_COLOR_ID_BLUE>;
 					label = "status:blue";
 					led-max-microamp = <25500>;
 				};
 
 				led@2 {
-					reg = <2>;
+					reg = <0x2>;
 					color = <LED_COLOR_ID_GREEN>;
 					label = "status:green";
 					led-max-microamp = <25500>;
 				};
 
 				led@3 {
-					reg = <3>;
+					reg = <0x3>;
 					color = <LED_COLOR_ID_RED>;
 					label = "status:red";
 					led-max-microamp = <25500>;
