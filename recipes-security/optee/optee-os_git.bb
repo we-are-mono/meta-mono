@@ -26,14 +26,16 @@ B = "${WORKDIR}/build"
 # secure world, which only touches the SoC.
 OPTEE_PLATFORM = "ls-ls1046ardb"
 
-# CAAM supplies the HUK. core/drivers/crypto/caam/blob/caam_blob.c defines
-# tee_otp_get_hw_unique_key as a strong symbol, overriding the weak stub in
-# core/kernel/otp_stubs.c, and reads the key from the Master Key Verification
-# Blob. CFG_INSECURE stays set because the OTPMK fuse is unblown, so that
-# master key is not device-unique and there is no NV counter behind rollback
-# protection: OP-TEE announces the insecure state at boot rather than implying
-# its secure storage means anything. Nothing sealed now is trustworthy after
-# the fuse, having been sealed under a key the SoC did not keep secret.
+# CAAM supplies the HUK: core/drivers/crypto/caam/blob/caam_blob.c defines
+# tee_otp_get_hw_unique_key and reads the key from the Master Key
+# Verification Blob. CFG_INSECURE=n removes the only alternative, the
+# zeros-returning stub in core/kernel/otp_stubs.c, so the build fails to link
+# unless the CAAM path is present -- a compile-time guarantee that the HUK
+# never comes from a constant. Whether that HUK is device-unique is a property
+# of the fuse, not the build: on an unfused board it derives from a blank
+# OTPMK, and the RPMB gate below is what acts on that. Nothing sealed on an
+# unfused board is trustworthy after the fuse, having been sealed under a key
+# the SoC did not keep secret.
 #
 # CFG_CORE_HUK_SUBKEY_COMPAT selects a derivation kept for devices already in
 # the field: huk_compat() skips the usage tag for HUK_SUBKEY_RPMB and feeds a
@@ -51,14 +53,26 @@ OPTEE_PLATFORM = "ls-ls1046ardb"
 # image keys RPMB on first use. Recovery carries the kernel RPMB class, and on
 # this kernel OP-TEE reaches the eMMC through it (OPTEE_RPC_CMD_RPMB_FRAMES)
 # rather than through a tee-supplicant.
+#
+# CFG_RPMB_TESTKEY is pinned off although it defaults off: on, it would key
+# every eMMC this image reaches with a key published in the OP-TEE source.
+# CFG_ENABLE_EMBEDDED_TESTS and CFG_PKCS11_TA default on in plat-ls/conf.mk;
+# the first links the self-test PTAs into the core, callable from the normal
+# world, and the second builds a TA nothing deploys.
+#
+# CFG_TEE_CORE_DEBUG stays at its default, y, so assertions stay in: an
+# internal inconsistency panics the TEE rather than carrying on.
 EXTRA_OEMAKE = " \
     PLATFORM=${OPTEE_PLATFORM} \
     CFG_ARM64_core=y \
-    CFG_INSECURE=y \
+    CFG_INSECURE=n \
     CFG_CORE_HUK_SUBKEY_COMPAT=n \
     CFG_CAAM_INC_PRIBLOB=y \
     CFG_RPMB_FS=y \
     CFG_RPMB_WRITE_KEY=y \
+    CFG_RPMB_TESTKEY=n \
+    CFG_ENABLE_EMBEDDED_TESTS=n \
+    CFG_PKCS11_TA=n \
     CFG_TEE_CORE_LOG_LEVEL=1 \
     CROSS_COMPILE=${HOST_PREFIX} \
     CROSS_COMPILE64=${HOST_PREFIX} \
