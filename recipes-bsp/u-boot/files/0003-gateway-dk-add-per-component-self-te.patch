@@ -1,11 +1,11 @@
-From 1f3ef32a0186f468a14e503c74e0f3b7f52189ec Mon Sep 17 00:00:00 2001
+From 39246250cf488e1c5cf6b66abd896cf4f0c1cc61 Mon Sep 17 00:00:00 2001
 From: Tomaz Zaman <tomaz@mono.si>
 Date: Sun, 19 Apr 2026 15:24:13 +0200
 Subject: [PATCH 3/7] board: mono: gateway-dk: add per-component self-tests
 
-Adds the ten per-chip self-test modules invoked from misc_init_r() via
-the harness in the previous patch. Each one probes its target through
-the I2C mux and reports PASS/FAIL with a small detail string:
+Adds the per-component self-test modules invoked from misc_init_r() via
+the harness in the previous patch. Each one probes its target and
+reports PASS/FAIL with a small detail string:
 
   - clock_gen.c        - 6V49205B clock generator (Sys_CCB output)
   - ddr_sanity.c       - bit-pattern probe of DDR4 banks 0 and 1
@@ -15,6 +15,8 @@ the I2C mux and reports PASS/FAIL with a small detail string:
                          panel via lp5810a_set_status())
   - retimer.c          - DS100DF410 SerDes retimer device ID
   - rtc.c              - PCF2131 real-time clock
+  - security_fuses.c   - SFP/SNVS fuse state: Hamming errors, OTPMK,
+                         SRK hash, ITS and write protect
   - sfp_i2c_mux.c      - resets the SFP-side PCA9545 mux into a
                          known-good state, pulsing RESET# on
                          GPIO3_24 when a module holding SDA low has
@@ -32,23 +34,35 @@ i2c1 answers - the mux control address included - until RESET# is
 pulsed. A bus recovered that way still passes, reported as "Reset OK
 (recovered wedged bus)" so the event stays visible.
 
+cmd_otpmk.c adds the otpmk command. 'otpmk gen' draws 256 bits from the
+CAAM RNG, Hamming encodes them and loads the fuse mirror registers
+without the key ever being printed; 'otpmk commit' programs the mirrors
+into the fuses. Both sides of the irreversible step are checked: gen
+refuses when the OTPMK is already programmed, the block is
+write-protected or it reports a Hamming error, and confirms its load
+through SNVS_HPSR; commit refuses unless gen loaded a key in this
+session and no other mirror word has changed since, and reads the fuses
+back afterwards to report whether the key took. The SFP and SNVS
+register definitions both files use live in security_fuses.h.
+
 Upstream-Status: Inappropriate [product-specific]
 
 Signed-off-by: Tomaz Zaman <tomaz@mono.si>
 ---
- board/mono/gateway_dk/setup/clock_gen.c       |  67 +++++++
- board/mono/gateway_dk/setup/cmd_otpmk.c       | 173 ++++++++++++++++++
- board/mono/gateway_dk/setup/ddr_sanity.c      |  73 ++++++++
- board/mono/gateway_dk/setup/fan_controller.c  |  89 +++++++++
- board/mono/gateway_dk/setup/led_controller.c  | 108 +++++++++++
- board/mono/gateway_dk/setup/retimer.c         |  36 ++++
- board/mono/gateway_dk/setup/rtc.c             |  55 ++++++
- board/mono/gateway_dk/setup/security_fuses.c  |  83 +++++++++
- board/mono/gateway_dk/setup/sfp_i2c_mux.c     | 135 ++++++++++++++
- board/mono/gateway_dk/setup/temp_sensors.c    |  70 +++++++
- .../mono/gateway_dk/setup/typec_controller.c  |  49 +++++
- board/mono/gateway_dk/setup/voltage_sensors.c |  97 ++++++++++
- 12 files changed, 1035 insertions(+)
+ board/mono/gateway_dk/setup/clock_gen.c       |  67 ++++
+ board/mono/gateway_dk/setup/cmd_otpmk.c       | 348 ++++++++++++++++++
+ board/mono/gateway_dk/setup/ddr_sanity.c      |  73 ++++
+ board/mono/gateway_dk/setup/fan_controller.c  |  89 +++++
+ board/mono/gateway_dk/setup/led_controller.c  | 108 ++++++
+ board/mono/gateway_dk/setup/retimer.c         |  36 ++
+ board/mono/gateway_dk/setup/rtc.c             |  55 +++
+ board/mono/gateway_dk/setup/security_fuses.c  |  58 +++
+ board/mono/gateway_dk/setup/security_fuses.h  |  43 +++
+ board/mono/gateway_dk/setup/sfp_i2c_mux.c     | 135 +++++++
+ board/mono/gateway_dk/setup/temp_sensors.c    |  70 ++++
+ .../mono/gateway_dk/setup/typec_controller.c  |  49 +++
+ board/mono/gateway_dk/setup/voltage_sensors.c |  97 +++++
+ 13 files changed, 1228 insertions(+)
  create mode 100644 board/mono/gateway_dk/setup/clock_gen.c
  create mode 100644 board/mono/gateway_dk/setup/cmd_otpmk.c
  create mode 100644 board/mono/gateway_dk/setup/ddr_sanity.c
@@ -57,6 +71,7 @@ Signed-off-by: Tomaz Zaman <tomaz@mono.si>
  create mode 100644 board/mono/gateway_dk/setup/retimer.c
  create mode 100644 board/mono/gateway_dk/setup/rtc.c
  create mode 100644 board/mono/gateway_dk/setup/security_fuses.c
+ create mode 100644 board/mono/gateway_dk/setup/security_fuses.h
  create mode 100644 board/mono/gateway_dk/setup/sfp_i2c_mux.c
  create mode 100644 board/mono/gateway_dk/setup/temp_sensors.c
  create mode 100644 board/mono/gateway_dk/setup/typec_controller.c
@@ -137,10 +152,10 @@ index 00000000000..836930d1dc1
 +}
 diff --git a/board/mono/gateway_dk/setup/cmd_otpmk.c b/board/mono/gateway_dk/setup/cmd_otpmk.c
 new file mode 100644
-index 00000000000..2ea45562849
+index 00000000000..3210109a8b8
 --- /dev/null
 +++ b/board/mono/gateway_dk/setup/cmd_otpmk.c
-@@ -0,0 +1,173 @@
+@@ -0,0 +1,348 @@
 +// SPDX-License-Identifier: GPL-2.0+
 +/*
 + * Copyright 2025 Mono Technologies Inc.
@@ -151,7 +166,11 @@ index 00000000000..2ea45562849
 +#include <fuse.h>
 +#include <rng.h>
 +#include <vsprintf.h>
++#include <asm/io.h>
++#include <linux/errno.h>
 +#include <linux/string.h>
++#include <linux/types.h>
++#include "security_fuses.h"
 +
 +/*
 + * Generate a One Time Programmable Master Key and commit it to fuses.
@@ -166,11 +185,48 @@ index 00000000000..2ea45562849
 + * so a load is confirmed through SNVS_HPSR rather than by reading them.
 + *
 + * Mirror words are numbered from the fuse block at SFP + 0x200, so OTPMKR0
-+ * (0x1E80234) is word 13 and the eight registers run to word 20.
++ * (0x1E80234) is word 13 and the eight registers run to word 20. The block
++ * ends with OUIDR4 at 0x284, word 33.
 + */
++#define SFP_NUM_WORDS		34
 +#define OTPMK_WORD0		13
 +#define OTPMK_NUM_WORDS		8
 +#define OSPR0_WORD		0
++
++/*
++ * What 'otpmk gen' left behind, so that 'otpmk commit' can insist on running
++ * against exactly that state: a key loaded in this session, and every other
++ * mirror word still holding what it held when the key went in.
++ */
++static bool otpmk_loaded;
++static u32 mirror_snapshot[SFP_NUM_WORDS];
++
++static bool is_otpmk_word(int word)
++{
++	return word >= OTPMK_WORD0 && word < OTPMK_WORD0 + OTPMK_NUM_WORDS;
++}
++
++/*
++ * Read every mirror word except the OTPMK ones, which do not read back and
++ * so say nothing about whether they changed.
++ */
++static int read_mirrors(u32 *words)
++{
++	int word, ret;
++
++	for (word = 0; word < SFP_NUM_WORDS; word++) {
++		if (is_otpmk_word(word)) {
++			words[word] = 0;
++			continue;
++		}
++
++		ret = fuse_sense(0, word, &words[word]);
++		if (ret)
++			return ret;
++	}
++
++	return 0;
++}
 +
 +/*
 + * Turn 256 random bits into a valid OTPMK code word, in place. Ported from
@@ -210,8 +266,53 @@ index 00000000000..2ea45562849
 +static int otpmk_generate(void)
 +{
 +	u32 otpmk[OTPMK_NUM_WORDS];
++	u32 hpsr, svhesr, ospr0;
 +	struct udevice *dev;
 +	int ret, i;
++
++	otpmk_loaded = false;
++
++	/*
++	 * Look at the fuses, not at whatever the mirrors hold. fuse_read()
++	 * issues READFB only when a mirror has been overridden since the last
++	 * read, so on a fresh boot this costs nothing, and after an earlier
++	 * gen it discards that key -- which is what makes the checks below
++	 * statements about the fuses.
++	 */
++	ret = fuse_read(0, OSPR0_WORD, &ospr0);
++	if (ret) {
++		printf("otpmk: reading the fuses failed (err %d)\n", ret);
++		return CMD_RET_FAILURE;
++	}
++
++	svhesr = in_be32((void *)SFP_SVHESR);
++	hpsr = in_be32((void *)SNVS_HPSR);
++
++	if (svhesr & (SVHESR_OTPMK_MASK | SVHESR_DRV_MASK)) {
++		printf("otpmk: refusing, the fuse block reports a Hamming error (SVHESR 0x%08x)\n",
++		       svhesr);
++		return CMD_RET_FAILURE;
++	}
++
++	if (!(hpsr & HPSR_OTPMK_ZERO)) {
++		printf("otpmk: refusing, OTPMK is already programmed (SNVS_HPSR 0x%08x)\n",
++		       hpsr);
++		printf("otpmk: fuses only go from 0 to 1, so a second key would be OR-ed\n");
++		printf("otpmk: into the first and leave neither usable.\n");
++		return CMD_RET_FAILURE;
++	}
++
++	if (ospr0 & OSPR_WP) {
++		printf("otpmk: refusing, the fuse block is write-protected (OSPR0 0x%08x)\n",
++		       ospr0);
++		return CMD_RET_FAILURE;
++	}
++
++	ret = read_mirrors(mirror_snapshot);
++	if (ret) {
++		printf("otpmk: reading the mirror registers failed (err %d)\n", ret);
++		return CMD_RET_FAILURE;
++	}
 +
 +	ret = uclass_get_device(UCLASS_RNG, 0, &dev);
 +	if (ret) {
@@ -243,13 +344,26 @@ index 00000000000..2ea45562849
 +		}
 +	}
 +
-+	printf("otpmk: generated and loaded into the fuse mirror registers.\n");
-+	printf("otpmk: nothing is committed yet -- ANY reset discards it, and so\n");
-+	printf("otpmk: does 'fuse read', which reloads the mirrors from the fuses.\n");
-+	printf("otpmk: the OTPMK registers do not read back, they return all ones.\n");
-+	printf("otpmk: confirm it loaded with: md.l 0x01E90014 1\n");
-+	printf("otpmk: SNVS_HPSR bit 27 (OTPMK_ZERO) clears. The register is\n");
-+	printf("otpmk: big-endian, so md.l shows it byte-swapped.\n");
++	/*
++	 * SNVS follows the mirrors, so OTPMK_ZERO clears as soon as a
++	 * non-zero key is in them. Check that here rather than leaving the
++	 * operator to md.l a big-endian register.
++	 */
++	hpsr = in_be32((void *)SNVS_HPSR);
++	svhesr = in_be32((void *)SFP_SVHESR);
++	if ((hpsr & HPSR_OTPMK_ZERO) || (svhesr & SVHESR_OTPMK_MASK)) {
++		printf("otpmk: load FAILED (SNVS_HPSR 0x%08x, SVHESR 0x%08x), do not commit\n",
++		       hpsr, svhesr);
++		ret = -EIO;
++		goto out;
++	}
++
++	otpmk_loaded = true;
++	printf("otpmk: key generated and loaded (SNVS_HPSR 0x%08x, SVHESR 0x%08x)\n",
++	       hpsr, svhesr);
++	printf("otpmk: nothing is committed yet. ANY reset discards it, and so does\n");
++	printf("otpmk: 'fuse read', which reloads the mirrors from the fuses.\n");
++	printf("otpmk: to burn it, apply 1.8 V to TA_PROG_SFP and run 'otpmk commit'.\n");
 +
 +out:
 +	memset(otpmk, 0, sizeof(otpmk));
@@ -258,8 +372,45 @@ index 00000000000..2ea45562849
 +
 +static int otpmk_commit(void)
 +{
-+	u32 ospr0;
-+	int ret;
++	u32 mirrors[SFP_NUM_WORDS];
++	u32 hpsr, svhesr, ospr0;
++	int ret, word;
++
++	/*
++	 * Only ever burn what 'otpmk gen' loaded in this session. The flag
++	 * says gen ran and confirmed its load, HPSR says the key is still in
++	 * the mirrors -- a 'fuse read' since would have reloaded them -- and
++	 * the comparison says no other mirror word has moved, because PROGFB
++	 * commits every mirror at once and would burn a stray 'fuse override'
++	 * along with the key.
++	 */
++	if (!otpmk_loaded) {
++		printf("otpmk: refusing, no key was loaded in this session; run 'otpmk gen' first\n");
++		return CMD_RET_FAILURE;
++	}
++
++	hpsr = in_be32((void *)SNVS_HPSR);
++	svhesr = in_be32((void *)SFP_SVHESR);
++	if ((hpsr & HPSR_OTPMK_ZERO) ||
++	    (svhesr & (SVHESR_OTPMK_MASK | SVHESR_DRV_MASK))) {
++		printf("otpmk: refusing, the loaded key is gone or invalid (SNVS_HPSR 0x%08x, SVHESR 0x%08x)\n",
++		       hpsr, svhesr);
++		return CMD_RET_FAILURE;
++	}
++
++	ret = read_mirrors(mirrors);
++	if (ret) {
++		printf("otpmk: reading the mirror registers failed (err %d)\n", ret);
++		return CMD_RET_FAILURE;
++	}
++
++	for (word = 0; word < SFP_NUM_WORDS; word++) {
++		if (mirrors[word] != mirror_snapshot[word]) {
++			printf("otpmk: refusing, mirror word %d changed since gen (0x%08x, was 0x%08x)\n",
++			       word, mirrors[word], mirror_snapshot[word]);
++			return CMD_RET_FAILURE;
++		}
++	}
 +
 +	/*
 +	 * PROGFB commits every mirror register at once, and the chip allows
@@ -267,20 +418,55 @@ index 00000000000..2ea45562849
 +	 * fire it without naming a word, so rewrite OSPR0 with the value it
 +	 * already holds: fuses only ever go 0 to 1, so writing back what is
 +	 * there changes nothing, and the OTPMK mirrors are committed with it.
++	 * The driver allows one PROGFB per boot, so whatever happens next, a
++	 * second attempt needs a power cycle and a fresh gen.
 +	 */
-+	ret = fuse_sense(0, OSPR0_WORD, &ospr0);
-+	if (ret) {
-+		printf("otpmk: reading OSPR0 failed (err %d)\n", ret);
-+		return CMD_RET_FAILURE;
-+	}
-+
++	ospr0 = mirrors[OSPR0_WORD];
++	otpmk_loaded = false;
 +	ret = fuse_prog(0, OSPR0_WORD, ospr0);
 +	if (ret) {
 +		printf("otpmk: programming failed (err %d)\n", ret);
++		printf("otpmk: return TA_PROG_SFP to GND, power-cycle, and start again from 'otpmk gen'.\n");
 +		return CMD_RET_FAILURE;
 +	}
 +
-+	printf("otpmk: fuses programmed. Return TA_PROG_SFP to GND now.\n");
++	/*
++	 * Read the fuses back before claiming anything. Until READFB reloads
++	 * the mirrors from the fuse array, HPSR still describes the key gen
++	 * loaded, whether or not the burn took; afterwards it describes what
++	 * the part will boot with.
++	 */
++	ret = fuse_read(0, OSPR0_WORD, &ospr0);
++	if (ret) {
++		printf("otpmk: reading the fuses back failed (err %d); power-cycle and check the boot self-test\n",
++		       ret);
++		return CMD_RET_FAILURE;
++	}
++
++	hpsr = in_be32((void *)SNVS_HPSR);
++	svhesr = in_be32((void *)SFP_SVHESR);
++
++	if (hpsr & HPSR_OTPMK_ZERO) {
++		printf("otpmk: nothing was programmed, OTPMK is still blank (SNVS_HPSR 0x%08x)\n",
++		       hpsr);
++		printf("otpmk: was TA_PROG_SFP at 1.8 V? The part is unchanged; power-cycle\n");
++		printf("otpmk: and start again from 'otpmk gen'.\n");
++		return CMD_RET_FAILURE;
++	}
++
++	if ((hpsr & HPSR_OTPMK_SYNDROME) || (svhesr & SVHESR_OTPMK_MASK)) {
++		printf("otpmk: VERIFY FAILED, the key did not take cleanly (SNVS_HPSR 0x%08x, SVHESR 0x%08x)\n",
++		       hpsr, svhesr);
++		printf("otpmk: the OTPMK in this part cannot be reprogrammed. Return TA_PROG_SFP\n");
++		printf("otpmk: to GND and set the unit aside.\n");
++		return CMD_RET_FAILURE;
++	}
++
++	printf("otpmk: fuses programmed and read back (SNVS_HPSR 0x%08x, SVHESR 0x%08x)\n",
++	       hpsr, svhesr);
++	printf("otpmk: return TA_PROG_SFP to GND, then power-cycle. Do not boot an OS from\n");
++	printf("otpmk: this session, the secure world derived its keys before the burn. The\n");
++	printf("otpmk: boot self-test should then report the OTPMK as set.\n");
 +
 +	return CMD_RET_SUCCESS;
 +}
@@ -304,15 +490,19 @@ index 00000000000..2ea45562849
 +	otpmk, 2, 0, do_otpmk,
 +	"One Time Programmable Master Key",
 +	"gen - draw 256 bits from the CAAM RNG, Hamming encode them, and\n"
-+	"    load the fuse mirror registers. The key is never printed and\n"
-+	"    cannot be read back: the OTPMK registers return all ones, so\n"
-+	"    'fuse sense' will not show it. Confirm it loaded by reading\n"
-+	"    SNVS_HPSR, where bit 27 (OTPMK_ZERO) clears. ANY reset discards\n"
-+	"    the mirrors, including 'fuse read', which reloads them from the\n"
-+	"    fuses -- so gen and commit must run without a reset between.\n"
++	"    load the fuse mirror registers. Refuses if the OTPMK is already\n"
++	"    programmed, the fuse block is write-protected or it reports a\n"
++	"    Hamming error. The key is never printed and cannot be read back;\n"
++	"    the load is confirmed through SNVS_HPSR bit 27 (OTPMK_ZERO)\n"
++	"    clearing. ANY reset discards the mirrors, including 'fuse read',\n"
++	"    which reloads them from the fuses -- so gen and commit must run\n"
++	"    without a reset between.\n"
 +	"otpmk commit - program the mirror registers into fuses (PERMANENT).\n"
-+	"    Requires 1.8 V on the TA_PROG_SFP test point, and spends one of\n"
-+	"    the six programming cycles the chip allows in its lifetime.\n"
++	"    Requires 1.8 V on the TA_PROG_SFP test point and a key loaded by\n"
++	"    'otpmk gen' in this session, with no other mirror word changed\n"
++	"    since. Reads the fuses back afterwards and reports whether the\n"
++	"    key took. Spends one of the six programming cycles the chip\n"
++	"    allows in its lifetime.\n"
 +);
 diff --git a/board/mono/gateway_dk/setup/ddr_sanity.c b/board/mono/gateway_dk/setup/ddr_sanity.c
 new file mode 100644
@@ -707,10 +897,10 @@ index 00000000000..f198cb9cdaf
 +}
 diff --git a/board/mono/gateway_dk/setup/security_fuses.c b/board/mono/gateway_dk/setup/security_fuses.c
 new file mode 100644
-index 00000000000..6122e72cb16
+index 00000000000..98933b18bef
 --- /dev/null
 +++ b/board/mono/gateway_dk/setup/security_fuses.c
-@@ -0,0 +1,83 @@
+@@ -0,0 +1,58 @@
 +// SPDX-License-Identifier: GPL-2.0+
 +/*
 + * Copyright 2025 Mono Technologies Inc.
@@ -718,33 +908,8 @@ index 00000000000..6122e72cb16
 +
 +#include <config.h>
 +#include <asm/io.h>
-+#include <asm/arch/immap_lsch2.h>
-+#include <linux/bitops.h>
 +#include "hw_test.h"
-+
-+/*
-+ * Security Fuse Processor and Secure Non-Volatile Storage.
-+ *
-+ * Both blocks are big-endian on this SoC, so every access goes through
-+ * in_be32(). u-boot's fsl_sfp.h describes the fuse block but is gated on
-+ * CONFIG_SYS_FSL_SFP_*, which this board does not select, and it covers
-+ * neither SVHESR nor SNVS -- hence the local offsets. They hang off
-+ * CFG_SYS_SFP_ADDR, which already points at the fuse register block at
-+ * SFP + 0x200.
-+ */
-+#define SFP_SVHESR		((ulong)CFG_SYS_SFP_ADDR - 0x200 + 0x024)
-+#define SFP_OSPR		((ulong)CFG_SYS_SFP_ADDR)
-+#define SFP_SRKHR(n)		((ulong)CFG_SYS_SFP_ADDR + 0x054 + (n) * 4)
-+#define SFP_NUM_SRKHR		8
-+
-+#define SVHESR_DRV_MASK		0x0000007F
-+#define SVHESR_OTPMK_MASK	0x0007FC00
-+
-+#define OSPR_ITS		BIT(2)
-+#define OSPR_WP			BIT(0)
-+
-+#define SNVS_HPSR		((ulong)CONFIG_SYS_IMMR + 0xe90014)
-+#define HPSR_OTPMK_ZERO		BIT(27)
++#include "security_fuses.h"
 +
 +int test_security_fuses(struct hw_test_ctx *ctx)
 +{
@@ -794,6 +959,55 @@ index 00000000000..6122e72cb16
 +			    its ? "enforced" : "off",
 +			    wp ? ", write-protected" : "");
 +}
+diff --git a/board/mono/gateway_dk/setup/security_fuses.h b/board/mono/gateway_dk/setup/security_fuses.h
+new file mode 100644
+index 00000000000..d90201ad289
+--- /dev/null
++++ b/board/mono/gateway_dk/setup/security_fuses.h
+@@ -0,0 +1,43 @@
++/* SPDX-License-Identifier: GPL-2.0+ */
++/*
++ * Copyright 2025 Mono Technologies Inc.
++ *
++ * Security Fuse Processor and Secure Non-Volatile Storage registers, shared
++ * by the fuse self-test and the otpmk command.
++ *
++ * Both blocks are big-endian on this SoC, so every access goes through
++ * in_be32(). u-boot's fsl_sfp.h describes the fuse block but is gated on
++ * CONFIG_SYS_FSL_SFP_*, which this board does not select, and it covers
++ * neither SVHESR nor SNVS -- hence the local offsets. They hang off
++ * CFG_SYS_SFP_ADDR, which already points at the fuse register block at
++ * SFP + 0x200.
++ */
++
++#ifndef SECURITY_FUSES_H
++#define SECURITY_FUSES_H
++
++#include <config.h>
++#include <asm/arch/immap_lsch2.h>
++#include <linux/bitops.h>
++#include <linux/types.h>
++
++#define SFP_SVHESR		((ulong)CFG_SYS_SFP_ADDR - 0x200 + 0x024)
++#define SFP_OSPR		((ulong)CFG_SYS_SFP_ADDR)
++#define SFP_SRKHR(n)		((ulong)CFG_SYS_SFP_ADDR + 0x054 + (n) * 4)
++#define SFP_NUM_SRKHR		8
++
++#define SVHESR_DRV_MASK		0x0000007F
++#define SVHESR_OTPMK_MASK	0x0007FC00
++
++#define OSPR_ITS		BIT(2)
++#define OSPR_WP			BIT(0)
++
++/*
++ * SNVS_HPSR. OTPMK_ZERO reads 1 while the key is blank. OTPMK_SYNDROME is
++ * the Hamming syndrome of the key SNVS is holding, zero while it is intact.
++ */
++#define SNVS_HPSR		((ulong)CONFIG_SYS_IMMR + 0xe90014)
++#define HPSR_OTPMK_ZERO		BIT(27)
++#define HPSR_OTPMK_SYNDROME	GENMASK(24, 16)
++
++#endif /* SECURITY_FUSES_H */
 diff --git a/board/mono/gateway_dk/setup/sfp_i2c_mux.c b/board/mono/gateway_dk/setup/sfp_i2c_mux.c
 new file mode 100644
 index 00000000000..16bb886ccd1
