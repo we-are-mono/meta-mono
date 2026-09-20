@@ -1,4 +1,4 @@
-From e465a9fae350ff1a1e2eee11ff63466a086111b0 Mon Sep 17 00:00:00 2001
+From 0b69b3463e9e75918ec82247b56d971b513ba72c Mon Sep 17 00:00:00 2001
 From: Tomaz Zaman <tomaz@mono.si>
 Date: Sun, 19 Apr 2026 15:25:02 +0200
 Subject: [PATCH 6/7] arm, mtd, misc: wire Gateway-DK into the upstream tree
@@ -19,8 +19,18 @@ anything able to do so could set ITS on a unit with a blank SRK hash and
 brick it permanently with no recovery. Any Layerscape board making that
 same choice hits this.
 
-That hunk is upstreamable on its own and is only carried here to keep the
-series at seven patches; it is not product-specific like the rest.
+Also leave SFPCR alone when no clock is described. Without a clock
+framework the driver derived the fuse programming pulse width from
+gd->bus_clk / 4, which on LS1046A at a 600 MHz platform clock writes
+PPW = 1800 where the register resets to 2401 -- a shorter pulse than
+the silicon default, applied silently on the first fuse command,
+before the one burn that cannot be repeated. Neither the boot ROM nor
+TF-A's own fuse provisioning ever rewrite SFPCR; the reset value is
+what NXP programs fuses with.
+
+Both ls2_sfp hunks are upstreamable on their own and are only carried
+here to keep the series at seven patches; they are not product-specific
+like the rest.
 
 Upstream-Status: Inappropriate [product-specific]
 
@@ -28,9 +38,9 @@ Signed-off-by: Tomaz Zaman <tomaz@mono.si>
 ---
  arch/arm/Kconfig              | 17 +++++++++++++++++
  arch/arm/dts/Makefile         |  2 ++
- drivers/misc/ls2_sfp.c        |  2 +-
+ drivers/misc/ls2_sfp.c        | 13 +++++++++++--
  drivers/mtd/spi/spi-nor-ids.c |  3 +++
- 4 files changed, 23 insertions(+), 1 deletion(-)
+ 4 files changed, 33 insertions(+), 2 deletions(-)
 
 diff --git a/arch/arm/Kconfig b/arch/arm/Kconfig
 index 7d6d3394797..489169afbca 100644
@@ -81,10 +91,10 @@ index 947e1b24514..c2292695012 100644
  
  dtb-$(CONFIG_MACH_SUN4I) += \
 diff --git a/drivers/misc/ls2_sfp.c b/drivers/misc/ls2_sfp.c
-index 8cb6e999bed..7e3b388ed01 100644
+index 8cb6e999bed..7c5ae58d2e6 100644
 --- a/drivers/misc/ls2_sfp.c
 +++ b/drivers/misc/ls2_sfp.c
-@@ -229,7 +229,7 @@ static int ls2_sfp_probe(struct udevice *dev)
+@@ -229,14 +229,23 @@ static int ls2_sfp_probe(struct udevice *dev)
  	}
  
  	ret = device_get_supply_regulator(dev, "ta-sfp-prog-supply", &priv->supply);
@@ -93,6 +103,23 @@ index 8cb6e999bed..7e3b388ed01 100644
  		dev_dbg(dev, "problem getting supply (err %d)\n", ret);
  		return ret;
  	}
+ 
+ 	ret = clk_get_by_name(dev, "sfp", &clk);
+ 	if (ret == -ENOSYS) {
+-		rate = gd->bus_clk / 4;
++		/*
++		 * No clock framework, so the SFP clock is not known here. Leave
++		 * SFPCR at its reset value rather than deriving a programming
++		 * pulse width from gd->bus_clk: on LS1046A that yields 1800
++		 * where the reset value is 2401, a shorter pulse than the
++		 * silicon default, and neither the boot ROM nor TF-A ever
++		 * rewrite the register before programming fuses.
++		 */
++		ls2_sfp_check_secret(dev);
++		return 0;
+ 	} else if (ret) {
+ 		dev_dbg(dev, "could not get clock (err %d)\n", ret);
+ 		return ret;
 diff --git a/drivers/mtd/spi/spi-nor-ids.c b/drivers/mtd/spi/spi-nor-ids.c
 index a9f1b5faf2c..ddaf4568712 100644
 --- a/drivers/mtd/spi/spi-nor-ids.c
