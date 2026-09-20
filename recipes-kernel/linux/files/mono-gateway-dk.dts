@@ -885,6 +885,15 @@
 	dma-coherent;
 };
 
+/*
+ * OP-TEE owns CAAM job ring 2 (CFG_JR_INDEX=2 in its plat-ls config) and
+ * takes it before Linux runs, so the kernel must not claim it: probing it
+ * fails with "failed to flush job ring 2" on every boot.
+ */
+&sec_jr2 {
+	status = "disabled";
+};
+
 &dcfg {
 	dma-coherent;
 };
