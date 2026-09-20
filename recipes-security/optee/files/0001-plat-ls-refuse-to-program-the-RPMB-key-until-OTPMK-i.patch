@@ -1,4 +1,4 @@
-From be7652d7c5073103a7edf8458f2174266472981e Mon Sep 17 00:00:00 2001
+From f1d1eb3848bdf930f13470dff01da13c6c96a6bb Mon Sep 17 00:00:00 2001
 From: Tomaz Zaman <tomaz@mono.si>
 Date: Thu, 17 Sep 2026 20:38:57 +0200
 Subject: [PATCH] plat-ls: refuse to program the RPMB key unless OTPMK was
@@ -26,6 +26,20 @@ hardware bit separates a programmed fuse from a written mirror -- after the
 boot-time fuse read they are the same thing -- so the distinction has to be
 temporal.
 
+A key that is present but damaged is refused as well. SNVS reports the
+Hamming syndrome of the OTPMK it holds in HPSR[24:16], and the SFP reports
+its own check in SVHESR[18:10]; either being non-zero means the key SNVS
+derived from is not the one the fuses were meant to carry, and an RPMB key
+derived from it is just as permanent as a good one. Both registers are
+sampled at boot alongside OTPMK_ZERO, and the refusal names the sampled
+values so a unit can be diagnosed at log level 1.
+
+The gate is compiled only for a flavour that defines SFP_BASE and
+SNVS_BASE. Without them the weak default in tee_rpmb_fs.c returns true and
+opens the gate silently, so a flavour that enables CFG_RPMB_WRITE_KEY
+without providing the fuse state fails to build instead of keying eMMCs
+under whatever HUK it derived.
+
 The imx, versal and zynqmp platforms gate on the SNVS state machine having
 reached Trusted or Secure. That does not carry over to Layerscape: TF-A
 compiles snvs_init() only under TRUSTED_BOARD_BOOT and never calls
@@ -38,15 +52,15 @@ Upstream-Status: Pending
 
 Signed-off-by: Tomaz Zaman <tomaz@mono.si>
 ---
- core/arch/arm/plat-ls/main.c            | 67 +++++++++++++++++++++++++
- core/arch/arm/plat-ls/platform_config.h |  1 +
- 2 files changed, 68 insertions(+)
+ core/arch/arm/plat-ls/main.c            | 97 +++++++++++++++++++++++++
+ core/arch/arm/plat-ls/platform_config.h |  2 +
+ 2 files changed, 99 insertions(+)
 
 diff --git a/core/arch/arm/plat-ls/main.c b/core/arch/arm/plat-ls/main.c
-index 7e013f9c2..98ec4617a 100644
+index 7e013f9c2..c630085e2 100644
 --- a/core/arch/arm/plat-ls/main.c
 +++ b/core/arch/arm/plat-ls/main.c
-@@ -47,8 +47,10 @@
+@@ -47,8 +47,11 @@
  #include <libfdt.h>
  #include <mm/core_memprot.h>
  #include <sm/optee_smc.h>
@@ -54,29 +68,37 @@ index 7e013f9c2..98ec4617a 100644
  #include <kernel/tee_common_otp.h>
  #include <mm/core_mmu.h>
 +#include <tee/tee_fs.h>
++#include <util.h>
  
  #ifdef CFG_PL011
  static struct pl011_data console_data;
-@@ -71,6 +73,9 @@ register_ddr(CFG_DRAM1_BASE, CFG_DRAM1_SIZE);
+@@ -71,6 +74,11 @@ register_ddr(CFG_DRAM1_BASE, CFG_DRAM1_SIZE);
  #ifdef DCFG_BASE
  register_phys_mem_pgdir(MEM_AREA_IO_NSEC, DCFG_BASE, CORE_MMU_PGDIR_SIZE);
  #endif
-+#if defined(SNVS_BASE) && defined(CFG_RPMB_FS)
-+register_phys_mem_pgdir(MEM_AREA_IO_SEC, SNVS_BASE, CORE_MMU_PGDIR_SIZE);
++#if defined(SFP_BASE) && defined(SNVS_BASE) && defined(CFG_RPMB_FS)
++/* SFP at +0, SNVS at +0x10000: one pgdir covers both. */
++register_phys_mem_pgdir(MEM_AREA_IO_SEC, SFP_BASE,
++			SNVS_BASE - SFP_BASE + SMALL_PAGE_SIZE);
 +#endif
  
  #ifdef CFG_ARM32_core
  void plat_primary_init_early(void)
-@@ -212,3 +217,65 @@ void boot_secondary_init_intc(void)
+@@ -212,3 +220,92 @@ void boot_secondary_init_intc(void)
  {
  	gic_init_per_cpu();
  }
 +
-+#if defined(SNVS_BASE) && defined(CFG_RPMB_FS)
-+#define SNVS_HPSR_OFFSET	0x14
-+#define SNVS_HPSR_OTPMK_ZERO	BIT32(27)
++#if defined(SFP_BASE) && defined(SNVS_BASE) && defined(CFG_RPMB_FS)
++#define SFP_SVHESR_OFFSET		0x24
++#define SFP_SVHESR_OTPMK_MASK		GENMASK_32(18, 10)
++#define SNVS_HPSR_OFFSET		0x14
++#define SNVS_HPSR_OTPMK_ZERO		BIT32(27)
++#define SNVS_HPSR_OTPMK_SYNDROME	GENMASK_32(24, 16)
 +
-+static bool otpmk_blown_at_boot;
++static bool otpmk_usable_at_boot;
++static uint32_t hpsr_at_boot;
++static uint32_t svhesr_at_boot;
 +
 +/*
 + * Sample the fuse state once, here, rather than when the gate is consulted.
@@ -94,21 +116,34 @@ index 7e013f9c2..98ec4617a 100644
 + *
 + * Sampling at boot makes the gate and the HUK consistent by construction:
 + * both are fixed before anything else can touch the mirrors.
++ *
++ * Blank is the obvious refusal. A non-zero Hamming syndrome, from SNVS in
++ * HPSR or from the SFP in SVHESR, means the key SNVS holds is not the one
++ * the fuses were meant to carry, and a permanent RPMB key derived from it
++ * is no better than one derived from zeros. Both blocks are big-endian on
++ * this SoC, hence the byte swaps.
 + */
 +static TEE_Result sample_otpmk_state(void)
 +{
++	vaddr_t sfp = core_mmu_get_va(SFP_BASE, MEM_AREA_IO_SEC,
++				      SFP_SVHESR_OFFSET + sizeof(uint32_t));
 +	vaddr_t snvs = core_mmu_get_va(SNVS_BASE, MEM_AREA_IO_SEC,
 +				       SNVS_HPSR_OFFSET + sizeof(uint32_t));
-+	uint32_t hpsr = 0;
 +
-+	if (!snvs) {
-+		EMSG("SNVS is not mapped, treating OTPMK as blank");
++	if (!sfp || !snvs) {
++		EMSG("SFP/SNVS not mapped, treating OTPMK as blank");
 +		return TEE_SUCCESS;
 +	}
 +
-+	hpsr = __builtin_bswap32(io_read32(snvs + SNVS_HPSR_OFFSET));
-+	DMSG("SNVS HPSR at boot: %#"PRIx32, hpsr);
-+	otpmk_blown_at_boot = !(hpsr & SNVS_HPSR_OTPMK_ZERO);
++	svhesr_at_boot = __builtin_bswap32(io_read32(sfp + SFP_SVHESR_OFFSET));
++	hpsr_at_boot = __builtin_bswap32(io_read32(snvs + SNVS_HPSR_OFFSET));
++	DMSG("At boot: SNVS_HPSR %#"PRIx32", SFP_SVHESR %#"PRIx32,
++	     hpsr_at_boot, svhesr_at_boot);
++
++	otpmk_usable_at_boot =
++		!(hpsr_at_boot & (SNVS_HPSR_OTPMK_ZERO |
++				  SNVS_HPSR_OTPMK_SYNDROME)) &&
++		!(svhesr_at_boot & SFP_SVHESR_OTPMK_MASK);
 +
 +	return TEE_SUCCESS;
 +}
@@ -116,7 +151,8 @@ index 7e013f9c2..98ec4617a 100644
 +service_init(sample_otpmk_state);
 +
 +/*
-+ * Refuse the one-shot eMMC RPMB key write unless OTPMK was blown at boot.
++ * Refuse the one-shot eMMC RPMB key write unless a sound OTPMK was blown
++ * at boot.
 + *
 + * That key is derived from the HUK and the eMMC accepts it exactly once for
 + * the life of the part, so programming it while OTPMK is blank binds RPMB
@@ -125,22 +161,31 @@ index 7e013f9c2..98ec4617a 100644
 + */
 +bool plat_rpmb_key_is_ready(void)
 +{
-+	if (!otpmk_blown_at_boot) {
-+		EMSG("OTPMK was blank at boot, refusing to program the RPMB key");
++	if (!otpmk_usable_at_boot) {
++		EMSG("OTPMK blank or damaged at boot (SNVS_HPSR %#"PRIx32", SFP_SVHESR %#"PRIx32"), refusing to program the RPMB key",
++		     hpsr_at_boot, svhesr_at_boot);
 +		return false;
 +	}
 +
 +	return true;
 +}
-+#endif /* SNVS_BASE && CFG_RPMB_FS */
++#elif defined(CFG_RPMB_WRITE_KEY)
++/*
++ * Without the fuse state, the weak plat_rpmb_key_is_ready() in
++ * tee_rpmb_fs.c returns true and keys the eMMC under whatever HUK this
++ * build derived, blank OTPMK included. Refuse to build rather than to run.
++ */
++#error "CFG_RPMB_WRITE_KEY needs SFP_BASE and SNVS_BASE for this flavour"
++#endif /* SFP_BASE && SNVS_BASE && CFG_RPMB_FS */
 diff --git a/core/arch/arm/plat-ls/platform_config.h b/core/arch/arm/plat-ls/platform_config.h
-index 3924b5be5..d8f152670 100644
+index 3924b5be5..a6b60e720 100644
 --- a/core/arch/arm/plat-ls/platform_config.h
 +++ b/core/arch/arm/plat-ls/platform_config.h
-@@ -69,6 +69,7 @@
+@@ -69,6 +69,8 @@
  #define GICD_OFFSET			0x10000
  #define CAAM_BASE			0x01700000
  #define CAAM_SIZE			0x100000
++#define SFP_BASE			0x01E80000
 +#define SNVS_BASE			0x01E90000
  #endif
  
