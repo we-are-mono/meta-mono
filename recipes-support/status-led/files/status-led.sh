@@ -14,15 +14,16 @@ done
 # Check if U-Boot reported a test failure
 if grep -q "hwtest_status=fail" /proc/cmdline; then
     echo pattern > $LED_RED/trigger
-    echo "16 500 255 500" > $LED_RED/pattern
+    echo "16 500 128 500" > $LED_RED/pattern
     echo -1 > $LED_RED/repeat
 else
-    # Amber breathing in recovery
+    # Dim amber breathing in recovery.
+    # Red:green ratio remains 255:48.
     echo pattern > $LED_RED/trigger
-    echo "64 1000 255 1000" > $LED_RED/pattern
+    echo "16 1000 128 1000" > $LED_RED/pattern
     echo -1 > $LED_RED/repeat
-    
+
     echo pattern > $LED_GREEN/trigger
-    echo "12 1000 48 1000" > $LED_GREEN/pattern
+    echo "3 1000 24 1000" > $LED_GREEN/pattern
     echo -1 > $LED_GREEN/repeat
 fi
