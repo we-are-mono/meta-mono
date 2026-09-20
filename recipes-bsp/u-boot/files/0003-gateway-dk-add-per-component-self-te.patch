@@ -1,4 +1,4 @@
-From 87f5a025b919a3fbc165741e23da8f35241acd18 Mon Sep 17 00:00:00 2001
+From 71bd208a2a182d5a8218cbdd3fe6e6f413f9c337 Mon Sep 17 00:00:00 2001
 From: Tomaz Zaman <tomaz@mono.si>
 Date: Sun, 19 Apr 2026 15:24:13 +0200
 Subject: [PATCH 3/7] board: mono: gateway-dk: add per-component self-tests
@@ -15,9 +15,9 @@ reports PASS/FAIL with a small detail string:
                          panel via lp5810a_set_status())
   - retimer.c          - DS100DF410 SerDes retimer device ID
   - rtc.c              - PCF2131 real-time clock
-  - security_fuses.c   - SFP/SNVS fuse state: OTPMK, SRK hash, ITS and
-                         write protect; a damaged OTPMK or DRV is a
-                         warning, not a failure
+  - security_fuses.c   - SFP/SNVS fuse state: OTPMK, SRK hash, ITS,
+                         write protect and the SecMon state; a damaged
+                         OTPMK or DRV is a warning, not a failure
   - sfp_i2c_mux.c      - resets the SFP-side PCA9545 mux into a
                          known-good state, pulsing RESET# on
                          GPIO3_24 when a module holding SDA low has
@@ -35,6 +35,11 @@ i2c1 answers - the mux control address included - until RESET# is
 pulsed. A bus recovered that way still passes, reported as "Reset OK
 (recovered wedged bus)" so the event stays visible.
 
+The SecMon state on the fuse line says whether the secure world's keys
+are device-unique on this boot: the SEC uses the OTPMK only in the
+trusted and secure states, which only a ROM-validated boot reaches, so
+"OTPMK set, SecMon non-secure" is a burned key that nothing uses yet.
+
 cmd_otpmk.c adds the otpmk command. 'otpmk gen' draws 256 bits from the
 CAAM RNG, Hamming encodes them and loads the fuse mirror registers
 without the key ever being printed; 'otpmk commit' programs the mirrors
@@ -44,9 +49,9 @@ write-protected or it reports a Hamming error, and confirms its load
 through SNVS_HPSR; commit refuses unless gen loaded a key in this
 session and no other mirror word has changed since. Neither reads the
 fuse block while TA_PROG_SFP may be above GND, which the data sheet
-forbids: gen runs before the pin goes high and refuses once a PROGFB has
-been issued, and commit leaves the verdict to the next boot's self-test.
-The SFP and SNVS register definitions both files use live in
+forbids: gen is refused once a key is loaded or a PROGFB has been issued
+in the session, and commit leaves the verdict to the next boot's
+self-test. The SFP and SNVS register definitions both files use live in
 security_fuses.h.
 
 Upstream-Status: Inappropriate [product-specific]
@@ -54,19 +59,19 @@ Upstream-Status: Inappropriate [product-specific]
 Signed-off-by: Tomaz Zaman <tomaz@mono.si>
 ---
  board/mono/gateway_dk/setup/clock_gen.c       |  67 ++++
- board/mono/gateway_dk/setup/cmd_otpmk.c       | 336 ++++++++++++++++++
+ board/mono/gateway_dk/setup/cmd_otpmk.c       | 347 ++++++++++++++++++
  board/mono/gateway_dk/setup/ddr_sanity.c      |  73 ++++
  board/mono/gateway_dk/setup/fan_controller.c  |  89 +++++
  board/mono/gateway_dk/setup/led_controller.c  | 108 ++++++
  board/mono/gateway_dk/setup/retimer.c         |  36 ++
  board/mono/gateway_dk/setup/rtc.c             |  55 +++
- board/mono/gateway_dk/setup/security_fuses.c  |  74 ++++
- board/mono/gateway_dk/setup/security_fuses.h  |  43 +++
+ board/mono/gateway_dk/setup/security_fuses.c  |  93 +++++
+ board/mono/gateway_dk/setup/security_fuses.h  |  56 +++
  board/mono/gateway_dk/setup/sfp_i2c_mux.c     | 135 +++++++
  board/mono/gateway_dk/setup/temp_sensors.c    |  70 ++++
  .../mono/gateway_dk/setup/typec_controller.c  |  49 +++
  board/mono/gateway_dk/setup/voltage_sensors.c |  97 +++++
- 13 files changed, 1232 insertions(+)
+ 13 files changed, 1275 insertions(+)
  create mode 100644 board/mono/gateway_dk/setup/clock_gen.c
  create mode 100644 board/mono/gateway_dk/setup/cmd_otpmk.c
  create mode 100644 board/mono/gateway_dk/setup/ddr_sanity.c
@@ -156,10 +161,10 @@ index 00000000000..836930d1dc1
 +}
 diff --git a/board/mono/gateway_dk/setup/cmd_otpmk.c b/board/mono/gateway_dk/setup/cmd_otpmk.c
 new file mode 100644
-index 00000000000..a7c9f6c5540
+index 00000000000..b1d070de051
 --- /dev/null
 +++ b/board/mono/gateway_dk/setup/cmd_otpmk.c
-@@ -0,0 +1,336 @@
+@@ -0,0 +1,347 @@
 +// SPDX-License-Identifier: GPL-2.0+
 +/*
 + * Copyright 2025 Mono Technologies Inc.
@@ -277,20 +282,26 @@ index 00000000000..a7c9f6c5540
 +	struct udevice *dev;
 +	int ret, i;
 +
-+	otpmk_loaded = false;
-+
 +	if (progfb_issued) {
 +		printf("otpmk: refusing, a PROGFB was issued in this session; return TA_PROG_SFP\n");
 +		printf("otpmk: to GND and power-cycle before doing anything else.\n");
 +		return CMD_RET_FAILURE;
 +	}
 +
++	if (otpmk_loaded) {
++		printf("otpmk: refusing, a key is already loaded in this session; run 'otpmk commit',\n");
++		printf("otpmk: or power-cycle to start over. A second gen would read the fuse block,\n");
++		printf("otpmk: which is not allowed once TA_PROG_SFP may be above GND.\n");
++		return CMD_RET_FAILURE;
++	}
++
 +	/*
-+	 * Look at the fuses, not at whatever the mirrors hold. fuse_read()
-+	 * issues READFB only when a mirror has been overridden since the last
-+	 * read, so on a fresh boot this costs nothing, and after an earlier
-+	 * gen it discards that key -- which is what makes the checks below
-+	 * statements about the fuses.
++	 * Bring the mirrors in line with the fuses. fuse_read() issues READFB
++	 * only when a mirror has been overridden since the last read, which on
++	 * a fresh boot is never: nothing else writes mirrors (CMD_FUSE is off)
++	 * and a second gen is refused above. So the fuse block is read here
++	 * only after a gen that failed part-way -- before the operator was
++	 * ever told to raise the pin.
 +	 */
 +	ret = fuse_read(0, OSPR0_WORD, &ospr0);
 +	if (ret) {
@@ -301,9 +312,10 @@ index 00000000000..a7c9f6c5540
 +	svhesr = in_be32((void *)SFP_SVHESR);
 +	hpsr = in_be32((void *)SNVS_HPSR);
 +
-+	if (svhesr & (SVHESR_OTPMK_MASK | SVHESR_DRV_MASK)) {
-+		printf("otpmk: refusing, the fuse block reports a Hamming error (SVHESR 0x%08x)\n",
-+		       svhesr);
++	if ((svhesr & (SVHESR_OTPMK_MASK | SVHESR_DRV_MASK)) ||
++	    (hpsr & HPSR_OTPMK_SYNDROME)) {
++		printf("otpmk: refusing, the fuse block reports a Hamming error (SVHESR 0x%08x, HPSR 0x%08x)\n",
++		       svhesr, hpsr);
 +		return CMD_RET_FAILURE;
 +	}
 +
@@ -364,7 +376,8 @@ index 00000000000..a7c9f6c5540
 +	 */
 +	hpsr = in_be32((void *)SNVS_HPSR);
 +	svhesr = in_be32((void *)SFP_SVHESR);
-+	if ((hpsr & HPSR_OTPMK_ZERO) || (svhesr & SVHESR_OTPMK_MASK)) {
++	if ((hpsr & (HPSR_OTPMK_ZERO | HPSR_OTPMK_SYNDROME)) ||
++	    (svhesr & SVHESR_OTPMK_MASK)) {
 +		printf("otpmk: load FAILED (SNVS_HPSR 0x%08x, SVHESR 0x%08x), do not commit\n",
 +		       hpsr, svhesr);
 +		ret = -EIO;
@@ -403,7 +416,7 @@ index 00000000000..a7c9f6c5540
 +
 +	hpsr = in_be32((void *)SNVS_HPSR);
 +	svhesr = in_be32((void *)SFP_SVHESR);
-+	if ((hpsr & HPSR_OTPMK_ZERO) ||
++	if ((hpsr & (HPSR_OTPMK_ZERO | HPSR_OTPMK_SYNDROME)) ||
 +	    (svhesr & (SVHESR_OTPMK_MASK | SVHESR_DRV_MASK))) {
 +		printf("otpmk: refusing, the loaded key is gone or invalid (SNVS_HPSR 0x%08x, SVHESR 0x%08x)\n",
 +		       hpsr, svhesr);
@@ -457,6 +470,7 @@ index 00000000000..a7c9f6c5540
 +	printf("otpmk:   'OTPMK set'            the key is burned\n");
 +	printf("otpmk:   'open, no fuses blown' nothing took -- was TA_PROG_SFP at 1.8 V?\n");
 +	printf("otpmk:   'OTPMK damaged'        the burn went wrong; that key is lost\n");
++	printf("otpmk: the secure world uses this key only under secure boot (SecMon trusted).\n");
 +
 +	return CMD_RET_SUCCESS;
 +}
@@ -480,10 +494,12 @@ index 00000000000..a7c9f6c5540
 +	otpmk, 2, 0, do_otpmk,
 +	"One Time Programmable Master Key",
 +	"gen - draw 256 bits from the CAAM RNG, Hamming encode them, and\n"
-+	"    load the fuse mirror registers. Run it with TA_PROG_SFP at GND:\n"
-+	"    gen reads the fuse block first, which the data sheet forbids under\n"
-+	"    programming voltage. Refuses if the OTPMK is already programmed,\n"
-+	"    the fuse block is write-protected or it reports a Hamming error.\n"
++	"    load the fuse mirror registers. Run it once per boot, with\n"
++	"    TA_PROG_SFP at GND; a second gen in the same session is refused,\n"
++	"    because it would read the fuse block, which the data sheet forbids\n"
++	"    once the pin may be above GND -- power-cycle to start over. Refuses\n"
++	"    if the OTPMK is already programmed, the fuse block is\n"
++	"    write-protected or it reports a Hamming error.\n"
 +	"    The key is never printed and cannot be read back; the load is\n"
 +	"    confirmed through SNVS_HPSR bit 27 (OTPMK_ZERO) clearing. ANY\n"
 +	"    reset discards the mirrors, so gen and commit must run without a\n"
@@ -889,10 +905,10 @@ index 00000000000..f198cb9cdaf
 +}
 diff --git a/board/mono/gateway_dk/setup/security_fuses.c b/board/mono/gateway_dk/setup/security_fuses.c
 new file mode 100644
-index 00000000000..05f0832f261
+index 00000000000..71b331cc26f
 --- /dev/null
 +++ b/board/mono/gateway_dk/setup/security_fuses.c
-@@ -0,0 +1,74 @@
+@@ -0,0 +1,93 @@
 +// SPDX-License-Identifier: GPL-2.0+
 +/*
 + * Copyright 2025 Mono Technologies Inc.
@@ -902,6 +918,18 @@ index 00000000000..05f0832f261
 +#include <asm/io.h>
 +#include "hw_test.h"
 +#include "security_fuses.h"
++
++static const char *ssm_name(u32 hpsr)
++{
++	switch ((hpsr & HPSR_SSM_ST_MASK) >> HPSR_SSM_ST_SHIFT) {
++	case SSM_ST_CHECK:		return "check";
++	case SSM_ST_NON_SECURE:		return "non-secure";
++	case SSM_ST_TRUSTED:		return "trusted";
++	case SSM_ST_SECURE:		return "secure";
++	case SSM_ST_SOFT_FAIL:		return "soft-fail";
++	default:			return "unknown";
++	}
++}
 +
 +int test_security_fuses(struct hw_test_ctx *ctx)
 +{
@@ -952,27 +980,34 @@ index 00000000000..05f0832f261
 +	 * the verdict.
 +	 */
 +	if (otpmk_damaged || drv_damaged)
-+		return hw_test_warn(ctx, "%s%s%s damaged, SVHESR 0x%08x, HPSR 0x%08x",
++		return hw_test_warn(ctx, "%s%s%s damaged, SVHESR 0x%08x, HPSR 0x%08x, SecMon %s",
 +				    otpmk_damaged ? "OTPMK" : "",
 +				    otpmk_damaged && drv_damaged ? " and " : "",
 +				    drv_damaged ? "DRV" : "",
-+				    svhesr, hpsr);
++				    svhesr, hpsr, ssm_name(hpsr));
 +
++	/*
++	 * The SecMon state says whether the secure world's keys are unique on
++	 * this boot. "OTPMK set, SecMon non-secure" is a burned key that nothing
++	 * uses yet; only a validated boot shows trusted.
++	 */
 +	if (!otpmk && !srk && !its && !wp)
-+		return hw_test_pass(ctx, "open, no fuses blown");
++		return hw_test_pass(ctx, "open, no fuses blown, SecMon %s",
++				    ssm_name(hpsr));
 +
-+	return hw_test_pass(ctx, "OTPMK %s, SRK %s, ITS %s%s",
++	return hw_test_pass(ctx, "OTPMK %s, SRK %s, ITS %s%s, SecMon %s",
 +			    otpmk ? "set" : "blank",
 +			    srk ? "set" : "blank",
 +			    its ? "enforced" : "off",
-+			    wp ? ", write-protected" : "");
++			    wp ? ", write-protected" : "",
++			    ssm_name(hpsr));
 +}
 diff --git a/board/mono/gateway_dk/setup/security_fuses.h b/board/mono/gateway_dk/setup/security_fuses.h
 new file mode 100644
-index 00000000000..d90201ad289
+index 00000000000..ef0d5862ad4
 --- /dev/null
 +++ b/board/mono/gateway_dk/setup/security_fuses.h
-@@ -0,0 +1,43 @@
+@@ -0,0 +1,56 @@
 +/* SPDX-License-Identifier: GPL-2.0+ */
 +/*
 + * Copyright 2025 Mono Technologies Inc.
@@ -1014,6 +1049,19 @@ index 00000000000..d90201ad289
 +#define SNVS_HPSR		((ulong)CONFIG_SYS_IMMR + 0xe90014)
 +#define HPSR_OTPMK_ZERO		BIT(27)
 +#define HPSR_OTPMK_SYNDROME	GENMASK(24, 16)
++
++/*
++ * SecMon state machine. Only a boot the ROM validated against SRKH reaches
++ * trusted or secure, and only there does the SEC use the OTPMK; elsewhere
++ * it uses a public test key, so the secure world's keys are not unique.
++ */
++#define HPSR_SSM_ST_MASK	GENMASK(11, 8)
++#define HPSR_SSM_ST_SHIFT	8
++#define SSM_ST_SOFT_FAIL	0x3
++#define SSM_ST_CHECK		0x9
++#define SSM_ST_NON_SECURE	0xb
++#define SSM_ST_TRUSTED		0xd
++#define SSM_ST_SECURE		0xf
 +
 +#endif /* SECURITY_FUSES_H */
 diff --git a/board/mono/gateway_dk/setup/sfp_i2c_mux.c b/board/mono/gateway_dk/setup/sfp_i2c_mux.c
