@@ -32,10 +32,10 @@ OPTEE_PLATFORM = "ls-ls1046ardb"
 # zeros-returning stub in core/kernel/otp_stubs.c, so the build fails to link
 # unless the CAAM path is present -- a compile-time guarantee that the HUK
 # never comes from a constant. Whether that HUK is device-unique is a property
-# of the fuse, not the build: on an unfused board it derives from a blank
-# OTPMK, and the RPMB gate below is what acts on that. Nothing sealed on an
-# unfused board is trustworthy after the fuse, having been sealed under a key
-# the SoC did not keep secret.
+# of the SecMon state and the fuse, not the build: the SEC derives keys from
+# the OTPMK only while a ROM-validated boot has left the SecMon Trusted or
+# Secure, and from a public test key otherwise, and the RPMB gate below acts
+# on both. Nothing sealed under the test key is trustworthy afterwards.
 #
 # CFG_CORE_HUK_SUBKEY_COMPAT selects a derivation kept for devices already in
 # the field: huk_compat() skips the usage tag for HUK_SUBKEY_RPMB and feeds a
@@ -47,12 +47,23 @@ OPTEE_PLATFORM = "ls-ls1046ardb"
 # CFG_CAAM_INC_PRIBLOB raises CAAM's PRIBLOB field once OP-TEE has read the
 # master key blob, leaving nothing that runs afterwards able to read it.
 #
-# CFG_RPMB_FS and CFG_RPMB_WRITE_KEY are both on so that one image serves a
-# board whether or not its OTPMK fuse is blown. Unfused, plat_rpmb_key_is_ready()
-# refuses and the eMMC's one-shot RPMB key is left unwritten; fused, the same
-# image keys RPMB on first use. Recovery carries the kernel RPMB class, and on
-# this kernel OP-TEE reaches the eMMC through it (OPTEE_RPC_CMD_RPMB_FRAMES)
-# rather than through a tee-supplicant.
+# CFG_RPMB_FS is on and CFG_RPMB_WRITE_KEY is off. OP-TEE reaches the eMMC
+# only through the normal world, and with WRITE_KEY it hands the derived RPMB
+# key, in clear, to whatever answers "authentication key not yet programmed"
+# -- a status that is unauthenticated by nature, so a lying supplicant on any
+# fused unit collects the key at will; upstream's config.mk says not to ship
+# it. The fleet image therefore never writes a key. RPMB is keyed once per
+# unit by the separate provisioning image, this recipe with WRITE_KEY=y,
+# booted under a validated chain and signed with a revocable SRK slot; from
+# then on this image only ever authenticates with the key. Without WRITE_KEY
+# OP-TEE uses the probe interface, so on this kernel RPMB frames travel
+# through the in-kernel RPMB class (OPTEE_RPC_CMD_RPMB_FRAMES), with no
+# tee-supplicant involved.
+#
+# The gate in the plat-ls patch, plat_rpmb_key_is_ready(), is what the
+# provisioning image relies on: it refuses unless the boot was trusted
+# (SecMon Trusted or Secure, which only a ROM-validated boot reaches) and
+# the OTPMK is blown and sound.
 #
 # CFG_RPMB_TESTKEY is pinned off although it defaults off: on, it would key
 # every eMMC this image reaches with a key published in the OP-TEE source.
@@ -69,7 +80,7 @@ EXTRA_OEMAKE = " \
     CFG_CORE_HUK_SUBKEY_COMPAT=n \
     CFG_CAAM_INC_PRIBLOB=y \
     CFG_RPMB_FS=y \
-    CFG_RPMB_WRITE_KEY=y \
+    CFG_RPMB_WRITE_KEY=n \
     CFG_RPMB_TESTKEY=n \
     CFG_ENABLE_EMBEDDED_TESTS=n \
     CFG_PKCS11_TA=n \
