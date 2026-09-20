@@ -1,4 +1,4 @@
-From 39246250cf488e1c5cf6b66abd896cf4f0c1cc61 Mon Sep 17 00:00:00 2001
+From 0421030c1cc0301c5b2f83c6ab42ea9142e98701 Mon Sep 17 00:00:00 2001
 From: Tomaz Zaman <tomaz@mono.si>
 Date: Sun, 19 Apr 2026 15:24:13 +0200
 Subject: [PATCH 3/7] board: mono: gateway-dk: add per-component self-tests
@@ -50,7 +50,7 @@ Upstream-Status: Inappropriate [product-specific]
 Signed-off-by: Tomaz Zaman <tomaz@mono.si>
 ---
  board/mono/gateway_dk/setup/clock_gen.c       |  67 ++++
- board/mono/gateway_dk/setup/cmd_otpmk.c       | 348 ++++++++++++++++++
+ board/mono/gateway_dk/setup/cmd_otpmk.c       | 346 ++++++++++++++++++
  board/mono/gateway_dk/setup/ddr_sanity.c      |  73 ++++
  board/mono/gateway_dk/setup/fan_controller.c  |  89 +++++
  board/mono/gateway_dk/setup/led_controller.c  | 108 ++++++
@@ -62,7 +62,7 @@ Signed-off-by: Tomaz Zaman <tomaz@mono.si>
  board/mono/gateway_dk/setup/temp_sensors.c    |  70 ++++
  .../mono/gateway_dk/setup/typec_controller.c  |  49 +++
  board/mono/gateway_dk/setup/voltage_sensors.c |  97 +++++
- 13 files changed, 1228 insertions(+)
+ 13 files changed, 1226 insertions(+)
  create mode 100644 board/mono/gateway_dk/setup/clock_gen.c
  create mode 100644 board/mono/gateway_dk/setup/cmd_otpmk.c
  create mode 100644 board/mono/gateway_dk/setup/ddr_sanity.c
@@ -152,10 +152,10 @@ index 00000000000..836930d1dc1
 +}
 diff --git a/board/mono/gateway_dk/setup/cmd_otpmk.c b/board/mono/gateway_dk/setup/cmd_otpmk.c
 new file mode 100644
-index 00000000000..3210109a8b8
+index 00000000000..e7d0b469675
 --- /dev/null
 +++ b/board/mono/gateway_dk/setup/cmd_otpmk.c
-@@ -0,0 +1,348 @@
+@@ -0,0 +1,346 @@
 +// SPDX-License-Identifier: GPL-2.0+
 +/*
 + * Copyright 2025 Mono Technologies Inc.
@@ -361,8 +361,7 @@ index 00000000000..3210109a8b8
 +	otpmk_loaded = true;
 +	printf("otpmk: key generated and loaded (SNVS_HPSR 0x%08x, SVHESR 0x%08x)\n",
 +	       hpsr, svhesr);
-+	printf("otpmk: nothing is committed yet. ANY reset discards it, and so does\n");
-+	printf("otpmk: 'fuse read', which reloads the mirrors from the fuses.\n");
++	printf("otpmk: nothing is committed yet, and ANY reset discards it.\n");
 +	printf("otpmk: to burn it, apply 1.8 V to TA_PROG_SFP and run 'otpmk commit'.\n");
 +
 +out:
@@ -379,7 +378,7 @@ index 00000000000..3210109a8b8
 +	/*
 +	 * Only ever burn what 'otpmk gen' loaded in this session. The flag
 +	 * says gen ran and confirmed its load, HPSR says the key is still in
-+	 * the mirrors -- a 'fuse read' since would have reloaded them -- and
++	 * the mirrors -- a READFB since would have reloaded them -- and
 +	 * the comparison says no other mirror word has moved, because PROGFB
 +	 * commits every mirror at once and would burn a stray 'fuse override'
 +	 * along with the key.
@@ -494,9 +493,8 @@ index 00000000000..3210109a8b8
 +	"    programmed, the fuse block is write-protected or it reports a\n"
 +	"    Hamming error. The key is never printed and cannot be read back;\n"
 +	"    the load is confirmed through SNVS_HPSR bit 27 (OTPMK_ZERO)\n"
-+	"    clearing. ANY reset discards the mirrors, including 'fuse read',\n"
-+	"    which reloads them from the fuses -- so gen and commit must run\n"
-+	"    without a reset between.\n"
++	"    clearing. ANY reset discards the mirrors, so gen and commit must\n"
++	"    run without a reset between.\n"
 +	"otpmk commit - program the mirror registers into fuses (PERMANENT).\n"
 +	"    Requires 1.8 V on the TA_PROG_SFP test point and a key loaded by\n"
 +	"    'otpmk gen' in this session, with no other mirror word changed\n"
