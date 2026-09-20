@@ -16,8 +16,9 @@
  *
  * Each mono,sfp-led child references an SFP with "sfp" and its link and
  * activity LEDs with "leds". MOD_DEF0 comes from that SFP's own
- * "mod-def0-gpios", shared non-exclusively with the sfp driver that owns
- * the line. The associated fsl,fman-memac node references the same SFP and
+ * "mod-def0-gpios", borrowed non-exclusively from the sfp driver that owns
+ * the line and never released by the borrower (see sfp_led_get_port()).
+ * The associated fsl,fman-memac node references the same SFP and
  * identifies the XFI PCS through "pcs-handle" and "pcs-handle-names". No
  * module diagnostic support is required.
  *
@@ -44,6 +45,8 @@
 struct sfp_led_port {
 	struct device_node *mac_np;
 	struct gpio_desc *present;
+	/* False when `present` is the sfp driver's descriptor, only borrowed. */
+	bool present_owned;
 	struct mii_bus *pcs_bus;
 	int pcs_addr;
 	struct led_classdev *link_led;
@@ -273,7 +276,9 @@ put_pcs:
 
 static int sfp_led_get_port(struct device *dev, struct sfp_led_port *port)
 {
+	struct platform_device *sfp_pdev;
 	struct device_node *sfp_np;
+	bool bound;
 	int ret;
 
 	sfp_np = of_parse_phandle(dev->of_node, "sfp", 0);
@@ -291,14 +296,42 @@ static int sfp_led_get_port(struct device *dev, struct sfp_led_port *port)
 	}
 
 	/*
-	 * The sfp driver owns this line for its own state machine, so ask for
-	 * it non-exclusively; gpiolib returns the same descriptor instead of
-	 * -EBUSY. Only this second consumer needs the flag.
+	 * The sfp driver requests MOD_DEF0 only once it has its I2C adapter,
+	 * and requests it exclusively; a port that took the line before that
+	 * would leave the cage without an sfp driver for good. Wait for it to
+	 * be bound, so that the line is always already taken and only borrowed.
 	 */
-	port->present = devm_fwnode_gpiod_get_index(dev, of_fwnode_handle(sfp_np),
-						    "mod-def0", 0,
-						    GPIOD_IN | GPIOD_FLAGS_BIT_NONEXCLUSIVE,
-						    "sfp-led-present");
+	sfp_pdev = of_find_device_by_node(sfp_np);
+	if (!sfp_pdev) {
+		ret = -EPROBE_DEFER;
+		goto put_sfp;
+	}
+	bound = device_is_bound(&sfp_pdev->dev);
+	put_device(&sfp_pdev->dev);
+	if (!bound) {
+		ret = -EPROBE_DEFER;
+		goto put_sfp;
+	}
+
+	/*
+	 * The sfp driver owns this line for its own state machine, so the
+	 * exclusive request fails with -EBUSY and the non-exclusive retry
+	 * returns the owner's descriptor. gpiolib takes no reference for that
+	 * second consumer and configures nothing, so a borrowed descriptor must
+	 * never be put: putting it would release the owner's line under it,
+	 * clear its active-low flag -- the sfp driver would then read presence
+	 * inverted -- and drop a device reference the port never took. Hence no
+	 * devm here, and sfp_led_put_port() releases only what the port owns,
+	 * which is the line only on a board whose sfp driver left it untaken.
+	 */
+	port->present = fwnode_gpiod_get_index(of_fwnode_handle(sfp_np), "mod-def0",
+					       0, GPIOD_IN, "sfp-led-present");
+	port->present_owned = !IS_ERR(port->present);
+	if (PTR_ERR(port->present) == -EBUSY)
+		port->present = fwnode_gpiod_get_index(of_fwnode_handle(sfp_np),
+						       "mod-def0", 0,
+						       GPIOD_IN | GPIOD_FLAGS_BIT_NONEXCLUSIVE,
+						       "sfp-led-present");
 	if (IS_ERR(port->present)) {
 		ret = PTR_ERR(port->present);
 		port->present = NULL;
@@ -330,6 +363,8 @@ put_sfp:
 
 static void sfp_led_put_port(struct sfp_led_port *port)
 {
+	if (port->present && port->present_owned)
+		gpiod_put(port->present);
 	if (port->pcs_bus)
 		put_device(&port->pcs_bus->dev);
 	of_node_put(port->mac_np);
