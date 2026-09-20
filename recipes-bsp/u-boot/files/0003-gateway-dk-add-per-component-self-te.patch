@@ -1,4 +1,4 @@
-From 0421030c1cc0301c5b2f83c6ab42ea9142e98701 Mon Sep 17 00:00:00 2001
+From facaa7654f4257b92db1040af16e2b3de8b14023 Mon Sep 17 00:00:00 2001
 From: Tomaz Zaman <tomaz@mono.si>
 Date: Sun, 19 Apr 2026 15:24:13 +0200
 Subject: [PATCH 3/7] board: mono: gateway-dk: add per-component self-tests
@@ -15,8 +15,9 @@ reports PASS/FAIL with a small detail string:
                          panel via lp5810a_set_status())
   - retimer.c          - DS100DF410 SerDes retimer device ID
   - rtc.c              - PCF2131 real-time clock
-  - security_fuses.c   - SFP/SNVS fuse state: Hamming errors, OTPMK,
-                         SRK hash, ITS and write protect
+  - security_fuses.c   - SFP/SNVS fuse state: OTPMK, SRK hash, ITS and
+                         write protect; a damaged OTPMK or DRV is a
+                         warning, not a failure
   - sfp_i2c_mux.c      - resets the SFP-side PCA9545 mux into a
                          known-good state, pulsing RESET# on
                          GPIO3_24 when a module holding SDA low has
@@ -56,13 +57,13 @@ Signed-off-by: Tomaz Zaman <tomaz@mono.si>
  board/mono/gateway_dk/setup/led_controller.c  | 108 ++++++
  board/mono/gateway_dk/setup/retimer.c         |  36 ++
  board/mono/gateway_dk/setup/rtc.c             |  55 +++
- board/mono/gateway_dk/setup/security_fuses.c  |  58 +++
+ board/mono/gateway_dk/setup/security_fuses.c  |  74 ++++
  board/mono/gateway_dk/setup/security_fuses.h  |  43 +++
  board/mono/gateway_dk/setup/sfp_i2c_mux.c     | 135 +++++++
  board/mono/gateway_dk/setup/temp_sensors.c    |  70 ++++
  .../mono/gateway_dk/setup/typec_controller.c  |  49 +++
  board/mono/gateway_dk/setup/voltage_sensors.c |  97 +++++
- 13 files changed, 1226 insertions(+)
+ 13 files changed, 1242 insertions(+)
  create mode 100644 board/mono/gateway_dk/setup/clock_gen.c
  create mode 100644 board/mono/gateway_dk/setup/cmd_otpmk.c
  create mode 100644 board/mono/gateway_dk/setup/ddr_sanity.c
@@ -895,10 +896,10 @@ index 00000000000..f198cb9cdaf
 +}
 diff --git a/board/mono/gateway_dk/setup/security_fuses.c b/board/mono/gateway_dk/setup/security_fuses.c
 new file mode 100644
-index 00000000000..98933b18bef
+index 00000000000..05f0832f261
 --- /dev/null
 +++ b/board/mono/gateway_dk/setup/security_fuses.c
-@@ -0,0 +1,58 @@
+@@ -0,0 +1,74 @@
 +// SPDX-License-Identifier: GPL-2.0+
 +/*
 + * Copyright 2025 Mono Technologies Inc.
@@ -912,22 +913,24 @@ index 00000000000..98933b18bef
 +int test_security_fuses(struct hw_test_ctx *ctx)
 +{
 +	u32 svhesr, ospr, hpsr;
-+	bool otpmk, srk, its, wp;
++	bool otpmk, otpmk_damaged, drv_damaged, srk, its, wp;
 +	int i;
 +
-+	/*
-+	 * OTPMK and the debug response value are Hamming protected, so an
-+	 * error here means the fuse block is corrupt. That is a fault on any
-+	 * board, whether or not it was ever meant to be fused.
-+	 */
 +	svhesr = in_be32((void *)SFP_SVHESR);
-+	if (svhesr & (SVHESR_OTPMK_MASK | SVHESR_DRV_MASK))
-+		return hw_test_fail(ctx, "Hamming error, SVHESR 0x%08x", svhesr);
-+
 +	hpsr = in_be32((void *)SNVS_HPSR);
++	ospr = in_be32((void *)SFP_OSPR);
++
 +	otpmk = !(hpsr & HPSR_OTPMK_ZERO);
 +
-+	ospr = in_be32((void *)SFP_OSPR);
++	/*
++	 * OTPMK and the debug response value are Hamming protected. The SFP
++	 * reports errors in SVHESR, and SNVS reports the syndrome it computed
++	 * for the OTPMK it holds in HPSR.
++	 */
++	otpmk_damaged = (svhesr & SVHESR_OTPMK_MASK) ||
++			(hpsr & HPSR_OTPMK_SYNDROME);
++	drv_damaged = svhesr & SVHESR_DRV_MASK;
++
 +	its = !!(ospr & OSPR_ITS);
 +	wp = !!(ospr & OSPR_WP);
 +
@@ -947,6 +950,20 @@ index 00000000000..98933b18bef
 +		return hw_test_fail(ctx, "ITS set with blank SRK hash");
 +	if (srk && !otpmk)
 +		return hw_test_fail(ctx, "SRK hash set with blank OTPMK");
++
++	/*
++	 * A damaged secret is permanent and nobody can act on it: the unit
++	 * still boots and routes, it just has no usable master key. Say so on
++	 * every boot without failing the run, which would leave the LED red
++	 * for the rest of the unit's life. After an OTPMK burn, this line is
++	 * the verdict.
++	 */
++	if (otpmk_damaged || drv_damaged)
++		return hw_test_warn(ctx, "%s%s%s damaged, SVHESR 0x%08x, HPSR 0x%08x",
++				    otpmk_damaged ? "OTPMK" : "",
++				    otpmk_damaged && drv_damaged ? " and " : "",
++				    drv_damaged ? "DRV" : "",
++				    svhesr, hpsr);
 +
 +	if (!otpmk && !srk && !its && !wp)
 +		return hw_test_pass(ctx, "open, no fuses blown");

@@ -1,4 +1,4 @@
-From 56714a6102c5b612699162a04eb53d88a7d5a943 Mon Sep 17 00:00:00 2001
+From 0c349bc9aca278a978fbb03055a7f31807a8564b Mon Sep 17 00:00:00 2001
 From: Tomaz Zaman <tomaz@mono.si>
 Date: Sun, 19 Apr 2026 15:23:57 +0200
 Subject: [PATCH 2/7] board: mono: gateway-dk: add hw self-test harness
@@ -7,9 +7,12 @@ Adds the small infrastructure that the per-chip self-tests in the
 follow-up patch depend on:
 
   - hw_test.{h,c}: a test runner that prints aligned bracket-prefixed
-    PASS/FAIL lines, a banner, and a final summary. Tests fill in a
-    context struct and return an int; the harness owns the styling
-    and the aggregate counting.
+    PASS, FAIL or WARN lines, a banner, and a final summary. Tests fill
+    in a context struct and return an int; the harness owns the styling
+    and the aggregate counting. A test can pass with a warning, for a
+    permanent state worth seeing on every boot that nobody can act on:
+    the line is tagged and the summary counts it, but the run still
+    passes, so the LED and the kernel see a pass.
   - i2c_helpers.{h,c}: setup_i2c_muxed_device() wraps the
     'select PCA9545 channel, then get the device behind the mux'
     pattern that every per-component test reuses.
@@ -20,12 +23,12 @@ Upstream-Status: Inappropriate [product-specific]
 
 Signed-off-by: Tomaz Zaman <tomaz@mono.si>
 ---
- board/mono/gateway_dk/setup/Makefile      | 20 +++++
- board/mono/gateway_dk/setup/hw_test.c     | 95 +++++++++++++++++++++++
- board/mono/gateway_dk/setup/hw_test.h     | 93 ++++++++++++++++++++++
- board/mono/gateway_dk/setup/i2c_helpers.c | 21 +++++
- board/mono/gateway_dk/setup/i2c_helpers.h | 17 ++++
- 5 files changed, 246 insertions(+)
+ board/mono/gateway_dk/setup/Makefile      |  20 ++++
+ board/mono/gateway_dk/setup/hw_test.c     | 120 ++++++++++++++++++++++
+ board/mono/gateway_dk/setup/hw_test.h     | 105 +++++++++++++++++++
+ board/mono/gateway_dk/setup/i2c_helpers.c |  21 ++++
+ board/mono/gateway_dk/setup/i2c_helpers.h |  17 +++
+ 5 files changed, 283 insertions(+)
  create mode 100644 board/mono/gateway_dk/setup/Makefile
  create mode 100644 board/mono/gateway_dk/setup/hw_test.c
  create mode 100644 board/mono/gateway_dk/setup/hw_test.h
@@ -60,10 +63,10 @@ index 00000000000..976fba4de57
 +obj-y += cmd_otpmk.o
 diff --git a/board/mono/gateway_dk/setup/hw_test.c b/board/mono/gateway_dk/setup/hw_test.c
 new file mode 100644
-index 00000000000..aa935db5439
+index 00000000000..3e81fd8bc64
 --- /dev/null
 +++ b/board/mono/gateway_dk/setup/hw_test.c
-@@ -0,0 +1,95 @@
+@@ -0,0 +1,120 @@
 +// SPDX-License-Identifier: GPL-2.0+
 +/*
 + * Copyright 2025 Mono Technologies Inc.
@@ -99,24 +102,41 @@ index 00000000000..aa935db5439
 +	return 0;
 +}
 +
-+void hw_test_print_pass(const char *name, const char *details)
++int hw_test_warn(struct hw_test_ctx *ctx, const char *fmt, ...)
++{
++	va_list ap;
++
++	if (ctx) {
++		va_start(ap, fmt);
++		vsnprintf(ctx->details, sizeof(ctx->details), fmt, ap);
++		va_end(ap);
++		ctx->warned = 1;
++	}
++	return 0;
++}
++
++static void hw_test_print_line(const char *tag, const char *name,
++			       const char *details)
 +{
 +	if (details && details[0])
-+		printf(HW_TEST_TAG_PASS " %-*s %s\n",
-+		       HW_TEST_LABEL_WIDTH, name, details);
++		printf("%s %-*s %s\n", tag, HW_TEST_LABEL_WIDTH, name, details);
 +	else
-+		printf(HW_TEST_TAG_PASS " %-*s\n",
-+		       HW_TEST_LABEL_WIDTH, name);
++		printf("%s %-*s\n", tag, HW_TEST_LABEL_WIDTH, name);
++}
++
++void hw_test_print_pass(const char *name, const char *details)
++{
++	hw_test_print_line(HW_TEST_TAG_PASS, name, details);
 +}
 +
 +void hw_test_print_fail(const char *name, const char *details)
 +{
-+	if (details && details[0])
-+		printf(HW_TEST_TAG_FAIL " %-*s %s\n",
-+		       HW_TEST_LABEL_WIDTH, name, details);
-+	else
-+		printf(HW_TEST_TAG_FAIL " %-*s\n",
-+		       HW_TEST_LABEL_WIDTH, name);
++	hw_test_print_line(HW_TEST_TAG_FAIL, name, details);
++}
++
++void hw_test_print_warn(const char *name, const char *details)
++{
++	hw_test_print_line(HW_TEST_TAG_WARN, name, details);
 +}
 +
 +void hw_tests_print_banner(const char *title)
@@ -129,42 +149,50 @@ index 00000000000..aa935db5439
 +	const char *tag = r.failed ? HW_TEST_TAG_SUMMARY_FAIL
 +				   : HW_TEST_TAG_SUMMARY_PASS;
 +
-+	printf("%s %-*s %u passed, %u failed\n\n",
-+	       tag, HW_TEST_LABEL_WIDTH, "Self-test",
-+	       r.passed, r.failed);
++	printf("%s %-*s %u passed, %u failed",
++	       tag, HW_TEST_LABEL_WIDTH, "Self-test", r.passed, r.failed);
++	if (r.warned)
++		printf(", %u warning%s", r.warned, r.warned == 1 ? "" : "s");
++	printf("\n\n");
 +}
 +
 +struct hw_test_result hw_tests_run(const struct hw_test *tests, size_t count)
 +{
-+	struct hw_test_result r = { 0, 0 };
++	struct hw_test_result r = { 0, 0, 0 };
 +	size_t i;
 +
 +	for (i = 0; i < count; i++) {
-+		struct hw_test_ctx ctx = { .details = { 0 }, .printed = 0 };
++		struct hw_test_ctx ctx = { .details = { 0 }, .printed = 0,
++					   .warned = 0 };
 +		int ret = tests[i].run(&ctx);
 +
-+		if (ret == 0)
++		if (ret == 0) {
 +			r.passed++;
-+		else
++			if (ctx.warned)
++				r.warned++;
++		} else {
 +			r.failed++;
++		}
 +
 +		if (ctx.printed)
 +			continue;
 +
-+		if (ret == 0)
-+			hw_test_print_pass(tests[i].name, ctx.details);
-+		else
++		if (ret != 0)
 +			hw_test_print_fail(tests[i].name, ctx.details);
++		else if (ctx.warned)
++			hw_test_print_warn(tests[i].name, ctx.details);
++		else
++			hw_test_print_pass(tests[i].name, ctx.details);
 +	}
 +
 +	return r;
 +}
 diff --git a/board/mono/gateway_dk/setup/hw_test.h b/board/mono/gateway_dk/setup/hw_test.h
 new file mode 100644
-index 00000000000..63804f642af
+index 00000000000..a2eab4eb375
 --- /dev/null
 +++ b/board/mono/gateway_dk/setup/hw_test.h
-@@ -0,0 +1,93 @@
+@@ -0,0 +1,105 @@
 +/* SPDX-License-Identifier: GPL-2.0+ */
 +/*
 + * Copyright 2025 Mono Technologies Inc.
@@ -172,10 +200,14 @@ index 00000000000..63804f642af
 + * Tiny harness for the on-board hardware self-tests run from
 + * misc_init_r(). Each test fills in ctx->details and returns 0 on
 + * pass, non-zero on fail; the harness prints one bracket-prefixed
-+ * "[ OK ] / [FAIL]" line per test. Tests that need richer per-item
-+ * output (e.g. per-rail voltage readouts) call the print helpers
-+ * below directly and set ctx->printed so the harness suppresses its
-+ * own summary line.
++ * "[ OK ] / [FAIL]" line per test. A test can also pass with a
++ * warning through hw_test_warn(): the line is tagged "[WARN]" and the
++ * summary counts it, but the run still passes, so the LED and the
++ * kernel see a pass. That is for permanent states worth seeing on
++ * every boot that nobody can act on, such as a damaged OTPMK. Tests
++ * that need richer per-item output (e.g. per-rail voltage readouts)
++ * call the print helpers below directly and set ctx->printed so the
++ * harness suppresses its own summary line.
 + */
 +
 +#ifndef HW_TEST_H
@@ -185,18 +217,20 @@ index 00000000000..63804f642af
 +#include <linux/stddef.h>
 +
 +/*
-+ * Display constants, kept here so styling tweaks are one-stop. The PASS
-+ * and FAIL tags are six visible columns wide regardless of the embedded
-+ * ANSI escape sequences; mind that when changing them.
++ * Display constants, kept here so styling tweaks are one-stop. The PASS,
++ * FAIL and WARN tags are six visible columns wide regardless of the
++ * embedded ANSI escape sequences; mind that when changing them.
 + */
 +#define HW_TEST_C_GREEN		"\033[32m"
 +#define HW_TEST_C_RED		"\033[31m"
++#define HW_TEST_C_AMBER	"\033[38;2;255;165;0m"	/* the recovery prompt's orange */
 +#define HW_TEST_C_BOLD		"\033[1m"
 +#define HW_TEST_C_DIM		"\033[2m"
 +#define HW_TEST_C_RESET		"\033[0m"
 +
 +#define HW_TEST_TAG_PASS	"[ " HW_TEST_C_GREEN "OK" HW_TEST_C_RESET " ]"
 +#define HW_TEST_TAG_FAIL	"[" HW_TEST_C_RED "FAIL" HW_TEST_C_RESET "]"
++#define HW_TEST_TAG_WARN	"[" HW_TEST_C_AMBER "WARN" HW_TEST_C_RESET "]"
 +
 +/*
 + * Distinct tags for the aggregate summary line so it visually carries
@@ -214,6 +248,7 @@ index 00000000000..63804f642af
 +struct hw_test_ctx {
 +	char details[HW_TEST_DETAILS_MAX];
 +	int printed;	/* set by tests that emit their own per-item lines */
++	int warned;	/* set by hw_test_warn(): passed, but worth a look */
 +};
 +
 +typedef int (*hw_test_fn)(struct hw_test_ctx *ctx);
@@ -223,10 +258,11 @@ index 00000000000..63804f642af
 +	hw_test_fn run;
 +};
 +
-+/* Aggregate counts returned by hw_tests_run() */
++/* Aggregate counts returned by hw_tests_run(); warned is a subset of passed */
 +struct hw_test_result {
 +	unsigned int passed;
 +	unsigned int failed;
++	unsigned int warned;
 +};
 +
 +/*
@@ -247,14 +283,18 @@ index 00000000000..63804f642af
 + */
 +void hw_test_print_pass(const char *name, const char *details);
 +void hw_test_print_fail(const char *name, const char *details);
++void hw_test_print_warn(const char *name, const char *details);
 +
 +/*
-+ * Helpers for tests to populate ctx->details. Both return -1 / 0
-+ * respectively so the test body can write `return hw_test_fail(ctx, ...);`.
++ * Helpers for tests to populate ctx->details. fail returns -1, pass and
++ * warn return 0, so the test body can write `return hw_test_fail(ctx, ...);`.
++ * warn also marks the context so the harness tags the line [WARN].
 + */
 +int hw_test_fail(struct hw_test_ctx *ctx, const char *fmt, ...)
 +	__attribute__((format(printf, 2, 3)));
 +int hw_test_pass(struct hw_test_ctx *ctx, const char *fmt, ...)
++	__attribute__((format(printf, 2, 3)));
++int hw_test_warn(struct hw_test_ctx *ctx, const char *fmt, ...)
 +	__attribute__((format(printf, 2, 3)));
 +
 +#endif /* HW_TEST_H */
