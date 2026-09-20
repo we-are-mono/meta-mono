@@ -3,6 +3,7 @@ FILESEXTRAPATHS:prepend := "${THISDIR}/files:"
 SRC_URI:append = " file://issue \
                    file://profile.d/10-recovery-prompt.sh \
                    file://vimrc \
+                   file://bash_aliases.sh \
                    "
 
 do_install:append() {
@@ -18,6 +19,10 @@ do_install:append() {
     # defaults.vim (E1187) on startup
     install -d ${D}${ROOT_HOME}
     install -m 0644 ${UNPACKDIR}/vimrc ${D}${ROOT_HOME}/.vimrc
+
+    # Bash aliases for faster DHCP commands, used most of the time
+    install -d ${D}${sysconfdir}/profile.d
+    install -m 0644 ${UNPACKDIR}/bash_aliases.sh ${D}${sysconfdir}/profile.d/bash_aliases.sh
 }
 
 hostname:pn-base-files = "recovery"
