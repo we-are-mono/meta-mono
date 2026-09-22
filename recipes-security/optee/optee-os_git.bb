@@ -74,9 +74,10 @@ OPTEE_PLATFORM = "ls-ls1046ardb"
 #
 # CFG_RPMB_TESTKEY is pinned off although it defaults off: on, it would key
 # every eMMC this image reaches with a key published in the OP-TEE source.
-# CFG_ENABLE_EMBEDDED_TESTS and CFG_PKCS11_TA default on in plat-ls/conf.mk;
-# the first links the self-test PTAs into the core, callable from the normal
-# world, and the second builds a TA nothing deploys.
+# CFG_ENABLE_EMBEDDED_TESTS defaults on in plat-ls/conf.mk and links the
+# self-test PTAs into the core, callable from the normal world.
+# CFG_BUILD_IN_TREE_TA=n skips the TAs under ta/ -- pkcs11, avb and the rest
+# -- which nothing deploys and which would be signed with the development key.
 #
 # CFG_TEE_CORE_DEBUG stays at its default, y, so assertions stay in: an
 # internal inconsistency panics the TEE rather than carrying on.
@@ -92,7 +93,7 @@ EXTRA_OEMAKE = " \
     CFG_RPMB_WRITE_KEY=n \
     CFG_RPMB_TESTKEY=n \
     CFG_ENABLE_EMBEDDED_TESTS=n \
-    CFG_PKCS11_TA=n \
+    CFG_BUILD_IN_TREE_TA=n \
     CFG_TEE_CORE_LOG_LEVEL=1 \
     CROSS_COMPILE=${HOST_PREFIX} \
     CROSS_COMPILE64=${HOST_PREFIX} \
