@@ -42,28 +42,29 @@ trusted and secure states, which only a ROM-validated boot reaches, so
 
 cmd_otpmk.c adds the otpmk command. 'otpmk gen' draws 256 bits from the
 CAAM RNG, Hamming encodes them and loads the fuse mirror registers
-without the key ever being printed; 'otpmk commit' programs the mirrors
-into the fuses. The LS1046A data sheet (Table 6 note 2) allows nothing
-but programming while TA_PROG_SFP is above GND, fuse block reads
-included, so every check runs in gen, with the pin at GND. gen refuses
-when the OTPMK is already programmed, the block is write-protected or
-reports a Hamming error, the mirrors set ITS with a blank SRK hash, or
-the RNG returns a key with a blank or repeated half. After loading it
-confirms the key through SNVS_HPSR, requires SVHESR clear and every
-other mirror word unchanged, and lists the non-zero words PROGFB will
-burn with the key. commit reads nothing: it refuses only when gen has
-not loaded a key in this session, and leaves the verdict to the next
-boot's self-test. gen is refused once a key is loaded or a PROGFB has
-been issued, so it never reads the fuse block after the operator has
-been told to raise the pin. The SFP and SNVS register definitions both
-files use live in security_fuses.h.
+without the key ever being printed, then runs one more RNG job so the
+driver's buffer does not keep the key's last 16 bytes; 'otpmk commit'
+programs the mirrors into the fuses. The LS1046A data sheet (Table 6
+note 2) allows nothing but programming while TA_PROG_SFP is above GND,
+fuse block reads included, so every check runs in gen, with the pin at
+GND. gen refuses when the OTPMK is already programmed, the block is
+write-protected or reports a Hamming error, the mirrors set ITS with a
+blank SRK hash, or the RNG returns a key with a blank or repeated half.
+After loading it confirms the key through SNVS_HPSR, requires SVHESR
+clear and every other mirror word unchanged, and lists the non-zero
+words PROGFB will burn with the key. commit reads nothing: it refuses
+only when gen has not loaded a key in this session, and leaves the
+verdict to the next boot's self-test. gen is refused once a key is
+loaded or a PROGFB has been issued, so it never reads the fuse block
+after the operator has been told to raise the pin. The SFP and SNVS
+register definitions both files use live in security_fuses.h.
 
 Upstream-Status: Inappropriate [product-specific]
 
 Signed-off-by: Tomaz Zaman <tomaz@mono.si>
 ---
  board/mono/gateway_dk/setup/clock_gen.c       |  67 +++
- board/mono/gateway_dk/setup/cmd_otpmk.c       | 396 ++++++++++++++++++
+ board/mono/gateway_dk/setup/cmd_otpmk.c       | 405 ++++++++++++++++++
  board/mono/gateway_dk/setup/ddr_sanity.c      |  73 ++++
  board/mono/gateway_dk/setup/fan_controller.c  |  89 ++++
  board/mono/gateway_dk/setup/led_controller.c  | 108 +++++
@@ -72,10 +73,10 @@ Signed-off-by: Tomaz Zaman <tomaz@mono.si>
  board/mono/gateway_dk/setup/security_fuses.c  |  93 ++++
  board/mono/gateway_dk/setup/security_fuses.h  |  56 +++
  board/mono/gateway_dk/setup/sfp_i2c_mux.c     | 135 ++++++
- board/mono/gateway_dk/setup/temp_sensors.c    |  70 ++++
+ board/mono/gateway_dk/setup/temp_sensors.c    |  70 +++
  .../mono/gateway_dk/setup/typec_controller.c  |  49 +++
  board/mono/gateway_dk/setup/voltage_sensors.c |  97 +++++
- 13 files changed, 1324 insertions(+)
+ 13 files changed, 1333 insertions(+)
  create mode 100644 board/mono/gateway_dk/setup/clock_gen.c
  create mode 100644 board/mono/gateway_dk/setup/cmd_otpmk.c
  create mode 100644 board/mono/gateway_dk/setup/ddr_sanity.c
@@ -165,10 +166,10 @@ index 00000000000..836930d1dc1
 +}
 diff --git a/board/mono/gateway_dk/setup/cmd_otpmk.c b/board/mono/gateway_dk/setup/cmd_otpmk.c
 new file mode 100644
-index 00000000000..0fc487d71d9
+index 00000000000..ee2fcb497f9
 --- /dev/null
 +++ b/board/mono/gateway_dk/setup/cmd_otpmk.c
-@@ -0,0 +1,396 @@
+@@ -0,0 +1,405 @@
 +// SPDX-License-Identifier: GPL-2.0+
 +/*
 + * Copyright 2025 Mono Technologies Inc.
@@ -320,6 +321,7 @@ index 00000000000..0fc487d71d9
 +{
 +	u32 before[SFP_NUM_WORDS], after[SFP_NUM_WORDS];
 +	u32 otpmk[OTPMK_NUM_WORDS];
++	u8 scratch[16];
 +	u32 hpsr, svhesr, ospr0;
 +	struct udevice *dev;
 +	int ret, i;
@@ -402,6 +404,14 @@ index 00000000000..0fc487d71d9
 +
 +	memset(otpmk, 0, sizeof(otpmk));
 +	ret = dm_rng_read(dev, otpmk, sizeof(otpmk));
++
++	/*
++	 * caam-rng keeps each job's output in a buffer of its own, which now
++	 * holds the key's last 16 bytes. Overwrite it with a job nobody uses.
++	 */
++	dm_rng_read(dev, scratch, sizeof(scratch));
++	memset(scratch, 0, sizeof(scratch));
++
 +	if (ret) {
 +		printf("otpmk: RNG read failed (err %d)\n", ret);
 +		goto out;

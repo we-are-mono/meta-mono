@@ -146,7 +146,7 @@ index 976fba4de57..185bd0f1a74 100644
  obj-y += cmd_otpmk.o
 +obj-y += sfp_led.o
 diff --git a/board/mono/gateway_dk/setup/cmd_otpmk.c b/board/mono/gateway_dk/setup/cmd_otpmk.c
-index 0fc487d71d9..2566fa9af19 100644
+index ee2fcb497f9..da9b19e1561 100644
 --- a/board/mono/gateway_dk/setup/cmd_otpmk.c
 +++ b/board/mono/gateway_dk/setup/cmd_otpmk.c
 @@ -36,6 +36,8 @@
@@ -158,7 +158,7 @@ index 0fc487d71d9..2566fa9af19 100644
  /*
   * What 'otpmk gen' left behind for 'otpmk commit': a key loaded and checked
   * in this session, and the OSPR0 value commit writes back to trigger PROGFB.
-@@ -289,6 +291,14 @@ static int otpmk_generate(void)
+@@ -298,6 +300,14 @@ static int otpmk_generate(void)
  
  	otpmk_ospr0 = after[OSPR0_WORD];
  	otpmk_loaded = true;
@@ -173,7 +173,7 @@ index 0fc487d71d9..2566fa9af19 100644
  	printf("otpmk: key generated and loaded (SNVS_HPSR 0x%08x, SVHESR 0x%08x)\n",
  	       hpsr, svhesr);
  	printf("otpmk: PROGFB also burns the other mirror words; non-zero now:");
-@@ -296,6 +306,7 @@ static int otpmk_generate(void)
+@@ -305,6 +315,7 @@ static int otpmk_generate(void)
  		if (after[i])
  			printf(" %d=0x%08x", i, after[i]);
  	printf("\n");
