@@ -19,6 +19,7 @@ SRC_URI = "git://github.com/nxp-qoriq/u-boot;protocol=https;nobranch=1 \
            file://0006-gateway-dk-wire-into-upstream-tree.patch \
            file://0007-gateway-dk-derive-SFP-modes-from-SerDes-RCW.patch \
            file://0008-gateway-dk-light-the-SFP-port-LEDs.patch \
+           file://0009-crypto-fsl-rng-fail-a-read-when-CAAM-rejects-the-job.patch \
            file://mono-gateway-dk.dts \
            file://mono_gateway_dk_defconfig \
            file://environment.txt \

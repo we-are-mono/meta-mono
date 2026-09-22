@@ -1,0 +1,44 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Tomaz Zaman <tomaz@mono.si>
+Date: Tue, 22 Sep 2026 21:09:41 +0200
+Subject: [PATCH] crypto: fsl: rng: fail a read when CAAM rejects the job
+
+run_descriptor_jr() returns a negative value only when the job could
+not be queued or dequeued. A job CAAM ran and rejected -- an entropy
+test failure in the RNG, say -- comes back as the job's status word,
+which is always positive: its source field sits in bits 31:28 and is
+never above 7. caam_rng_read_one() tested for ret < 0, so such a job
+counted as a success and the caller got priv->data unchanged: zeros
+from the allocation on the first read, the previous block after that.
+
+Fail the read on any non-zero return.
+
+Upstream-Status: Pending
+
+Signed-off-by: Tomaz Zaman <tomaz@mono.si>
+---
+ drivers/crypto/fsl/rng.c | 7 ++++++-
+ 1 file changed, 6 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/crypto/fsl/rng.c b/drivers/crypto/fsl/rng.c
+index 06f37a8b4de..9f981339090 100644
+--- a/drivers/crypto/fsl/rng.c
++++ b/drivers/crypto/fsl/rng.c
+@@ -43,8 +43,13 @@ static int caam_rng_read_one(struct caam_rng_priv *priv)
+ 
+ 	caam_init_desc(priv);
+ 
++	/*
++	 * A job CAAM rejects comes back as its positive status word, not as
++	 * a negative errno, and leaves priv->data holding whatever the last
++	 * good job wrote.
++	 */
+ 	ret = run_descriptor_jr(priv->desc);
+-	if (ret < 0)
++	if (ret)
+ 		return -EIO;
+ 
+ 	invalidate_dcache_range((unsigned long)priv->data,
+-- 
+2.47.3
+

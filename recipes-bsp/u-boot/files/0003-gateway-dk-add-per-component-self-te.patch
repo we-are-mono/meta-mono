@@ -45,8 +45,9 @@ CAAM RNG, Hamming encodes them and loads the fuse mirror registers
 without the key ever being printed; 'otpmk commit' programs the mirrors
 into the fuses. Both sides of the irreversible step are checked: gen
 refuses when the OTPMK is already programmed, the block is
-write-protected or it reports a Hamming error, and confirms its load
-through SNVS_HPSR; commit refuses unless gen loaded a key in this
+write-protected or it reports a Hamming error, or the RNG returns a key
+with a blank or repeated half, and confirms its load through
+SNVS_HPSR; commit refuses unless gen loaded a key in this
 session and no other mirror word has changed since. Neither reads the
 fuse block while TA_PROG_SFP may be above GND, which the data sheet
 forbids: gen is refused once a key is loaded or a PROGFB has been issued
@@ -59,10 +60,10 @@ Upstream-Status: Inappropriate [product-specific]
 Signed-off-by: Tomaz Zaman <tomaz@mono.si>
 ---
  board/mono/gateway_dk/setup/clock_gen.c       |  67 ++++
- board/mono/gateway_dk/setup/cmd_otpmk.c       | 347 ++++++++++++++++++
+ board/mono/gateway_dk/setup/cmd_otpmk.c       | 378 ++++++++++++++++++
  board/mono/gateway_dk/setup/ddr_sanity.c      |  73 ++++
  board/mono/gateway_dk/setup/fan_controller.c  |  89 +++++
- board/mono/gateway_dk/setup/led_controller.c  | 108 ++++++
+ board/mono/gateway_dk/setup/led_controller.c  | 108 +++++
  board/mono/gateway_dk/setup/retimer.c         |  36 ++
  board/mono/gateway_dk/setup/rtc.c             |  55 +++
  board/mono/gateway_dk/setup/security_fuses.c  |  93 +++++
@@ -71,7 +72,7 @@ Signed-off-by: Tomaz Zaman <tomaz@mono.si>
  board/mono/gateway_dk/setup/temp_sensors.c    |  70 ++++
  .../mono/gateway_dk/setup/typec_controller.c  |  49 +++
  board/mono/gateway_dk/setup/voltage_sensors.c |  97 +++++
- 13 files changed, 1275 insertions(+)
+ 13 files changed, 1306 insertions(+)
  create mode 100644 board/mono/gateway_dk/setup/clock_gen.c
  create mode 100644 board/mono/gateway_dk/setup/cmd_otpmk.c
  create mode 100644 board/mono/gateway_dk/setup/ddr_sanity.c
@@ -161,10 +162,10 @@ index 00000000000..836930d1dc1
 +}
 diff --git a/board/mono/gateway_dk/setup/cmd_otpmk.c b/board/mono/gateway_dk/setup/cmd_otpmk.c
 new file mode 100644
-index 00000000000..b1d070de051
+index 00000000000..e79c9ae0c25
 --- /dev/null
 +++ b/board/mono/gateway_dk/setup/cmd_otpmk.c
-@@ -0,0 +1,347 @@
+@@ -0,0 +1,378 @@
 +// SPDX-License-Identifier: GPL-2.0+
 +/*
 + * Copyright 2025 Mono Technologies Inc.
@@ -275,6 +276,31 @@ index 00000000000..b1d070de051
 +	otpmk[0] ^= parity_bit;
 +}
 +
++/*
++ * The RNG fills the key one 16-byte job at a time. A half that is all zeros
++ * or all ones, or a second half equal to the first, is what a job that
++ * failed without saying so leaves behind; 256 random bits look like that
++ * with probability 2^-126.
++ */
++static bool otpmk_key_plausible(const u32 *key)
++{
++	const u32 *half[2] = { key, key + OTPMK_NUM_WORDS / 2 };
++	int h, i;
++
++	for (h = 0; h < 2; h++) {
++		u32 or = 0, and = ~0U;
++
++		for (i = 0; i < OTPMK_NUM_WORDS / 2; i++) {
++			or |= half[h][i];
++			and &= half[h][i];
++		}
++		if (!or || and == ~0U)
++			return false;
++	}
++
++	return memcmp(half[0], half[1], OTPMK_NUM_WORDS / 2 * sizeof(u32)) != 0;
++}
++
 +static int otpmk_generate(void)
 +{
 +	u32 otpmk[OTPMK_NUM_WORDS];
@@ -349,6 +375,12 @@ index 00000000000..b1d070de051
 +	ret = dm_rng_read(dev, otpmk, sizeof(otpmk));
 +	if (ret) {
 +		printf("otpmk: RNG read failed (err %d)\n", ret);
++		goto out;
++	}
++
++	if (!otpmk_key_plausible(otpmk)) {
++		printf("otpmk: refusing, the RNG returned a key with a blank or repeated half\n");
++		ret = -EIO;
 +		goto out;
 +	}
 +
