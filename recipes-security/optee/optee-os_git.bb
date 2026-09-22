@@ -124,6 +124,17 @@ do_compile() {
 }
 do_compile[cleandirs] = "${B}"
 
+# A build with CFG_RPMB_WRITE_KEY=y writes the eMMC's one-shot key, and must
+# only ever do it behind plat_rpmb_key_is_ready(). The linker drops the gate
+# whenever nothing calls it -- as in the fleet build, or after an LF bump that
+# stops upstream calling the hook -- so refuse such a build without it.
+do_compile:append() {
+    if grep -q '^CFG_RPMB_WRITE_KEY=y$' ${B}/conf.mk; then
+        ${NM} ${B}/core/tee.elf | grep -qw plat_rpmb_key_is_ready || \
+            bbfatal "CFG_RPMB_WRITE_KEY=y, but plat_rpmb_key_is_ready() is not linked into tee.elf"
+    fi
+}
+
 do_install[noexec] = "1"
 
 # BL32 must be headerless. The Layerscape platform never calls
