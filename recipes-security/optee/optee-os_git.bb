@@ -44,6 +44,13 @@ OPTEE_PLATFORM = "ls-ls1046ardb"
 # force when its files were sealed and its one-shot eMMC RPMB key was written.
 # Mono has no fielded units, so take the real derivation while it is free.
 #
+# The storage format is pinned for the same reason. At its default, y,
+# CFG_REE_FS_HTREE_HASH_SIZE_COMPAT authenticates only 16 of the 32 bytes of
+# the REE FS root hash, a layout kept for files written by old releases, and
+# CFG_REE_FS_INTEGRITY_RPMB, which anchors that hash in RPMB, is inherited
+# from CFG_RPMB_FS. Either default moving in a later release would leave
+# existing files unreadable, and nothing is sealed yet.
+#
 # CFG_CAAM_INC_PRIBLOB raises CAAM's PRIBLOB field once OP-TEE has read the
 # master key blob, leaving nothing that runs afterwards able to read it.
 #
@@ -78,6 +85,8 @@ EXTRA_OEMAKE = " \
     CFG_ARM64_core=y \
     CFG_INSECURE=n \
     CFG_CORE_HUK_SUBKEY_COMPAT=n \
+    CFG_REE_FS_HTREE_HASH_SIZE_COMPAT=n \
+    CFG_REE_FS_INTEGRITY_RPMB=y \
     CFG_CAAM_INC_PRIBLOB=y \
     CFG_RPMB_FS=y \
     CFG_RPMB_WRITE_KEY=n \
