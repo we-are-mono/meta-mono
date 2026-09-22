@@ -92,13 +92,15 @@ EXTRA_OEMAKE = " \
     HOST_PREFIX=${HOST_PREFIX} \
     COMPILER=gcc \
     LIBGCC_LOCATE_CFLAGS='${HOST_CC_ARCH}${TOOLCHAIN_OPTIONS}' \
-    AFLAGS='${CFLAGS}' \
     ta-targets=ta_arm64 \
     O=${B} \
     V=1 \
 "
 
-# The OP-TEE build drives its own toolchain flags; inheriting OE's breaks it.
+# The OP-TEE build drives its own toolchain flags. OE's would only add a
+# second -O2 and -g ahead of OP-TEE's own -Os and -g3, and prefix maps that
+# stretch every assertion's file name to a /usr/src/debug path.
+CFLAGS[unexport] = "1"
 LDFLAGS[unexport] = "1"
 CPPFLAGS[unexport] = "1"
 AS[unexport] = "1"
