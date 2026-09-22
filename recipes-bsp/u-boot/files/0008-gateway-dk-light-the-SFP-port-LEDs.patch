@@ -53,15 +53,21 @@ so program_eeprom's raw register write of WP was undone within 100 ms of
 its final lock, leaving the EEPROM writable until reset -- the kernel
 included. WP now goes through the driver too.
 
+otpmk gen stops the poll once it has loaded a key. TA_PROG_SFP goes up
+next, and the LS1046A data sheet (Table 6 note 2) allows nothing but
+fuse programming until it is back at GND, while the poll reads MDIO and
+drives GPIO lines ten times a second.
+
 Upstream-Status: Inappropriate [product-specific]
 
 Signed-off-by: Tomaz Zaman <tomaz@mono.si>
 ---
- board/mono/gateway_dk/gateway_dk.c    |  30 +++
- board/mono/gateway_dk/setup/Makefile  |   1 +
- board/mono/gateway_dk/setup/eeprom.c  |  74 ++++---
- board/mono/gateway_dk/setup/sfp_led.c | 289 ++++++++++++++++++++++++++
- 4 files changed, 363 insertions(+), 31 deletions(-)
+ board/mono/gateway_dk/gateway_dk.c      |  30 +++
+ board/mono/gateway_dk/setup/Makefile    |   1 +
+ board/mono/gateway_dk/setup/cmd_otpmk.c |  11 +
+ board/mono/gateway_dk/setup/eeprom.c    |  74 +++---
+ board/mono/gateway_dk/setup/sfp_led.c   | 289 ++++++++++++++++++++++++
+ 5 files changed, 374 insertions(+), 31 deletions(-)
  create mode 100644 board/mono/gateway_dk/setup/sfp_led.c
 
 diff --git a/board/mono/gateway_dk/gateway_dk.c b/board/mono/gateway_dk/gateway_dk.c
@@ -139,6 +145,42 @@ index 976fba4de57..185bd0f1a74 100644
  obj-y += security_fuses.o
  obj-y += cmd_otpmk.o
 +obj-y += sfp_led.o
+diff --git a/board/mono/gateway_dk/setup/cmd_otpmk.c b/board/mono/gateway_dk/setup/cmd_otpmk.c
+index 0fc487d71d9..2566fa9af19 100644
+--- a/board/mono/gateway_dk/setup/cmd_otpmk.c
++++ b/board/mono/gateway_dk/setup/cmd_otpmk.c
+@@ -36,6 +36,8 @@
+ #define SRKH_WORD0		21
+ #define OSPR0_WORD		0
+ 
++void mono_sfp_led_stop(void);
++
+ /*
+  * What 'otpmk gen' left behind for 'otpmk commit': a key loaded and checked
+  * in this session, and the OSPR0 value commit writes back to trigger PROGFB.
+@@ -289,6 +291,14 @@ static int otpmk_generate(void)
+ 
+ 	otpmk_ospr0 = after[OSPR0_WORD];
+ 	otpmk_loaded = true;
++
++	/*
++	 * The pin goes up next, and the data sheet allows nothing but
++	 * programming until it is back at GND. The SFP port LED poll talks to
++	 * MDIO and GPIO ten times a second, so it stops here, for the rest of
++	 * the session.
++	 */
++	mono_sfp_led_stop();
+ 	printf("otpmk: key generated and loaded (SNVS_HPSR 0x%08x, SVHESR 0x%08x)\n",
+ 	       hpsr, svhesr);
+ 	printf("otpmk: PROGFB also burns the other mirror words; non-zero now:");
+@@ -296,6 +306,7 @@ static int otpmk_generate(void)
+ 		if (after[i])
+ 			printf(" %d=0x%08x", i, after[i]);
+ 	printf("\n");
++	printf("otpmk: SFP port LEDs stopped until reset.\n");
+ 	printf("otpmk: nothing is committed yet, and ANY reset discards it.\n");
+ 	printf("otpmk: to burn it: apply 1.8 V to TA_PROG_SFP now, then run 'otpmk commit'.\n");
+ 
 diff --git a/board/mono/gateway_dk/setup/eeprom.c b/board/mono/gateway_dk/setup/eeprom.c
 index deb58f6ce7c..425aea1f988 100644
 --- a/board/mono/gateway_dk/setup/eeprom.c
