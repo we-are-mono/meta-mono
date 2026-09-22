@@ -1,7 +1,7 @@
-From a6b5409dd2684329f477ea88cdafccc5dd3f45c6 Mon Sep 17 00:00:00 2001
+From 91f543ea8c11833b813f378574417969d3d4c145 Mon Sep 17 00:00:00 2001
 From: Tomaz Zaman <tomaz@mono.si>
 Date: Sun, 19 Apr 2026 15:24:44 +0200
-Subject: [PATCH 5/7] configs: add Gateway-DK board header
+Subject: [PATCH 5/8] configs: add Gateway-DK board header
 
 Adds include/configs/gateway_dk.h, the compile-time defaults for the
 Gateway-DK target: memory map, environment variable layout, default boot
@@ -13,7 +13,7 @@ Upstream-Status: Inappropriate [product-specific]
 
 Signed-off-by: Tomaz Zaman <tomaz@mono.si>
 ---
- include/configs/gateway_dk.h | 53 +++++++++++++++++++++++++++++++++++++++++++++++++++++
+ include/configs/gateway_dk.h | 53 ++++++++++++++++++++++++++++++++++++
  1 file changed, 53 insertions(+)
  create mode 100644 include/configs/gateway_dk.h
 

@@ -1,0 +1,315 @@
+From fc569889fb73c3f28ff6f7f299e970737c1ad94f Mon Sep 17 00:00:00 2001
+From: Tomaz Zaman <tomaz@mono.si>
+Date: Tue, 22 Sep 2026 12:27:32 +0200
+Subject: [PATCH 8/8] board: gateway_dk: light the SFP+ port LEDs
+
+The port LEDs stayed dark until Linux took over, which left the panel
+blank for every second spent at the U-Boot prompt -- exactly where an
+operator is looking for a link.
+
+Read the same three things the recovery kernel's sfp-led driver shows:
+MOD_DEF0 for module presence, the MAC's XFI PCS for link, and the MAC's
+frame counters for activity. None of them goes near i2c, so a module
+holding SDA low cannot darken its own port or its neighbour's. Polling
+runs as a cyclic function, which keeps the LEDs live at the prompt and
+through the boot delay.
+
+Taking activity from the MAC rather than from U-Boot's own transfers
+means the blink follows whatever the wire delivers, including frames
+that arrive while nothing is draining them.
+
+The 10G ports are fixed-link, so nothing configures the XFI PCS and it
+reports no link however good the fibre is until its MAC is opened.
+Open both here. That adds only the opens: FMan and its microcode are
+brought up on every boot regardless, by the enumeration behind the
+"Net:" banner, and this only moves that a few milliseconds earlier. A
+port with an empty cage opens just as readily, since the path touches
+neither i2c nor MOD_DEF0 and phylib takes link from the fixed-link node
+rather than waiting for autonegotiation, so a missing module cannot
+stall the boot.
+
+The link bit latches low, so every read is doubled -- the first read
+after a drop returns the stale state and the second the live one.
+
+Upstream-Status: Inappropriate [product-specific]
+
+Signed-off-by: Tomaz Zaman <tomaz@mono.si>
+---
+ board/mono/gateway_dk/gateway_dk.c    |   7 +
+ board/mono/gateway_dk/setup/Makefile  |   1 +
+ board/mono/gateway_dk/setup/sfp_led.c | 229 ++++++++++++++++++++++++++
+ 3 files changed, 237 insertions(+)
+ create mode 100644 board/mono/gateway_dk/setup/sfp_led.c
+
+diff --git a/board/mono/gateway_dk/gateway_dk.c b/board/mono/gateway_dk/gateway_dk.c
+index a52a2a34669..72b296ca9ab 100644
+--- a/board/mono/gateway_dk/gateway_dk.c
++++ b/board/mono/gateway_dk/gateway_dk.c
+@@ -48,6 +48,7 @@ int test_tmp431_temperatures(struct hw_test_ctx *ctx);
+ int test_lp5810a_led(struct hw_test_ctx *ctx);
+ int test_security_fuses(struct hw_test_ctx *ctx);
+ void lp5810a_set_status(int any_test_failed);
++void mono_sfp_led_init(void);
+ 
+ /*
+  * Pin-mux workaround for erratum A-010539, mirroring upstream
+@@ -310,6 +311,12 @@ int misc_init_r(void)
+ 
+ 	hw_tests_print_summary(r);
+ 
++	/*
++	 * After the retimer, whose configuration the XFI link depends on, and
++	 * after the summary, because bringing the MACs up prints as it goes.
++	 */
++	mono_sfp_led_init();
++
+ 	return 0;
+ }
+ #endif
+diff --git a/board/mono/gateway_dk/setup/Makefile b/board/mono/gateway_dk/setup/Makefile
+index 976fba4de57..185bd0f1a74 100644
+--- a/board/mono/gateway_dk/setup/Makefile
++++ b/board/mono/gateway_dk/setup/Makefile
+@@ -18,3 +18,4 @@ obj-y += temp_sensors.o
+ obj-y += sfp_i2c_mux.o
+ obj-y += security_fuses.o
+ obj-y += cmd_otpmk.o
++obj-y += sfp_led.o
+diff --git a/board/mono/gateway_dk/setup/sfp_led.c b/board/mono/gateway_dk/setup/sfp_led.c
+new file mode 100644
+index 00000000000..40c9675c92b
+--- /dev/null
++++ b/board/mono/gateway_dk/setup/sfp_led.c
+@@ -0,0 +1,229 @@
++// SPDX-License-Identifier: GPL-2.0+
++/*
++ * SFP+ port LEDs.
++ *
++ * Module presence comes from the cage's MOD_DEF0 line, link state from the
++ * MAC's XFI PCS and activity from the MAC's own frame counters -- the same
++ * three things the recovery kernel's sfp-led driver shows. None of them goes
++ * near i2c, deliberately: a module caught mid-transfer by a reset holds SDA
++ * low until it loses power, and a port whose module has done that must still
++ * light its LEDs -- as must its neighbour, which shares the bus.
++ *
++ * No module: both LEDs off. Module without link: solid orange. Link up:
++ * green, with orange blinking on frames. The counters sit in the MAC, so the
++ * blink follows everything the wire delivers rather than only the transfers
++ * U-Boot itself started.
++ *
++ * The 10G ports are fixed-link, so nothing configures the XFI PCS and it
++ * reports no link however good the fibre is until its MAC is opened. Both
++ * MACs are therefore opened here, which costs no more than the opens
++ * themselves: FMan and its microcode come up on every boot regardless, when
++ * the ethernet devices are enumerated.
++ *
++ * Copyright 2026 Mono Technologies Inc.
++ */
++
++#include <config.h>
++#include <cyclic.h>
++#include <dm.h>
++#include <errno.h>
++#include <fsl_memac.h>
++#include <miiphy.h>
++#include <net.h>
++#include <stdio.h>
++#include <asm/gpio.h>
++#include <asm/io.h>
++#include <dm/ofnode.h>
++#include <linux/mdio.h>
++
++#define SFP_LED_POLL_INTERVAL_US	100000
++#define SFP_LED_MAX_PORTS		2
++
++/* Each XFI PCS sits alone on its MAC's internal MDIO bus. */
++#define SFP_LED_PCS_ADDR		0
++
++struct sfp_led_port {
++	const char *eth_name;
++	struct gpio_desc present;
++	struct gpio_desc link_led;
++	struct gpio_desc activity_led;
++	struct udevice *pcs;
++	struct memac *mac;
++	u32 last_frames;
++	bool activity_on;
++	bool had_link;
++};
++
++static struct sfp_led_port sfp_led_ports[SFP_LED_MAX_PORTS];
++static int sfp_led_count;
++static struct cyclic_info sfp_led_cyclic;
++
++static int sfp_led_setup_port(ofnode node, struct sfp_led_port *port)
++{
++	const char *pcs_name;
++	int ret;
++
++	port->eth_name = ofnode_read_string(node, "mono,eth-name");
++	pcs_name = ofnode_read_string(node, "mono,pcs-name");
++	if (!port->eth_name || !pcs_name)
++		return -EINVAL;
++
++	/*
++	 * MOD_DEF0 is asserted by the module itself and pulled up when the
++	 * cage is empty. The dts carries the polarity, so this reads
++	 * logically.
++	 */
++	ret = gpio_request_by_name_nodev(node, "mod-def0-gpios", 0,
++					 &port->present, GPIOD_IS_IN);
++	if (ret)
++		return ret;
++
++	ret = gpio_request_by_name_nodev(node, "link-gpios", 0,
++					 &port->link_led, GPIOD_IS_OUT);
++	if (ret)
++		return ret;
++
++	ret = gpio_request_by_name_nodev(node, "activity-gpios", 0,
++					 &port->activity_led, GPIOD_IS_OUT);
++	if (ret)
++		return ret;
++
++	return uclass_get_device_by_name(UCLASS_MDIO, pcs_name, &port->pcs);
++}
++
++/*
++ * Opening the MAC is what takes the XFI PCS out of its reset state, and it
++ * leaves the MAC counting frames, which is where the activity blink comes
++ * from. A port with an empty cage opens just as readily: the path touches
++ * neither i2c nor MOD_DEF0, and a fixed-link port reports link to phylib
++ * without waiting for autonegotiation, so nothing here can stall on a
++ * missing module.
++ */
++static void sfp_led_start_mac(struct sfp_led_port *port)
++{
++	struct udevice *dev;
++	fdt_addr_t addr;
++	int ret;
++
++	ret = uclass_get_device_by_name(UCLASS_ETH, port->eth_name, &dev);
++	if (!ret)
++		ret = eth_start_udev(dev);
++	if (ret) {
++		printf("sfp-led: %s did not start (%d), link will read down\n",
++		       port->eth_name, ret);
++		return;
++	}
++
++	addr = ofnode_get_addr(dev_ofnode(dev));
++	if (addr == FDT_ADDR_T_NONE)
++		printf("sfp-led: %s has no address, activity will not blink\n",
++		       port->eth_name);
++	else
++		port->mac = (struct memac *)(uintptr_t)addr;
++}
++
++/*
++ * Only the lower halves of the two counters, and only ever compared against
++ * the previous sample: the halves cannot be read as one, and a wrap costs at
++ * worst a single missed blink.
++ */
++static u32 sfp_led_frames(struct sfp_led_port *port)
++{
++	if (!port->mac)
++		return 0;
++
++	return in_be32(&port->mac->rx_frame_l) + in_be32(&port->mac->tx_frame_l);
++}
++
++static bool sfp_led_link(struct sfp_led_port *port)
++{
++	int status;
++
++	/*
++	 * The link indication latches low, so the first read after any drop
++	 * returns the stale state and the second returns the live one.
++	 */
++	status = dm_mdio_read(port->pcs, SFP_LED_PCS_ADDR, MDIO_MMD_PCS,
++			      MDIO_STAT1);
++	if (status >= 0 && status != 0xffff)
++		status = dm_mdio_read(port->pcs, SFP_LED_PCS_ADDR, MDIO_MMD_PCS,
++				      MDIO_STAT1);
++
++	/* The FMan MDIO driver returns all ones for an unanswered read. */
++	if (status < 0 || status == 0xffff)
++		return false;
++
++	return !!(status & MDIO_STAT1_LSTATUS);
++}
++
++static void sfp_led_update(struct sfp_led_port *port, bool present, bool link)
++{
++	u32 frames;
++
++	if (!link) {
++		/* Solid, so a module that cannot link is still visible. */
++		port->activity_on = present;
++		port->had_link = false;
++	} else {
++		frames = sfp_led_frames(port);
++
++		if (!port->had_link)
++			port->activity_on = false; /* Old traffic is not new. */
++		else if (frames != port->last_frames)
++			port->activity_on = !port->activity_on;
++		else
++			port->activity_on = false;
++
++		port->last_frames = frames;
++		port->had_link = true;
++	}
++
++	dm_gpio_set_value(&port->link_led, link);
++	dm_gpio_set_value(&port->activity_led, port->activity_on);
++}
++
++static void sfp_led_poll(struct cyclic_info *c)
++{
++	int i;
++
++	for (i = 0; i < sfp_led_count; i++) {
++		struct sfp_led_port *port = &sfp_led_ports[i];
++		bool present = dm_gpio_get_value(&port->present) > 0;
++
++		sfp_led_update(port, present, present && sfp_led_link(port));
++	}
++}
++
++void mono_sfp_led_init(void)
++{
++	ofnode parent, node;
++	int ret;
++
++	parent = ofnode_by_compatible(ofnode_null(), "mono,sfp-led");
++	if (!ofnode_valid(parent))
++		return;
++
++	ofnode_for_each_subnode(node, parent) {
++		struct sfp_led_port *port;
++
++		if (sfp_led_count == SFP_LED_MAX_PORTS)
++			break;
++
++		port = &sfp_led_ports[sfp_led_count];
++		ret = sfp_led_setup_port(node, port);
++		if (ret) {
++			printf("sfp-led: %s unusable (%d)\n",
++			       ofnode_get_name(node), ret);
++			continue;
++		}
++
++		sfp_led_start_mac(port);
++		sfp_led_count++;
++	}
++
++	if (!sfp_led_count)
++		return;
++
++	cyclic_register(&sfp_led_cyclic, sfp_led_poll,
++			SFP_LED_POLL_INTERVAL_US, "sfp-led");
++}
+-- 
+2.47.3
+

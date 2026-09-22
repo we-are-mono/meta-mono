@@ -1,7 +1,7 @@
-From 0b69b3463e9e75918ec82247b56d971b513ba72c Mon Sep 17 00:00:00 2001
+From 337afbeca111493c79a3bb9d0297bdd1094e520e Mon Sep 17 00:00:00 2001
 From: Tomaz Zaman <tomaz@mono.si>
 Date: Sun, 19 Apr 2026 15:25:02 +0200
-Subject: [PATCH 6/7] arm, mtd, misc: wire Gateway-DK into the upstream tree
+Subject: [PATCH 6/8] arm, mtd, misc: wire Gateway-DK into the upstream tree
 
 Adds the board to arch/arm/Kconfig and the dts Makefile, and adds the
 board's SPI-NOR part to spi-nor-ids.c.
@@ -28,9 +28,9 @@ before the one burn that cannot be repeated. Neither the boot ROM nor
 TF-A's own fuse provisioning ever rewrite SFPCR; the reset value is
 what NXP programs fuses with.
 
-Both ls2_sfp hunks are upstreamable on their own and are only carried
-here to keep the series at seven patches; they are not product-specific
-like the rest.
+Both ls2_sfp hunks are upstreamable on their own and are folded in here
+rather than split out, to keep the series compact; they are not
+product-specific like the rest.
 
 Upstream-Status: Inappropriate [product-specific]
 

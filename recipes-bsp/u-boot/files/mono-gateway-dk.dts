@@ -29,6 +29,31 @@
 	chosen {
 		stdout-path = "serial0:115200n8";
 	};
+
+	/*
+	 * Port LEDs driven from MOD_DEF0 and the MAC's XFI PCS. Each port
+	 * names the ethernet device whose MAC has to be open before its PCS
+	 * reports link, and the internal MDIO bus that PCS answers on.
+	 */
+	sfp-leds {
+		compatible = "mono,sfp-led";
+
+		port0 {
+			mono,eth-name = "fm1-mac9";
+			mono,pcs-name = "mdio@f1000";
+			mod-def0-gpios = <&gpio2 12 GPIO_ACTIVE_LOW>;
+			link-gpios = <&gpio2 17 GPIO_ACTIVE_HIGH>;
+			activity-gpios = <&gpio2 18 GPIO_ACTIVE_HIGH>;
+		};
+
+		port1 {
+			mono,eth-name = "fm1-mac10";
+			mono,pcs-name = "mdio@f3000";
+			mod-def0-gpios = <&gpio2 10 GPIO_ACTIVE_LOW>;
+			link-gpios = <&gpio2 15 GPIO_ACTIVE_HIGH>;
+			activity-gpios = <&gpio2 16 GPIO_ACTIVE_HIGH>;
+		};
+	};
 };
 
 &duart0 {
