@@ -1,7 +1,7 @@
 # NXP Linux Factory release that the BSP recipes track. Bump every
 # SRCREV here when moving to a newer LF release; the recipes under
-# recipes-bsp/ and recipes-kernel/ all pin to the variables below
-# rather than carrying their own SHAs.
+# recipes-bsp/, recipes-kernel/ and recipes-security/ all pin to the
+# variables below rather than carrying their own SHAs.
 #
 # Each SRCREV is the commit that the lf-* tag points to in the
 # corresponding nxp-qoriq repo. Look them up with:

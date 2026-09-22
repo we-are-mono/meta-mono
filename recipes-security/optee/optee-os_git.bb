@@ -9,7 +9,7 @@ COMPATIBLE_MACHINE = "gateway-dk"
 # u-boot and linux, so it bumps with them rather than on its own schedule.
 require conf/include/nxp-base.inc
 SRC_URI = "git://github.com/nxp-qoriq/optee_os;protocol=https;nobranch=1 \
-           file://0001-plat-ls-refuse-to-program-the-RPMB-key-until-OTPMK-i.patch \
+           file://0001-plat-ls-refuse-to-program-the-RPMB-key-unless-the-bo.patch \
            "
 SRCREV = "${NXP_LF_SRCREV_OPTEE}"
 

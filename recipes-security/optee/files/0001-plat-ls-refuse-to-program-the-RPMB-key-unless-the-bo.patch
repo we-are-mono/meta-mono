@@ -1,4 +1,4 @@
-From 5c5b1ab7ddf18931cc26243e5fbac982790c2840 Mon Sep 17 00:00:00 2001
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Tomaz Zaman <tomaz@mono.si>
 Date: Thu, 17 Sep 2026 20:38:57 +0200
 Subject: [PATCH] plat-ls: refuse to program the RPMB key unless the boot was
@@ -34,9 +34,9 @@ hardware bit separates a programmed fuse from a written mirror -- after
 the boot-time fuse read they are the same thing -- so the distinction
 has to be temporal.
 
-This is the rule imx, versal and zynqmp apply, and it carries over to
-Layerscape after all: TF-A never transitions the state machine, but the
-ROM does, on a validated boot. An unfused board sits in Non-Secure (HPSR
+This is the rule imx, versal and zynqmp apply, and it holds on
+Layerscape too: TF-A never transitions the state machine, but the ROM
+does, on a validated boot. An unfused board sits in Non-Secure (HPSR
 0x88002b00, SSM 0xB), where the gate stays shut whatever the fuses hold.
 
 The gate is compiled only for a flavour that defines SFP_BASE and
