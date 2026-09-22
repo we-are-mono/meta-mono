@@ -1,4 +1,4 @@
-From 851a35fa48da78f3daa3e36458a350b1a267a6d4 Mon Sep 17 00:00:00 2001
+From fea14039cf206bd6fef588023b2f44242f705182 Mon Sep 17 00:00:00 2001
 From: Tomaz Zaman <tomaz@mono.si>
 Date: Tue, 22 Sep 2026 12:27:32 +0200
 Subject: [PATCH 8/8] board: gateway_dk: light the SFP+ port LEDs
@@ -39,14 +39,22 @@ driver resets the block.
 The link bit latches low, so every read is doubled -- the first read
 after a drop returns the stale state and the second the live one.
 
+The poll drives its LEDs through the GPIO driver, on the bank that also
+carries the EEPROM's write-protect line (GPIO3_00). That driver writes
+the whole data register back from its own copy whenever it sets a line,
+so program_eeprom's raw register write of WP was undone within 100 ms of
+its final lock, leaving the EEPROM writable until reset -- the kernel
+included. WP now goes through the driver too.
+
 Upstream-Status: Inappropriate [product-specific]
 
 Signed-off-by: Tomaz Zaman <tomaz@mono.si>
 ---
  board/mono/gateway_dk/gateway_dk.c    |  14 ++
  board/mono/gateway_dk/setup/Makefile  |   1 +
+ board/mono/gateway_dk/setup/eeprom.c  |  74 ++++----
  board/mono/gateway_dk/setup/sfp_led.c | 256 ++++++++++++++++++++++++++
- 3 files changed, 271 insertions(+)
+ 4 files changed, 314 insertions(+), 31 deletions(-)
  create mode 100644 board/mono/gateway_dk/setup/sfp_led.c
 
 diff --git a/board/mono/gateway_dk/gateway_dk.c b/board/mono/gateway_dk/gateway_dk.c
@@ -101,6 +109,111 @@ index 976fba4de57..185bd0f1a74 100644
  obj-y += security_fuses.o
  obj-y += cmd_otpmk.o
 +obj-y += sfp_led.o
+diff --git a/board/mono/gateway_dk/setup/eeprom.c b/board/mono/gateway_dk/setup/eeprom.c
+index deb58f6ce7c..425aea1f988 100644
+--- a/board/mono/gateway_dk/setup/eeprom.c
++++ b/board/mono/gateway_dk/setup/eeprom.c
+@@ -16,16 +16,16 @@
+ #include <i2c_eeprom.h>
+ #include <command.h>
+ #include <exports.h>
+-#include <asm/io.h>
++#include <asm/gpio.h>
+ #include <linux/ctype.h>
+ #include "hw_test.h"
+ 
+ #define EEPROM_ADDR 0x50
+ #define I2C_BUS 3
+ 
+-#define GPIO3_BASE 0x02320000
+-#define GPIO3_GPDIR 0x00
+-#define GPIO3_GPDAT 0x08
++/* WP sits on GPIO3_00, the bank at 0x2320000 (gpio2 in dts numbering). */
++#define EEPROM_WP_GPIO_BANK	"gpio@2320000"
++#define EEPROM_WP_GPIO		0
+ 
+ /* EEPROM Layout Offsets
+  * MAC addresses are stored in physical port order (left to right on board)
+@@ -105,40 +105,52 @@ static void increment_mac(uint8_t *mac)
+ 	}
+ }
+ 
+-/* Unlock EEPROM by driving GPIO3_00 low */
++/*
++ * Drive WP as an output, high to lock the EEPROM and low to unlock it. This
++ * goes through the GPIO driver rather than the bank's registers: the driver
++ * keeps its own copy of the data register and writes all of it back whenever
++ * it sets any line on the bank, which the SFP port LEDs do ten times a
++ * second. A level written behind its back would be undone within 100 ms.
++ */
++static int eeprom_set_write_protect(bool protect)
++{
++	struct gpio_desc wp = { .offset = EEPROM_WP_GPIO };
++	int ret;
++
++	ret = uclass_get_device_by_name(UCLASS_GPIO, EEPROM_WP_GPIO_BANK,
++					&wp.dev);
++	if (ret)
++		return ret;
++
++	ret = dm_gpio_request(&wp, "eeprom-wp");
++	if (ret)
++		return ret;
++
++	ret = dm_gpio_set_dir_flags(&wp, GPIOD_IS_OUT |
++				    (protect ? GPIOD_IS_OUT_ACTIVE : 0));
++	dm_gpio_free(wp.dev, &wp);
++
++	return ret;
++}
++
+ static void unlock_eeprom(void)
+ {
+-	u32 gpio_dir, gpio_dat;
+-	
+-	/* Read current values */
+-	gpio_dir = in_be32((void *)(GPIO3_BASE + GPIO3_GPDIR));
+-	gpio_dat = in_be32((void *)(GPIO3_BASE + GPIO3_GPDAT));
+-	
+-	/* Set GPIO3_00 as output (set bit 31) */
+-	gpio_dir |= 0x80000000;
+-	out_be32((void *)(GPIO3_BASE + GPIO3_GPDIR), gpio_dir);
+-	
+-	/* Drive GPIO3_00 low (clear bit 31) to unlock EEPROM */
+-	gpio_dat &= ~0x80000000;
+-	out_be32((void *)(GPIO3_BASE + GPIO3_GPDAT), gpio_dat);
+-	
+-	/* Read back to ensure write completed */
+-	(void)in_be32((void *)(GPIO3_BASE + GPIO3_GPDAT));
+-	
++	int ret = eeprom_set_write_protect(false);
++
++	if (ret)
++		printf("Warning: could not drive EEPROM WP low (%d), writes will fail\n",
++		       ret);
++
+ 	udelay(10000);
+ }
+ 
+-/* Lock EEPROM by driving GPIO3_00 high */
+ static void lock_eeprom(void)
+ {
+-	u32 gpio_dat;
+-	
+-	/* Read current value */
+-	gpio_dat = in_be32((void *)(GPIO3_BASE + GPIO3_GPDAT));
+-	
+-	/* Drive GPIO3_00 high (set bit 31) to lock EEPROM */
+-	gpio_dat |= 0x80000000;
+-	out_be32((void *)(GPIO3_BASE + GPIO3_GPDAT), gpio_dat);
++	int ret = eeprom_set_write_protect(true);
++
++	if (ret)
++		printf("Warning: could not drive EEPROM WP high (%d), EEPROM is left writable\n",
++		       ret);
+ }
+ 
+ /* Get EEPROM device */
 diff --git a/board/mono/gateway_dk/setup/sfp_led.c b/board/mono/gateway_dk/setup/sfp_led.c
 new file mode 100644
 index 00000000000..0a9a28e24b9
