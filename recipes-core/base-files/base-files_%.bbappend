@@ -23,6 +23,11 @@ do_install:append() {
     # Bash aliases for faster DHCP commands, used most of the time
     install -d ${D}${sysconfdir}/profile.d
     install -m 0644 ${UNPACKDIR}/bash_aliases.sh ${D}${sysconfdir}/profile.d/bash_aliases.sh
+
+    # The kernel builds debugfs but nothing mounts it. Appended rather than
+    # shipped as our own fstab, which would then have to track base-files.
+    echo "debugfs              /sys/kernel/debug    debugfs    defaults              0  0" \
+        >> ${D}${sysconfdir}/fstab
 }
 
 hostname:pn-base-files = "recovery"
