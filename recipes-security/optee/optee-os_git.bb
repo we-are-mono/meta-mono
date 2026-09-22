@@ -87,6 +87,11 @@ OPTEE_PLATFORM = "ls-ls1046ardb"
 #
 # CFG_TEE_CORE_DEBUG stays at its default, y, so assertions stay in: an
 # internal inconsistency panics the TEE rather than carrying on.
+#
+# CFG_JR_INDEX names the CAAM job ring OP-TEE takes, which the recovery
+# kernel's DTS disables (&sec_jr2). The CAAM driver forces it per platform, and
+# a forced value that differs from the command line stops the build, so an LF
+# release that moves the ring fails here rather than sharing it with Linux.
 EXTRA_OEMAKE = " \
     PLATFORM=${OPTEE_PLATFORM} \
     CFG_ARM64_core=y \
@@ -101,6 +106,7 @@ EXTRA_OEMAKE = " \
     CFG_ENABLE_EMBEDDED_TESTS=n \
     CFG_BUILD_IN_TREE_TA=n \
     CFG_TEE_CORE_LOG_LEVEL=1 \
+    CFG_JR_INDEX=2 \
     CROSS_COMPILE=${HOST_PREFIX} \
     CROSS_COMPILE64=${HOST_PREFIX} \
     CROSS_COMPILE_core=${HOST_PREFIX} \
