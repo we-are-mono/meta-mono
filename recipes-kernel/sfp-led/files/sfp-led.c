@@ -7,8 +7,9 @@
  * near i2c, deliberately: a module caught mid-transfer by a reset holds SDA
  * low until it loses power, and a port whose module has done that must
  * still light its LEDs -- as must its neighbour, which shares the bus.
- * The monitor does not configure the PCS or interact with the SFP state
- * machine.
+ * What a port does wait for is the sfp driver binding to its cage, which
+ * needs the cage's i2c adapter to exist, though not to work. The monitor
+ * does not configure the PCS or interact with the SFP state machine.
  *
  * No module: both LEDs off. Module without link: solid orange. Link up:
  * green on, orange blinking on changes to the netdev packet counters.
@@ -303,11 +304,25 @@ put_pcs:
 	return ret;
 }
 
+/*
+ * A gotten LED holds its class device and its driver's module, but not the
+ * led_classdev, which the provider frees when it unbinds. Link the port to the
+ * provider, so that unbinding it unbinds the port first.
+ */
+static int sfp_led_link_provider(struct device *dev, struct led_classdev *led)
+{
+	if (!led)
+		return 0;
+
+	return device_link_add(dev, led->dev->parent,
+			       DL_FLAG_AUTOPROBE_CONSUMER) ? 0 : -EINVAL;
+}
+
 static int sfp_led_get_port(struct device *dev, struct sfp_led_port *port)
 {
 	struct platform_device *sfp_pdev;
+	struct device_link *linked;
 	struct device_node *sfp_np;
-	bool bound;
 	int ret;
 
 	sfp_np = of_parse_phandle(dev->of_node, "sfp", 0);
@@ -335,10 +350,22 @@ static int sfp_led_get_port(struct device *dev, struct sfp_led_port *port)
 		ret = -EPROBE_DEFER;
 		goto put_sfp;
 	}
-	bound = device_is_bound(&sfp_pdev->dev);
-	put_device(&sfp_pdev->dev);
-	if (!bound) {
+	if (!device_is_bound(&sfp_pdev->dev)) {
+		put_device(&sfp_pdev->dev);
 		ret = -EPROBE_DEFER;
+		goto put_sfp;
+	}
+
+	/*
+	 * The borrowed line lives only as long as the sfp driver holds it:
+	 * releasing it clears its active-low flag and frees it for anyone. Link
+	 * the port to the sfp device, so that unbinding the sfp driver unbinds
+	 * the port first and binding it again probes the port again.
+	 */
+	linked = device_link_add(dev, &sfp_pdev->dev, DL_FLAG_AUTOPROBE_CONSUMER);
+	put_device(&sfp_pdev->dev);
+	if (!linked) {
+		ret = -EINVAL;
 		goto put_sfp;
 	}
 
@@ -377,12 +404,16 @@ static int sfp_led_get_port(struct device *dev, struct sfp_led_port *port)
 		port->link_led = NULL;
 		goto put_sfp;
 	}
+	ret = sfp_led_link_provider(dev, port->link_led);
+	if (ret)
+		goto put_sfp;
+
 	port->activity_led = devm_of_led_get_optional(dev, 1);
 	if (IS_ERR(port->activity_led)) {
 		ret = PTR_ERR(port->activity_led);
 		port->activity_led = NULL;
 	} else {
-		ret = 0;
+		ret = sfp_led_link_provider(dev, port->activity_led);
 	}
 
 put_sfp:
