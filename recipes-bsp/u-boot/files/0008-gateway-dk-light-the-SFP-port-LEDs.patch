@@ -1,4 +1,4 @@
-From fea14039cf206bd6fef588023b2f44242f705182 Mon Sep 17 00:00:00 2001
+From 2495184d05148cc67cfe48921a440f1beb87cb9b Mon Sep 17 00:00:00 2001
 From: Tomaz Zaman <tomaz@mono.si>
 Date: Tue, 22 Sep 2026 12:27:32 +0200
 Subject: [PATCH 8/8] board: gateway_dk: light the SFP+ port LEDs
@@ -8,7 +8,7 @@ blank for every second spent at the U-Boot prompt -- exactly where an
 operator is looking for a link.
 
 Read the same three things the recovery kernel's sfp-led driver shows:
-MOD_DEF0 for module presence, the MAC's XFI PCS for link, and the MAC's
+MOD_DEF0 for module presence, the MAC's PCS for link, and the MAC's
 frame counters for activity. None of them goes near i2c, so a module
 holding SDA low cannot darken its own port or its neighbour's. Polling
 runs as a cyclic function, which keeps the LEDs live at the prompt and
@@ -20,13 +20,13 @@ that arrive while nothing is draining them.
 
 The 10G ports are fixed-link, so nothing configures the XFI PCS and it
 reports no link however good the fibre is until its MAC is opened.
-Open both here. That adds only the opens: FMan and its microcode are
-brought up on every boot regardless, by the enumeration behind the
-"Net:" banner, and this only moves that a few milliseconds earlier. A
-port with an empty cage opens just as readily, since the path touches
-neither i2c nor MOD_DEF0 and phylib takes link from the fixed-link node
-rather than waiting for autonegotiation, so a missing module cannot
-stall the boot.
+Open the MAC of each cage the SerDes runs as XFI. That adds only the
+opens: FMan and its microcode are brought up on every boot regardless,
+by the enumeration behind the "Net:" banner, and this only moves that a
+few milliseconds earlier. A port with an empty cage opens just as
+readily, since the path touches neither i2c nor MOD_DEF0 and phylib
+takes link from the fixed-link node rather than waiting for
+autonegotiation, so a missing module cannot stall the boot.
 
 An opened MAC keeps receiving, into descriptors and buffers in U-Boot's
 heap, and eth_fman is not among the drivers dm_remove_devices_active()
@@ -36,8 +36,15 @@ both of its ports. Without it a frame arriving after the handoff lands
 in memory the kernel has already reused, until the kernel's own FMan
 driver resets the block.
 
-The link bit latches low, so every read is doubled -- the first read
-after a drop returns the stale state and the second the live one.
+A cage the SerDes runs as 1000BASE-X -- port 1 under the 1G RCW -- keeps
+its MAC closed: the control DT describes both 10G MACs as XGMII whatever
+the RCW says, so opening one would configure it for a mode its lane is
+not in. Its link is read from the same PCS through the clause 22 BMSR
+instead, and with no MAC counting there is no activity blink.
+
+The link bit latches low in both register sets, so every read is
+doubled -- the first read after a drop returns the stale state and the
+second the live one.
 
 The poll drives its LEDs through the GPIO driver, on the bank that also
 carries the EEPROM's write-protect line (GPIO3_00). That driver writes
@@ -50,15 +57,15 @@ Upstream-Status: Inappropriate [product-specific]
 
 Signed-off-by: Tomaz Zaman <tomaz@mono.si>
 ---
- board/mono/gateway_dk/gateway_dk.c    |  14 ++
+ board/mono/gateway_dk/gateway_dk.c    |  30 +++
  board/mono/gateway_dk/setup/Makefile  |   1 +
- board/mono/gateway_dk/setup/eeprom.c  |  74 ++++----
- board/mono/gateway_dk/setup/sfp_led.c | 256 ++++++++++++++++++++++++++
- 4 files changed, 314 insertions(+), 31 deletions(-)
+ board/mono/gateway_dk/setup/eeprom.c  |  74 ++++---
+ board/mono/gateway_dk/setup/sfp_led.c | 289 ++++++++++++++++++++++++++
+ 4 files changed, 363 insertions(+), 31 deletions(-)
  create mode 100644 board/mono/gateway_dk/setup/sfp_led.c
 
 diff --git a/board/mono/gateway_dk/gateway_dk.c b/board/mono/gateway_dk/gateway_dk.c
-index a52a2a34669..8fc3b3a4392 100644
+index a52a2a34669..551e3faae6a 100644
 --- a/board/mono/gateway_dk/gateway_dk.c
 +++ b/board/mono/gateway_dk/gateway_dk.c
 @@ -4,6 +4,7 @@
@@ -78,7 +85,30 @@ index a52a2a34669..8fc3b3a4392 100644
  
  /*
   * Pin-mux workaround for erratum A-010539, mirroring upstream
-@@ -310,10 +313,21 @@ int misc_init_r(void)
+@@ -121,6 +124,22 @@ static enum mono_sfp_mode mono_sfp_mode_from_serdes1(u32 protocol, int port)
+ 	}
+ }
+ 
++/*
++ * The speed the RCW runs an SFP cage at: SPEED_10000 for XFI, SPEED_1000 for
++ * 1000BASE-X, or 0 for a SerDes protocol this board does not ship.
++ */
++int mono_sfp_port_speed(int port)
++{
++	switch (mono_sfp_mode_from_serdes1(mono_get_serdes1_protocol(), port)) {
++	case MONO_SFP_MODE_10G:
++		return SPEED_10000;
++	case MONO_SFP_MODE_1000BASEX:
++		return SPEED_1000;
++	default:
++		return 0;
++	}
++}
++
+ static int mono_retimer_update_bits(struct udevice *dev, uint reg, u8 mask, u8 set)
+ {
+ 	int ret = dm_i2c_reg_read(dev, reg);
+@@ -310,10 +329,21 @@ int misc_init_r(void)
  
  	hw_tests_print_summary(r);
  
@@ -216,19 +246,19 @@ index deb58f6ce7c..425aea1f988 100644
  /* Get EEPROM device */
 diff --git a/board/mono/gateway_dk/setup/sfp_led.c b/board/mono/gateway_dk/setup/sfp_led.c
 new file mode 100644
-index 00000000000..0a9a28e24b9
+index 00000000000..7c3b3b99835
 --- /dev/null
 +++ b/board/mono/gateway_dk/setup/sfp_led.c
-@@ -0,0 +1,256 @@
+@@ -0,0 +1,289 @@
 +// SPDX-License-Identifier: GPL-2.0+
 +/*
 + * SFP+ port LEDs.
 + *
 + * Module presence comes from the cage's MOD_DEF0 line, link state from the
-+ * MAC's XFI PCS and activity from the MAC's own frame counters -- the same
-+ * three things the recovery kernel's sfp-led driver shows. None of them goes
-+ * near i2c, deliberately: a module caught mid-transfer by a reset holds SDA
-+ * low until it loses power, and a port whose module has done that must still
++ * MAC's PCS and activity from the MAC's own frame counters -- the same three
++ * things the recovery kernel's sfp-led driver shows. None of them goes near
++ * i2c, deliberately: a module caught mid-transfer by a reset holds SDA low
++ * until it loses power, and a port whose module has done that must still
 + * light its LEDs -- as must its neighbour, which shares the bus.
 + *
 + * No module: both LEDs off. Module without link: solid orange. Link up:
@@ -237,11 +267,17 @@ index 00000000000..0a9a28e24b9
 + * U-Boot itself started.
 + *
 + * The 10G ports are fixed-link, so nothing configures the XFI PCS and it
-+ * reports no link however good the fibre is until its MAC is opened. Both
-+ * MACs are therefore opened here, which costs no more than the opens
-+ * themselves: FMan and its microcode come up on every boot regardless, when
-+ * the ethernet devices are enumerated. The opened MACs are stopped again
-+ * before the kernel starts, see mono_sfp_led_stop().
++ * reports no link however good the fibre is until its MAC is opened. A cage
++ * the SerDes runs as XFI therefore has its MAC opened here, which costs no
++ * more than the open itself: FMan and its microcode come up on every boot
++ * regardless, when the ethernet devices are enumerated. The opened MACs are
++ * stopped again before the kernel starts, see mono_sfp_led_stop().
++ *
++ * A cage the SerDes runs as 1000BASE-X keeps its MAC closed: the control DT
++ * describes both 10G MACs as XGMII whatever the RCW says, so opening one
++ * would configure it for a mode its lane is not in. Its link comes from the
++ * same PCS through the clause 22 registers instead, and with the MAC closed
++ * there are no frame counters to blink from.
 + *
 + * Copyright 2026 Mono Technologies Inc.
 + */
@@ -259,15 +295,19 @@ index 00000000000..0a9a28e24b9
 +#include <dm/device-internal.h>
 +#include <dm/ofnode.h>
 +#include <linux/mdio.h>
++#include <linux/mii.h>
 +
 +#define SFP_LED_POLL_INTERVAL_US	100000
 +#define SFP_LED_MAX_PORTS		2
 +
-+/* Each XFI PCS sits alone on its MAC's internal MDIO bus. */
++/* Each 10G MAC's PCS sits alone on its MAC's internal MDIO bus. */
 +#define SFP_LED_PCS_ADDR		0
++
++int mono_sfp_port_speed(int port);
 +
 +struct sfp_led_port {
 +	const char *eth_name;
++	int speed;
 +	struct gpio_desc present;
 +	struct gpio_desc link_led;
 +	struct gpio_desc activity_led;
@@ -361,23 +401,42 @@ index 00000000000..0a9a28e24b9
 +	return in_be32(&port->mac->rx_frame_l) + in_be32(&port->mac->tx_frame_l);
 +}
 +
++/*
++ * The PCS status register: MDIO_STAT1 in the clause 45 space for XFI, BMSR
++ * in the clause 22 space for 1000BASE-X. Both carry the link bit as bit 2.
++ */
++static int sfp_led_pcs_status(struct sfp_led_port *port)
++{
++	if (port->speed == SPEED_1000)
++		return dm_mdio_read(port->pcs, SFP_LED_PCS_ADDR,
++				    MDIO_DEVAD_NONE, MII_BMSR);
++
++	return dm_mdio_read(port->pcs, SFP_LED_PCS_ADDR, MDIO_MMD_PCS,
++			    MDIO_STAT1);
++}
++
 +static bool sfp_led_link(struct sfp_led_port *port)
 +{
 +	int status;
++
++	/* A SerDes protocol this board does not ship: presence only. */
++	if (!port->speed)
++		return false;
 +
 +	/*
 +	 * The link indication latches low, so the first read after any drop
 +	 * returns the stale state and the second returns the live one.
 +	 */
-+	status = dm_mdio_read(port->pcs, SFP_LED_PCS_ADDR, MDIO_MMD_PCS,
-+			      MDIO_STAT1);
++	status = sfp_led_pcs_status(port);
 +	if (status >= 0 && status != 0xffff)
-+		status = dm_mdio_read(port->pcs, SFP_LED_PCS_ADDR, MDIO_MMD_PCS,
-+				      MDIO_STAT1);
++		status = sfp_led_pcs_status(port);
 +
 +	/* The FMan MDIO driver returns all ones for an unanswered read. */
 +	if (status < 0 || status == 0xffff)
 +		return false;
++
++	if (port->speed == SPEED_1000)
++		return !!(status & BMSR_LSTATUS);
 +
 +	return !!(status & MDIO_STAT1_LSTATUS);
 +}
@@ -423,12 +482,14 @@ index 00000000000..0a9a28e24b9
 +void mono_sfp_led_init(void)
 +{
 +	ofnode parent, node;
++	int index = 0;
 +	int ret;
 +
 +	parent = ofnode_by_compatible(ofnode_null(), "mono,sfp-led");
 +	if (!ofnode_valid(parent))
 +		return;
 +
++	/* The children are the cages in SerDes order, port0 then port1. */
 +	ofnode_for_each_subnode(node, parent) {
 +		struct sfp_led_port *port;
 +
@@ -436,6 +497,7 @@ index 00000000000..0a9a28e24b9
 +			break;
 +
 +		port = &sfp_led_ports[sfp_led_count];
++		port->speed = mono_sfp_port_speed(index++);
 +		ret = sfp_led_setup_port(node, port);
 +		if (ret) {
 +			printf("sfp-led: %s unusable (%d)\n",
@@ -443,7 +505,8 @@ index 00000000000..0a9a28e24b9
 +			continue;
 +		}
 +
-+		sfp_led_start_mac(port);
++		if (port->speed == SPEED_10000)
++			sfp_led_start_mac(port);
 +		sfp_led_count++;
 +	}
 +
