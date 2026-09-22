@@ -76,18 +76,18 @@
 
 &i2c2 {
     status = "okay";
-    
+
     i2c_mux: i2c-mux@70 {
         compatible = "nxp,pca9546";
         #address-cells = <1>;
         #size-cells = <0>;
         reg = <0x70>;
-        
+
         i2c@2 {  /* Channel 2 */
             #address-cells = <1>;
             #size-cells = <0>;
             reg = <2>;
-            
+
             pcf2131: rtc@53 {
                 compatible = "nxp,pcf2131";
                 reg = <0x53>;
@@ -98,7 +98,7 @@
 
 &i2c3 {
     status = "okay";
-    
+
     eeprom@50 {
         compatible = "atmel,24c32";   /* AT24CS32 - 32Kbit (4KB) */
         reg = <0x50>;
