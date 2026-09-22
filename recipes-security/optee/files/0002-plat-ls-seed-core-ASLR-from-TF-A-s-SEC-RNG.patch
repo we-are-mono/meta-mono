@@ -1,0 +1,69 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Tomaz Zaman <tomaz@mono.si>
+Date: Tue, 22 Sep 2026 21:52:36 +0200
+Subject: [PATCH] plat-ls: seed core ASLR from TF-A's SEC RNG
+
+CFG_CORE_ASLR is on by default, but on Layerscape it randomized nothing.
+The seed comes from a /secure-chosen/kaslr-seed property in the device
+tree the previous stage passes, and failing that from
+plat_get_aslr_seed(). NXP's TF-A passes BL32_FDT_OVERLAY_ADDR, where no
+device tree has been written when OP-TEE starts, and plat-ls had no
+plat_get_aslr_seed(), so the weak default returned 0 and the core was
+mapped at the same address on every boot of every part.
+
+NXP's TF-A already serves random numbers from the SEC (CAAM) RNG through
+the SiP call 0xC200FF11 -- U-Boot uses it to give Linux its kaslr-seed --
+and BL31 brings the SEC up before it enters BL32, with its runtime
+services registered by then. Ask it for eight bytes. It is the one
+hardware RNG reachable this early; OP-TEE's own CAAM driver starts long
+after the core is mapped, and the Cortex-A72 has no RNDR.
+
+If the call fails, log it and map the core at its fixed address rather
+than stopping the boot.
+
+Upstream-Status: Pending
+
+Signed-off-by: Tomaz Zaman <tomaz@mono.si>
+---
+ core/arch/arm/plat-ls/main.c | 28 ++++++++++++++++++++++++++++
+ 1 file changed, 28 insertions(+)
+
+diff --git a/core/arch/arm/plat-ls/main.c b/core/arch/arm/plat-ls/main.c
+index 51e5d46a1..654ef5842 100644
+--- a/core/arch/arm/plat-ls/main.c
++++ b/core/arch/arm/plat-ls/main.c
+@@ -328,3 +328,31 @@ bool plat_rpmb_key_is_ready(void)
+  */
+ #error "CFG_RPMB_WRITE_KEY needs SFP_BASE and SNVS_BASE for this flavour"
+ #endif /* SFP_BASE && SNVS_BASE && CFG_RPMB_FS */
++
++#ifdef CFG_CORE_ASLR
++/*
++ * NXP's TF-A serves random numbers from the SEC (CAAM) RNG through a SiP
++ * call, and BL31 has the SEC running before it enters OP-TEE. That is the one
++ * hardware RNG reachable this early: OP-TEE's own CAAM driver starts long
++ * after the core is mapped. A failed call leaves the core at its fixed
++ * address rather than stopping the boot.
++ */
++#define NXP_SIP_RNG_64		0xC200FF11
++
++unsigned long plat_get_aslr_seed(void)
++{
++	struct thread_smc_args args = {
++		.a0 = NXP_SIP_RNG_64,
++		.a1 = 1,	/* eight bytes rather than four */
++	};
++
++	thread_smccc(&args);
++	if (args.a0 || !args.a1) {
++		EMSG("No ASLR seed from TF-A (%#"PRIx64"), core mapped at its fixed address",
++		     args.a0);
++		return 0;
++	}
++
++	return args.a1;
++}
++#endif /* CFG_CORE_ASLR */
+-- 
+2.47.3
+

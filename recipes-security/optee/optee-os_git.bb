@@ -10,6 +10,7 @@ COMPATIBLE_MACHINE = "gateway-dk"
 require conf/include/nxp-base.inc
 SRC_URI = "git://github.com/nxp-qoriq/optee_os;protocol=https;nobranch=1 \
            file://0001-plat-ls-refuse-to-program-the-RPMB-key-unless-the-bo.patch \
+           file://0002-plat-ls-seed-core-ASLR-from-TF-A-s-SEC-RNG.patch \
            "
 SRCREV = "${NXP_LF_SRCREV_OPTEE}"
 
@@ -87,6 +88,10 @@ OPTEE_PLATFORM = "ls-ls1046ardb"
 #
 # CFG_TEE_CORE_DEBUG stays at its default, y, so assertions stay in: an
 # internal inconsistency panics the TEE rather than carrying on.
+#
+# CFG_CORE_ASLR stays at its default, y. The core's map offset is seeded from
+# TF-A's SEC RNG by the second plat-ls patch; without it plat-ls had no seed
+# and the core sat at the same address on every boot.
 #
 # CFG_JR_INDEX names the CAAM job ring OP-TEE takes, which the recovery
 # kernel's DTS disables (&sec_jr2). The CAAM driver forces it per platform, and
