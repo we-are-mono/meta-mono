@@ -17,8 +17,8 @@ if grep -q "hwtest_status=fail" /proc/cmdline; then
     echo "16 500 128 500" > $LED_RED/pattern
     echo -1 > $LED_RED/repeat
 else
-    # Dim amber breathing in recovery.
-    # Red:green ratio remains 255:48.
+    # Dim amber breathing in recovery. Red and green stay at 16:3 at both
+    # ends of the pattern, which keeps the hue amber at any brightness.
     echo pattern > $LED_RED/trigger
     echo "16 1000 128 1000" > $LED_RED/pattern
     echo -1 > $LED_RED/repeat

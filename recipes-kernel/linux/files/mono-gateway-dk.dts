@@ -535,7 +535,8 @@
 			#size-cells = <0>;
 			reg = <3>;
 
-			lp5810@1b {
+			/* An LP5810A, driven by the LP5812 driver. */
+			led-controller@1b {
 				compatible = "ti,lp5812";
 				reg = <0x1b>;
 				#address-cells = <1>;
