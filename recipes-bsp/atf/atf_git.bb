@@ -24,6 +24,10 @@ PLATFORM = "gateway_dk"
 OPTEE_BL32 = "${DEPLOY_DIR_IMAGE}/optee/tee-raw.bin"
 UBOOT_BINARY = "u-boot.bin"
 BOOTTYPE ?= "qspi emmc qspi1g emmc1g"
+# 20 prints notices and up. 40 adds INFO: every image BL2 loads and where,
+# which is what a boot-flow problem needs -- and, from BL31's RNG, every
+# random number it hands out, so keep it off release images.
+ATF_LOG_LEVEL ?= "20"
 
 # requires CROSS_COMPILE set by hand as there is no configure script
 export CROSS_COMPILE = "${TARGET_PREFIX}"
@@ -79,9 +83,9 @@ do_compile() {
         # built during the first pass and kept for the rest.
         make V=1 realclean
         if [ -f ${S}/fip.bin ]; then
-            oe_runmake pbl PLAT=${PLATFORM} BOOT_MODE=${bootmode} DEBUG=0 LOG_LEVEL=20 SPD=opteed BL32=${OPTEE_BL32} RCW=${DEPLOY_DIR_IMAGE}/rcw/gateway_dk/${rcwimg} BL33=${DEPLOY_DIR_IMAGE}/${UBOOT_BINARY}
+            oe_runmake pbl PLAT=${PLATFORM} BOOT_MODE=${bootmode} DEBUG=0 LOG_LEVEL=${ATF_LOG_LEVEL} SPD=opteed BL32=${OPTEE_BL32} RCW=${DEPLOY_DIR_IMAGE}/rcw/gateway_dk/${rcwimg} BL33=${DEPLOY_DIR_IMAGE}/${UBOOT_BINARY}
         else
-            oe_runmake pbl fip PLAT=${PLATFORM} BOOT_MODE=${bootmode} DEBUG=0 LOG_LEVEL=20 SPD=opteed BL32=${OPTEE_BL32} RCW=${DEPLOY_DIR_IMAGE}/rcw/gateway_dk/${rcwimg} BL33=${DEPLOY_DIR_IMAGE}/${UBOOT_BINARY}
+            oe_runmake pbl fip PLAT=${PLATFORM} BOOT_MODE=${bootmode} DEBUG=0 LOG_LEVEL=${ATF_LOG_LEVEL} SPD=opteed BL32=${OPTEE_BL32} RCW=${DEPLOY_DIR_IMAGE}/rcw/gateway_dk/${rcwimg} BL33=${DEPLOY_DIR_IMAGE}/${UBOOT_BINARY}
             cp ${S}/build/${PLATFORM}/release/fip.bin ${S}/fip.bin
         fi
         cp ${S}/build/${PLATFORM}/release/bl2_${bootmode}.pbl ./bl2_${d}.pbl

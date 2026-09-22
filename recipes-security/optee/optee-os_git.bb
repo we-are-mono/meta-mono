@@ -27,6 +27,10 @@ B = "${WORKDIR}/build"
 # secure world, which only touches the SoC.
 OPTEE_PLATFORM = "ls-ls1046ardb"
 
+# 1 prints errors only. 3 adds the debug trace, including where ASLR mapped
+# the core ("Mapping core at ... offs ...").
+OPTEE_LOG_LEVEL ?= "1"
+
 # CAAM supplies the HUK: core/drivers/crypto/caam/blob/caam_blob.c defines
 # tee_otp_get_hw_unique_key and reads the key from the Master Key
 # Verification Blob. CFG_INSECURE=n removes the only alternative, the
@@ -110,7 +114,7 @@ EXTRA_OEMAKE = " \
     CFG_RPMB_TESTKEY=n \
     CFG_ENABLE_EMBEDDED_TESTS=n \
     CFG_BUILD_IN_TREE_TA=n \
-    CFG_TEE_CORE_LOG_LEVEL=1 \
+    CFG_TEE_CORE_LOG_LEVEL=${OPTEE_LOG_LEVEL} \
     CFG_JR_INDEX=2 \
     CROSS_COMPILE=${HOST_PREFIX} \
     CROSS_COMPILE64=${HOST_PREFIX} \
