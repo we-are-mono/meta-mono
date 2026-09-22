@@ -1,7 +1,7 @@
-From 2495184d05148cc67cfe48921a440f1beb87cb9b Mon Sep 17 00:00:00 2001
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Tomaz Zaman <tomaz@mono.si>
 Date: Tue, 22 Sep 2026 12:27:32 +0200
-Subject: [PATCH 8/8] board: gateway_dk: light the SFP+ port LEDs
+Subject: [PATCH] board: gateway_dk: light the SFP+ port LEDs
 
 The port LEDs stayed dark until Linux took over, which left the panel
 blank for every second spent at the U-Boot prompt -- exactly where an

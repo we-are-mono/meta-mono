@@ -1,7 +1,7 @@
-From 9c680be18cca38de0a67d1de44a8d52be7bee6fe Mon Sep 17 00:00:00 2001
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Tomaz Zaman <tomaz@mono.si>
 Date: Sun, 19 Apr 2026 15:24:27 +0200
-Subject: [PATCH 4/8] board: mono: gateway-dk: add USB PD and EEPROM device
+Subject: [PATCH] board: mono: gateway-dk: add USB PD and EEPROM device
  programming
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8

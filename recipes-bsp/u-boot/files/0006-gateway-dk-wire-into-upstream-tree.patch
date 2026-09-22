@@ -1,7 +1,7 @@
-From 337afbeca111493c79a3bb9d0297bdd1094e520e Mon Sep 17 00:00:00 2001
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Tomaz Zaman <tomaz@mono.si>
 Date: Sun, 19 Apr 2026 15:25:02 +0200
-Subject: [PATCH 6/8] arm, mtd, misc: wire Gateway-DK into the upstream tree
+Subject: [PATCH] arm, mtd, misc: wire Gateway-DK into the upstream tree
 
 Adds the board to arch/arm/Kconfig and the dts Makefile, and adds the
 board's SPI-NOR part to spi-nor-ids.c.
