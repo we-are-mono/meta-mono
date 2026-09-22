@@ -92,8 +92,11 @@ def read_webhook():
 def build_payload(version, notes):
     # The root always holds the latest release, so publish the bare base URL.
     # The versioned paths are for installing an older release deliberately.
+    # The 1G images live under 1g/, and the root would put a 1G unit's
+    # right-hand port back on XFI.
     install = (
         f"`firmware update --url {BASE_URL} --preserve-env`\n"
+        f"1G variant: `firmware update --url {BASE_URL}/1g --preserve-env`\n"
         "Always writes the medium you are *not* running from: run it under "
         "QSPI and it updates eMMC, run it under eMMC and it updates QSPI."
     )
