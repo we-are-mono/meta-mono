@@ -28,9 +28,16 @@ before the one burn that cannot be repeated. Neither the boot ROM nor
 TF-A's own fuse provisioning ever rewrite SFPCR; the reset value is
 what NXP programs fuses with.
 
-Both ls2_sfp hunks are upstreamable on their own and are folded in here
-rather than split out, to keep the series compact; they are not
-product-specific like the rest.
+Also drop the SVHESR read the driver made right before PROGFB. PROGFB
+runs with TA_PROG_SFP at 1.8 V, and the LS1046A data sheet (Table 6
+note 2) allows nothing but programming while the pin is above GND,
+fuse block reads included. The caller checks SVHESR before the pin goes
+up instead.
+
+The first two ls2_sfp hunks are upstreamable on their own and are
+folded in here rather than split out, to keep the series compact; they
+are not product-specific like the rest. The third moves a check out of
+the driver, so it only fits a caller that makes it earlier.
 
 Upstream-Status: Inappropriate [product-specific]
 
@@ -38,9 +45,9 @@ Signed-off-by: Tomaz Zaman <tomaz@mono.si>
 ---
  arch/arm/Kconfig              | 17 +++++++++++++++++
  arch/arm/dts/Makefile         |  2 ++
- drivers/misc/ls2_sfp.c        | 13 +++++++++++--
+ drivers/misc/ls2_sfp.c        | 22 ++++++++++++++++------
  drivers/mtd/spi/spi-nor-ids.c |  3 +++
- 4 files changed, 33 insertions(+), 2 deletions(-)
+ 4 files changed, 38 insertions(+), 6 deletions(-)
 
 diff --git a/arch/arm/Kconfig b/arch/arm/Kconfig
 index 7d6d3394797..489169afbca 100644
@@ -91,10 +98,26 @@ index 947e1b24514..c2292695012 100644
  
  dtb-$(CONFIG_MACH_SUN4I) += \
 diff --git a/drivers/misc/ls2_sfp.c b/drivers/misc/ls2_sfp.c
-index 8cb6e999bed..7c5ae58d2e6 100644
+index 8cb6e999bed..7c943e930d4 100644
 --- a/drivers/misc/ls2_sfp.c
 +++ b/drivers/misc/ls2_sfp.c
-@@ -229,14 +229,23 @@ static int ls2_sfp_probe(struct udevice *dev)
+@@ -185,10 +185,11 @@ static int ls2_sfp_ioctl(struct udevice *dev, unsigned long request, void *buf)
+ 			return -EPERM;
+ 		}
+ 
+-		ret = ls2_sfp_check_secret(dev);
+-		if (ret)
+-			return ret;
+-
++		/*
++		 * No SVHESR check here: PROGFB runs with TA_PROG_SFP at 1.8 V,
++		 * when the data sheet allows no fuse block read, so the caller
++		 * checks the secret before the pin goes up.
++		 */
+ 		if (priv->supply) {
+ 			ret = regulator_set_enable(priv->supply, true);
+ 			if (ret)
+@@ -229,14 +230,23 @@ static int ls2_sfp_probe(struct udevice *dev)
  	}
  
  	ret = device_get_supply_regulator(dev, "ta-sfp-prog-supply", &priv->supply);

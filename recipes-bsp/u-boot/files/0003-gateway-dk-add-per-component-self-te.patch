@@ -43,36 +43,39 @@ trusted and secure states, which only a ROM-validated boot reaches, so
 cmd_otpmk.c adds the otpmk command. 'otpmk gen' draws 256 bits from the
 CAAM RNG, Hamming encodes them and loads the fuse mirror registers
 without the key ever being printed; 'otpmk commit' programs the mirrors
-into the fuses. Both sides of the irreversible step are checked: gen
-refuses when the OTPMK is already programmed, the block is
-write-protected or it reports a Hamming error, or the RNG returns a key
-with a blank or repeated half, and confirms its load through
-SNVS_HPSR; commit refuses unless gen loaded a key in this
-session and no other mirror word has changed since. Neither reads the
-fuse block while TA_PROG_SFP may be above GND, which the data sheet
-forbids: gen is refused once a key is loaded or a PROGFB has been issued
-in the session, and commit leaves the verdict to the next boot's
-self-test. The SFP and SNVS register definitions both files use live in
-security_fuses.h.
+into the fuses. The LS1046A data sheet (Table 6 note 2) allows nothing
+but programming while TA_PROG_SFP is above GND, fuse block reads
+included, so every check runs in gen, with the pin at GND. gen refuses
+when the OTPMK is already programmed, the block is write-protected or
+reports a Hamming error, the mirrors set ITS with a blank SRK hash, or
+the RNG returns a key with a blank or repeated half. After loading it
+confirms the key through SNVS_HPSR, requires SVHESR clear and every
+other mirror word unchanged, and lists the non-zero words PROGFB will
+burn with the key. commit reads nothing: it refuses only when gen has
+not loaded a key in this session, and leaves the verdict to the next
+boot's self-test. gen is refused once a key is loaded or a PROGFB has
+been issued, so it never reads the fuse block after the operator has
+been told to raise the pin. The SFP and SNVS register definitions both
+files use live in security_fuses.h.
 
 Upstream-Status: Inappropriate [product-specific]
 
 Signed-off-by: Tomaz Zaman <tomaz@mono.si>
 ---
- board/mono/gateway_dk/setup/clock_gen.c       |  67 ++++
- board/mono/gateway_dk/setup/cmd_otpmk.c       | 378 ++++++++++++++++++
+ board/mono/gateway_dk/setup/clock_gen.c       |  67 +++
+ board/mono/gateway_dk/setup/cmd_otpmk.c       | 396 ++++++++++++++++++
  board/mono/gateway_dk/setup/ddr_sanity.c      |  73 ++++
- board/mono/gateway_dk/setup/fan_controller.c  |  89 +++++
+ board/mono/gateway_dk/setup/fan_controller.c  |  89 ++++
  board/mono/gateway_dk/setup/led_controller.c  | 108 +++++
  board/mono/gateway_dk/setup/retimer.c         |  36 ++
  board/mono/gateway_dk/setup/rtc.c             |  55 +++
- board/mono/gateway_dk/setup/security_fuses.c  |  93 +++++
+ board/mono/gateway_dk/setup/security_fuses.c  |  93 ++++
  board/mono/gateway_dk/setup/security_fuses.h  |  56 +++
- board/mono/gateway_dk/setup/sfp_i2c_mux.c     | 135 +++++++
+ board/mono/gateway_dk/setup/sfp_i2c_mux.c     | 135 ++++++
  board/mono/gateway_dk/setup/temp_sensors.c    |  70 ++++
  .../mono/gateway_dk/setup/typec_controller.c  |  49 +++
  board/mono/gateway_dk/setup/voltage_sensors.c |  97 +++++
- 13 files changed, 1306 insertions(+)
+ 13 files changed, 1324 insertions(+)
  create mode 100644 board/mono/gateway_dk/setup/clock_gen.c
  create mode 100644 board/mono/gateway_dk/setup/cmd_otpmk.c
  create mode 100644 board/mono/gateway_dk/setup/ddr_sanity.c
@@ -162,10 +165,10 @@ index 00000000000..836930d1dc1
 +}
 diff --git a/board/mono/gateway_dk/setup/cmd_otpmk.c b/board/mono/gateway_dk/setup/cmd_otpmk.c
 new file mode 100644
-index 00000000000..e79c9ae0c25
+index 00000000000..0fc487d71d9
 --- /dev/null
 +++ b/board/mono/gateway_dk/setup/cmd_otpmk.c
-@@ -0,0 +1,378 @@
+@@ -0,0 +1,396 @@
 +// SPDX-License-Identifier: GPL-2.0+
 +/*
 + * Copyright 2025 Mono Technologies Inc.
@@ -201,18 +204,19 @@ index 00000000000..e79c9ae0c25
 +#define SFP_NUM_WORDS		34
 +#define OTPMK_WORD0		13
 +#define OTPMK_NUM_WORDS		8
++#define SRKH_WORD0		21
 +#define OSPR0_WORD		0
 +
 +/*
-+ * What 'otpmk gen' left behind, so that 'otpmk commit' can insist on running
-+ * against exactly that state: a key loaded in this session, and every other
-+ * mirror word still holding what it held when the key went in. Once a PROGFB
-+ * has been issued the session is over: TA_PROG_SFP may still be high, and
-+ * the data sheet allows no fuse block read until it is back at GND.
++ * What 'otpmk gen' left behind for 'otpmk commit': a key loaded and checked
++ * in this session, and the OSPR0 value commit writes back to trigger PROGFB.
++ * Once a PROGFB has been issued the session is over: TA_PROG_SFP may still
++ * be high, and the data sheet allows no fuse block read until it is back at
++ * GND.
 + */
 +static bool otpmk_loaded;
 +static bool progfb_issued;
-+static u32 mirror_snapshot[SFP_NUM_WORDS];
++static u32 otpmk_ospr0;
 +
 +static bool is_otpmk_word(int word)
 +{
@@ -301,8 +305,20 @@ index 00000000000..e79c9ae0c25
 +	return memcmp(half[0], half[1], OTPMK_NUM_WORDS / 2 * sizeof(u32)) != 0;
 +}
 +
++static bool srkh_blank(const u32 *mirrors)
++{
++	int i;
++
++	for (i = 0; i < SFP_NUM_SRKHR; i++)
++		if (mirrors[SRKH_WORD0 + i])
++			return false;
++
++	return true;
++}
++
 +static int otpmk_generate(void)
 +{
++	u32 before[SFP_NUM_WORDS], after[SFP_NUM_WORDS];
 +	u32 otpmk[OTPMK_NUM_WORDS];
 +	u32 hpsr, svhesr, ospr0;
 +	struct udevice *dev;
@@ -359,9 +375,22 @@ index 00000000000..e79c9ae0c25
 +		return CMD_RET_FAILURE;
 +	}
 +
-+	ret = read_mirrors(mirror_snapshot);
++	ret = read_mirrors(before);
 +	if (ret) {
 +		printf("otpmk: reading the mirror registers failed (err %d)\n", ret);
++		return CMD_RET_FAILURE;
++	}
++
++	/*
++	 * PROGFB burns every mirror word along with the key, and a mirror set
++	 * by hand earlier in the session (mw reaches them directly) looks just
++	 * like a fuse. The one such value that destroys the part is ITS with
++	 * no SRK hash: it could never boot again.
++	 */
++	if ((before[OSPR0_WORD] & OSPR_ITS) && srkh_blank(before)) {
++		printf("otpmk: refusing, OSPR0 0x%08x sets ITS with a blank SRK hash; PROGFB would\n",
++		       before[OSPR0_WORD]);
++		printf("otpmk: leave a part that never boots. Power-cycle to reload the mirrors.\n");
 +		return CMD_RET_FAILURE;
 +	}
 +
@@ -402,23 +431,42 @@ index 00000000000..e79c9ae0c25
 +	}
 +
 +	/*
-+	 * SNVS follows the mirrors, so OTPMK_ZERO clears as soon as a
-+	 * non-zero key is in them. Check that here rather than leaving the
-+	 * operator to md.l a big-endian register.
++	 * commit reads nothing once the pin is up, so everything PROGFB
++	 * depends on is checked here, at GND. SNVS follows the mirrors, so
++	 * OTPMK_ZERO clears as soon as a non-zero key is in them and the
++	 * syndrome says whether it is a valid code word; SVHESR must be clear
++	 * altogether, which is what the SFP driver would refuse PROGFB on; and
++	 * loading the key must have moved no other mirror word.
 +	 */
 +	hpsr = in_be32((void *)SNVS_HPSR);
 +	svhesr = in_be32((void *)SFP_SVHESR);
-+	if ((hpsr & (HPSR_OTPMK_ZERO | HPSR_OTPMK_SYNDROME)) ||
-+	    (svhesr & SVHESR_OTPMK_MASK)) {
++	if ((hpsr & (HPSR_OTPMK_ZERO | HPSR_OTPMK_SYNDROME)) || svhesr) {
 +		printf("otpmk: load FAILED (SNVS_HPSR 0x%08x, SVHESR 0x%08x), do not commit\n",
 +		       hpsr, svhesr);
 +		ret = -EIO;
 +		goto out;
 +	}
 +
++	ret = read_mirrors(after);
++	if (ret) {
++		printf("otpmk: reading the mirror registers failed (err %d)\n", ret);
++		goto out;
++	}
++	if (memcmp(before, after, sizeof(before))) {
++		printf("otpmk: load FAILED, it changed mirror words besides the key; do not commit\n");
++		ret = -EIO;
++		goto out;
++	}
++
++	otpmk_ospr0 = after[OSPR0_WORD];
 +	otpmk_loaded = true;
 +	printf("otpmk: key generated and loaded (SNVS_HPSR 0x%08x, SVHESR 0x%08x)\n",
 +	       hpsr, svhesr);
++	printf("otpmk: PROGFB also burns the other mirror words; non-zero now:");
++	for (i = 0; i < SFP_NUM_WORDS; i++)
++		if (after[i])
++			printf(" %d=0x%08x", i, after[i]);
++	printf("\n");
 +	printf("otpmk: nothing is committed yet, and ANY reset discards it.\n");
 +	printf("otpmk: to burn it: apply 1.8 V to TA_PROG_SFP now, then run 'otpmk commit'.\n");
 +
@@ -427,46 +475,19 @@ index 00000000000..e79c9ae0c25
 +	return ret ? CMD_RET_FAILURE : CMD_RET_SUCCESS;
 +}
 +
++/*
++ * LS1046A data sheet, Table 6 note 2: while TA_PROG_SFP is above GND, no
++ * activity but fuse programming -- not even a fuse block read. So commit
++ * reads nothing; gen checked everything with the pin at GND.
++ */
 +static int otpmk_commit(void)
 +{
-+	u32 mirrors[SFP_NUM_WORDS];
-+	u32 hpsr, svhesr, ospr0;
-+	int ret, word;
++	int ret;
 +
-+	/*
-+	 * Only ever burn what 'otpmk gen' loaded in this session. The flag
-+	 * says gen ran and confirmed its load, HPSR says the key is still in
-+	 * the mirrors -- a READFB since would have reloaded them -- and
-+	 * the comparison says no other mirror word has moved, because PROGFB
-+	 * commits every mirror at once and would burn a stray 'fuse override'
-+	 * along with the key.
-+	 */
++	/* Only ever burn what 'otpmk gen' loaded and checked in this session. */
 +	if (!otpmk_loaded) {
 +		printf("otpmk: refusing, no key was loaded in this session; run 'otpmk gen' first\n");
 +		return CMD_RET_FAILURE;
-+	}
-+
-+	hpsr = in_be32((void *)SNVS_HPSR);
-+	svhesr = in_be32((void *)SFP_SVHESR);
-+	if ((hpsr & (HPSR_OTPMK_ZERO | HPSR_OTPMK_SYNDROME)) ||
-+	    (svhesr & (SVHESR_OTPMK_MASK | SVHESR_DRV_MASK))) {
-+		printf("otpmk: refusing, the loaded key is gone or invalid (SNVS_HPSR 0x%08x, SVHESR 0x%08x)\n",
-+		       hpsr, svhesr);
-+		return CMD_RET_FAILURE;
-+	}
-+
-+	ret = read_mirrors(mirrors);
-+	if (ret) {
-+		printf("otpmk: reading the mirror registers failed (err %d)\n", ret);
-+		return CMD_RET_FAILURE;
-+	}
-+
-+	for (word = 0; word < SFP_NUM_WORDS; word++) {
-+		if (mirrors[word] != mirror_snapshot[word]) {
-+			printf("otpmk: refusing, mirror word %d changed since gen (0x%08x, was 0x%08x)\n",
-+			       word, mirrors[word], mirror_snapshot[word]);
-+			return CMD_RET_FAILURE;
-+		}
 +	}
 +
 +	/*
@@ -479,22 +500,21 @@ index 00000000000..e79c9ae0c25
 +	 * whatever happens next, a second attempt needs a power cycle and a
 +	 * fresh gen.
 +	 */
-+	ospr0 = mirrors[OSPR0_WORD];
 +	otpmk_loaded = false;
 +	progfb_issued = true;
-+	ret = fuse_prog(0, OSPR0_WORD, ospr0);
++	printf("otpmk: issuing PROGFB; if this does not return, ground TA_PROG_SFP and power-cycle.\n");
++	ret = fuse_prog(0, OSPR0_WORD, otpmk_ospr0);
 +	if (ret) {
-+		printf("otpmk: programming failed (err %d)\n", ret);
-+		printf("otpmk: return TA_PROG_SFP to GND, then power-cycle and start again from 'otpmk gen'.\n");
++		/* The driver reports a PROGFB that ran and flagged an error the same way. */
++		printf("otpmk: programming failed (err %d), and PROGFB may have run. Return\n", ret);
++		printf("otpmk: TA_PROG_SFP to GND, power-cycle, and read the boot self-test's\n");
++		printf("otpmk: Security fuses line before doing anything else.\n");
 +		return CMD_RET_FAILURE;
 +	}
 +
 +	/*
-+	 * No readback here. Confirming the burn means reading the fuse block,
-+	 * and the data sheet allows that only with TA_PROG_SFP at GND -- which
-+	 * it is not yet, and which software cannot see. The next boot reads the
-+	 * fuses with the pin grounded, as every boot does, and the self-test
-+	 * reports what it finds. That line is the verdict.
++	 * No readback, for the same reason: the next boot reads the fuses with
++	 * the pin grounded, and its self-test line is the verdict.
 +	 */
 +	printf("otpmk: PROGFB issued. Return TA_PROG_SFP to GND now, then power-cycle;\n");
 +	printf("otpmk: run nothing else first, and do not boot an OS from this session.\n");
@@ -531,15 +551,16 @@ index 00000000000..e79c9ae0c25
 +	"    because it would read the fuse block, which the data sheet forbids\n"
 +	"    once the pin may be above GND -- power-cycle to start over. Refuses\n"
 +	"    if the OTPMK is already programmed, the fuse block is\n"
-+	"    write-protected or it reports a Hamming error.\n"
++	"    write-protected or reports a Hamming error, or the mirrors set ITS\n"
++	"    with a blank SRK hash. Every check commit relies on runs here.\n"
 +	"    The key is never printed and cannot be read back; the load is\n"
 +	"    confirmed through SNVS_HPSR bit 27 (OTPMK_ZERO) clearing. ANY\n"
 +	"    reset discards the mirrors, so gen and commit must run without a\n"
 +	"    reset between.\n"
 +	"otpmk commit - program the mirror registers into fuses (PERMANENT).\n"
 +	"    Apply 1.8 V to TA_PROG_SFP only after gen, then run this. Requires\n"
-+	"    a key loaded by 'otpmk gen' in this session, with no other mirror\n"
-+	"    word changed since. Afterwards return the pin to GND and\n"
++	"    a key loaded by 'otpmk gen' in this session, and reads nothing\n"
++	"    itself while the pin is up. Afterwards return the pin to GND and\n"
 +	"    power-cycle: the boot self-test's Security fuses line is the\n"
 +	"    verdict. Spends one of the six programming cycles the chip allows\n"
 +	"    in its lifetime.\n"
