@@ -36,6 +36,10 @@ both of its ports. Without it a frame arriving after the handoff lands
 in memory the kernel has already reused, until the kernel's own FMan
 driver resets the block.
 
+A net command run over one of these ports halts it when it finishes,
+like any other, which would stop its counters and its XFI link report
+for the rest of the session; the poll reopens it.
+
 A cage the SerDes runs as 1000BASE-X -- port 1 under the 1G RCW -- keeps
 its MAC closed: the control DT describes both 10G MACs as XGMII whatever
 the RCW says, so opening one would configure it for a mode its lane is
@@ -66,8 +70,8 @@ Signed-off-by: Tomaz Zaman <tomaz@mono.si>
  board/mono/gateway_dk/setup/Makefile    |   1 +
  board/mono/gateway_dk/setup/cmd_otpmk.c |  11 +
  board/mono/gateway_dk/setup/eeprom.c    |  74 +++---
- board/mono/gateway_dk/setup/sfp_led.c   | 298 ++++++++++++++++++++++++
- 5 files changed, 383 insertions(+), 31 deletions(-)
+ board/mono/gateway_dk/setup/sfp_led.c   | 305 ++++++++++++++++++++++++
+ 5 files changed, 390 insertions(+), 31 deletions(-)
  create mode 100644 board/mono/gateway_dk/setup/sfp_led.c
 
 diff --git a/board/mono/gateway_dk/gateway_dk.c b/board/mono/gateway_dk/gateway_dk.c
@@ -288,10 +292,10 @@ index deb58f6ce7c..425aea1f988 100644
  /* Get EEPROM device */
 diff --git a/board/mono/gateway_dk/setup/sfp_led.c b/board/mono/gateway_dk/setup/sfp_led.c
 new file mode 100644
-index 00000000000..8b5eefaacde
+index 00000000000..2e07979f17a
 --- /dev/null
 +++ b/board/mono/gateway_dk/setup/sfp_led.c
-@@ -0,0 +1,298 @@
+@@ -0,0 +1,305 @@
 +// SPDX-License-Identifier: GPL-2.0+
 +/*
 + * SFP+ port LEDs.
@@ -525,6 +529,13 @@ index 00000000000..8b5eefaacde
 +	for (i = 0; i < sfp_led_count; i++) {
 +		struct sfp_led_port *port = &sfp_led_ports[i];
 +		bool present = dm_gpio_get_value(&port->present) > 0;
++
++		/*
++		 * A net command run over this port halts it when done, which
++		 * stops its counters and its XFI link report. Reopen it.
++		 */
++		if (port->eth && !eth_is_active(port->eth))
++			eth_start_udev(port->eth);
 +
 +		sfp_led_update(port, present, present && sfp_led_link(port));
 +	}
