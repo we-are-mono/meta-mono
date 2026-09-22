@@ -17,7 +17,8 @@ reports PASS/FAIL with a small detail string:
   - rtc.c              - PCF2131 real-time clock
   - security_fuses.c   - SFP/SNVS fuse state: OTPMK, SRK hash, ITS,
                          write protect and the SecMon state; a damaged
-                         OTPMK or DRV is a warning, not a failure
+                         OTPMK or DRV, or an unreadable SNVS, is a
+                         warning, not a failure
   - sfp_i2c_mux.c      - resets the SFP-side PCA9545 mux into a
                          known-good state, pulsing RESET# on
                          GPIO3_24 when a module holding SDA low has
@@ -48,35 +49,36 @@ programs the mirrors into the fuses. The LS1046A data sheet (Table 6
 note 2) allows nothing but programming while TA_PROG_SFP is above GND,
 fuse block reads included, so every check runs in gen, with the pin at
 GND. gen refuses when the OTPMK is already programmed, the block is
-write-protected or reports a Hamming error, the mirrors set ITS with a
-blank SRK hash, or the RNG returns a key with a blank or repeated half.
-After loading it confirms the key through SNVS_HPSR, requires SVHESR
-clear and every other mirror word unchanged, and lists the non-zero
-words PROGFB will burn with the key. commit reads nothing: it refuses
-only when gen has not loaded a key in this session, and leaves the
-verdict to the next boot's self-test. gen is refused once a key is
-loaded or a PROGFB has been issued, so it never reads the fuse block
-after the operator has been told to raise the pin. The SFP and SNVS
-register definitions both files use live in security_fuses.h.
+write-protected or reports a Hamming error, SFPCR disables fuse writes,
+SNVS_HPSR reads as zeros, the mirrors set ITS with a blank SRK hash, or
+the RNG returns a key with a blank or repeated half. After loading it
+confirms the key through SNVS_HPSR, requires SVHESR clear and every
+other mirror word unchanged, and lists the non-zero words PROGFB will
+burn with the key. commit reads nothing: it refuses only when gen has
+not loaded a key in this session, and leaves the verdict to the next
+boot's self-test. gen is refused once a key is loaded or a PROGFB has
+been issued, so it never reads the fuse block after the operator has
+been told to raise the pin. The SFP and SNVS register definitions both
+files use live in security_fuses.h.
 
 Upstream-Status: Inappropriate [product-specific]
 
 Signed-off-by: Tomaz Zaman <tomaz@mono.si>
 ---
  board/mono/gateway_dk/setup/clock_gen.c       |  67 +++
- board/mono/gateway_dk/setup/cmd_otpmk.c       | 405 ++++++++++++++++++
- board/mono/gateway_dk/setup/ddr_sanity.c      |  73 ++++
+ board/mono/gateway_dk/setup/cmd_otpmk.c       | 419 ++++++++++++++++++
+ board/mono/gateway_dk/setup/ddr_sanity.c      |  73 +++
  board/mono/gateway_dk/setup/fan_controller.c  |  89 ++++
  board/mono/gateway_dk/setup/led_controller.c  | 108 +++++
  board/mono/gateway_dk/setup/retimer.c         |  36 ++
  board/mono/gateway_dk/setup/rtc.c             |  55 +++
- board/mono/gateway_dk/setup/security_fuses.c  |  93 ++++
- board/mono/gateway_dk/setup/security_fuses.h  |  56 +++
+ board/mono/gateway_dk/setup/security_fuses.c  |  97 ++++
+ board/mono/gateway_dk/setup/security_fuses.h  |  66 +++
  board/mono/gateway_dk/setup/sfp_i2c_mux.c     | 135 ++++++
  board/mono/gateway_dk/setup/temp_sensors.c    |  70 +++
- .../mono/gateway_dk/setup/typec_controller.c  |  49 +++
- board/mono/gateway_dk/setup/voltage_sensors.c |  97 +++++
- 13 files changed, 1333 insertions(+)
+ .../mono/gateway_dk/setup/typec_controller.c  |  49 ++
+ board/mono/gateway_dk/setup/voltage_sensors.c |  97 ++++
+ 13 files changed, 1361 insertions(+)
  create mode 100644 board/mono/gateway_dk/setup/clock_gen.c
  create mode 100644 board/mono/gateway_dk/setup/cmd_otpmk.c
  create mode 100644 board/mono/gateway_dk/setup/ddr_sanity.c
@@ -166,10 +168,10 @@ index 00000000000..836930d1dc1
 +}
 diff --git a/board/mono/gateway_dk/setup/cmd_otpmk.c b/board/mono/gateway_dk/setup/cmd_otpmk.c
 new file mode 100644
-index 00000000000..ee2fcb497f9
+index 00000000000..de6eac69da7
 --- /dev/null
 +++ b/board/mono/gateway_dk/setup/cmd_otpmk.c
-@@ -0,0 +1,405 @@
+@@ -0,0 +1,419 @@
 +// SPDX-License-Identifier: GPL-2.0+
 +/*
 + * Copyright 2025 Mono Technologies Inc.
@@ -322,7 +324,7 @@ index 00000000000..ee2fcb497f9
 +	u32 before[SFP_NUM_WORDS], after[SFP_NUM_WORDS];
 +	u32 otpmk[OTPMK_NUM_WORDS];
 +	u8 scratch[16];
-+	u32 hpsr, svhesr, ospr0;
++	u32 hpsr, svhesr, sfpcr, ospr0;
 +	struct udevice *dev;
 +	int ret, i;
 +
@@ -355,6 +357,19 @@ index 00000000000..ee2fcb497f9
 +
 +	svhesr = in_be32((void *)SFP_SVHESR);
 +	hpsr = in_be32((void *)SNVS_HPSR);
++	sfpcr = in_be32((void *)SFP_SFPCR);
++
++	if (((hpsr & HPSR_SSM_ST_MASK) >> HPSR_SSM_ST_SHIFT) == SSM_ST_INIT) {
++		printf("otpmk: refusing, SNVS is unreadable (SNVS_HPSR 0x%08x), so the OTPMK\n",
++		       hpsr);
++		printf("otpmk: state is unknown.\n");
++		return CMD_RET_FAILURE;
++	}
++
++	if (sfpcr & (SFPCR_WD | SFPCR_WDL)) {
++		printf("otpmk: refusing, SFPCR 0x%08x disables fuse writes\n", sfpcr);
++		return CMD_RET_FAILURE;
++	}
 +
 +	if ((svhesr & (SVHESR_OTPMK_MASK | SVHESR_DRV_MASK)) ||
 +	    (hpsr & HPSR_OTPMK_SYNDROME)) {
@@ -561,8 +576,9 @@ index 00000000000..ee2fcb497f9
 +	"    because it would read the fuse block, which the data sheet forbids\n"
 +	"    once the pin may be above GND -- power-cycle to start over. Refuses\n"
 +	"    if the OTPMK is already programmed, the fuse block is\n"
-+	"    write-protected or reports a Hamming error, or the mirrors set ITS\n"
-+	"    with a blank SRK hash. Every check commit relies on runs here.\n"
++	"    write-protected or reports a Hamming error, SFPCR disables fuse\n"
++	"    writes, SNVS is unreadable, or the mirrors set ITS with a blank SRK\n"
++	"    hash. Every check commit relies on runs here.\n"
 +	"    The key is never printed and cannot be read back; the load is\n"
 +	"    confirmed through SNVS_HPSR bit 27 (OTPMK_ZERO) clearing. ANY\n"
 +	"    reset discards the mirrors, so gen and commit must run without a\n"
@@ -968,10 +984,10 @@ index 00000000000..f198cb9cdaf
 +}
 diff --git a/board/mono/gateway_dk/setup/security_fuses.c b/board/mono/gateway_dk/setup/security_fuses.c
 new file mode 100644
-index 00000000000..71b331cc26f
+index 00000000000..06ee0d254a0
 --- /dev/null
 +++ b/board/mono/gateway_dk/setup/security_fuses.c
-@@ -0,0 +1,93 @@
+@@ -0,0 +1,97 @@
 +// SPDX-License-Identifier: GPL-2.0+
 +/*
 + * Copyright 2025 Mono Technologies Inc.
@@ -1003,6 +1019,10 @@ index 00000000000..71b331cc26f
 +	svhesr = in_be32((void *)SFP_SVHESR);
 +	hpsr = in_be32((void *)SNVS_HPSR);
 +	ospr = in_be32((void *)SFP_OSPR);
++
++	if (((hpsr & HPSR_SSM_ST_MASK) >> HPSR_SSM_ST_SHIFT) == SSM_ST_INIT)
++		return hw_test_warn(ctx, "SNVS unreadable, HPSR 0x%08x, OTPMK state unknown",
++				    hpsr);
 +
 +	otpmk = !(hpsr & HPSR_OTPMK_ZERO);
 +
@@ -1067,10 +1087,10 @@ index 00000000000..71b331cc26f
 +}
 diff --git a/board/mono/gateway_dk/setup/security_fuses.h b/board/mono/gateway_dk/setup/security_fuses.h
 new file mode 100644
-index 00000000000..ef0d5862ad4
+index 00000000000..809e487b3e3
 --- /dev/null
 +++ b/board/mono/gateway_dk/setup/security_fuses.h
-@@ -0,0 +1,56 @@
+@@ -0,0 +1,66 @@
 +/* SPDX-License-Identifier: GPL-2.0+ */
 +/*
 + * Copyright 2025 Mono Technologies Inc.
@@ -1081,9 +1101,9 @@ index 00000000000..ef0d5862ad4
 + * Both blocks are big-endian on this SoC, so every access goes through
 + * in_be32(). u-boot's fsl_sfp.h describes the fuse block but is gated on
 + * CONFIG_SYS_FSL_SFP_*, which this board does not select, and it covers
-+ * neither SVHESR nor SNVS -- hence the local offsets. They hang off
++ * neither SVHESR nor SNVS -- hence the local offsets. The SFP ones hang off
 + * CFG_SYS_SFP_ADDR, which already points at the fuse register block at
-+ * SFP + 0x200.
++ * SFP + 0x200, and SNVS_HPSR off CFG_SYS_SEC_MON_ADDR.
 + */
 +
 +#ifndef SECURITY_FUSES_H
@@ -1095,6 +1115,7 @@ index 00000000000..ef0d5862ad4
 +#include <linux/types.h>
 +
 +#define SFP_SVHESR		((ulong)CFG_SYS_SFP_ADDR - 0x200 + 0x024)
++#define SFP_SFPCR		((ulong)CFG_SYS_SFP_ADDR - 0x200 + 0x028)
 +#define SFP_OSPR		((ulong)CFG_SYS_SFP_ADDR)
 +#define SFP_SRKHR(n)		((ulong)CFG_SYS_SFP_ADDR + 0x054 + (n) * 4)
 +#define SFP_NUM_SRKHR		8
@@ -1105,11 +1126,15 @@ index 00000000000..ef0d5862ad4
 +#define OSPR_ITS		BIT(2)
 +#define OSPR_WP			BIT(0)
 +
++/* Write disable and its lock; TF-A sets both under TRUSTED_BOARD_BOOT. */
++#define SFPCR_WD		BIT(31)
++#define SFPCR_WDL		BIT(30)
++
 +/*
 + * SNVS_HPSR. OTPMK_ZERO reads 1 while the key is blank. OTPMK_SYNDROME is
 + * the Hamming syndrome of the key SNVS is holding, zero while it is intact.
 + */
-+#define SNVS_HPSR		((ulong)CONFIG_SYS_IMMR + 0xe90014)
++#define SNVS_HPSR		((ulong)CFG_SYS_SEC_MON_ADDR + 0x14)
 +#define HPSR_OTPMK_ZERO		BIT(27)
 +#define HPSR_OTPMK_SYNDROME	GENMASK(24, 16)
 +
@@ -1120,6 +1145,11 @@ index 00000000000..ef0d5862ad4
 + */
 +#define HPSR_SSM_ST_MASK	GENMASK(11, 8)
 +#define HPSR_SSM_ST_SHIFT	8
++/*
++ * No part that has booted is still in init, so a state of zero means HPSR
++ * read as zeros -- SNVS closed to this world -- and its OTPMK_ZERO with it.
++ */
++#define SSM_ST_INIT		0x0
 +#define SSM_ST_SOFT_FAIL	0x3
 +#define SSM_ST_CHECK		0x9
 +#define SSM_ST_NON_SECURE	0xb
