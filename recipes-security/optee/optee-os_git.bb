@@ -62,10 +62,16 @@ OPTEE_PLATFORM = "ls-ls1046ardb"
 # it. The fleet image therefore never writes a key. RPMB is keyed once per
 # unit by the separate provisioning image, this recipe with WRITE_KEY=y,
 # booted under a validated chain and signed with a revocable SRK slot; from
-# then on this image only ever authenticates with the key. Without WRITE_KEY
-# OP-TEE uses the probe interface, so on this kernel RPMB frames travel
-# through the in-kernel RPMB class (OPTEE_RPC_CMD_RPMB_FRAMES), with no
-# tee-supplicant involved.
+# then on this image only ever authenticates with the key.
+#
+# The two builds reach the eMMC differently. Without WRITE_KEY OP-TEE uses
+# the probe interface, so on this kernel RPMB frames travel through the
+# in-kernel RPMB class (OPTEE_RPC_CMD_RPMB_FRAMES), with no tee-supplicant
+# involved. With it, OP-TEE always takes legacy_rpmb_init(): frames go out
+# as OPTEE_RPC_CMD_RPMB, which only tee-supplicant answers, and the key is
+# written on the first secure storage access -- with CFG_REE_FS on, the
+# device PTA never starts RPMB itself. So the provisioning image also needs
+# tee-supplicant, libteec and a TA that touches RPMB storage.
 #
 # The gate in the plat-ls patch, plat_rpmb_key_is_ready(), is what the
 # provisioning image relies on: it refuses unless the boot was trusted
