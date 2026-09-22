@@ -66,8 +66,8 @@ Signed-off-by: Tomaz Zaman <tomaz@mono.si>
  board/mono/gateway_dk/setup/Makefile    |   1 +
  board/mono/gateway_dk/setup/cmd_otpmk.c |  11 +
  board/mono/gateway_dk/setup/eeprom.c    |  74 +++---
- board/mono/gateway_dk/setup/sfp_led.c   | 289 ++++++++++++++++++++++++
- 5 files changed, 374 insertions(+), 31 deletions(-)
+ board/mono/gateway_dk/setup/sfp_led.c   | 298 ++++++++++++++++++++++++
+ 5 files changed, 383 insertions(+), 31 deletions(-)
  create mode 100644 board/mono/gateway_dk/setup/sfp_led.c
 
 diff --git a/board/mono/gateway_dk/gateway_dk.c b/board/mono/gateway_dk/gateway_dk.c
@@ -288,10 +288,10 @@ index deb58f6ce7c..425aea1f988 100644
  /* Get EEPROM device */
 diff --git a/board/mono/gateway_dk/setup/sfp_led.c b/board/mono/gateway_dk/setup/sfp_led.c
 new file mode 100644
-index 00000000000..7c3b3b99835
+index 00000000000..8b5eefaacde
 --- /dev/null
 +++ b/board/mono/gateway_dk/setup/sfp_led.c
-@@ -0,0 +1,289 @@
+@@ -0,0 +1,298 @@
 +// SPDX-License-Identifier: GPL-2.0+
 +/*
 + * SFP+ port LEDs.
@@ -388,14 +388,23 @@ index 00000000000..7c3b3b99835
 +	ret = gpio_request_by_name_nodev(node, "link-gpios", 0,
 +					 &port->link_led, GPIOD_IS_OUT);
 +	if (ret)
-+		return ret;
++		goto free_present;
 +
 +	ret = gpio_request_by_name_nodev(node, "activity-gpios", 0,
 +					 &port->activity_led, GPIOD_IS_OUT);
 +	if (ret)
-+		return ret;
++		goto free_link;
 +
-+	return uclass_get_device_by_name(UCLASS_MDIO, pcs_name, &port->pcs);
++	ret = uclass_get_device_by_name(UCLASS_MDIO, pcs_name, &port->pcs);
++	if (!ret)
++		return 0;
++
++	dm_gpio_free(port->activity_led.dev, &port->activity_led);
++free_link:
++	dm_gpio_free(port->link_led.dev, &port->link_led);
++free_present:
++	dm_gpio_free(port->present.dev, &port->present);
++	return ret;
 +}
 +
 +/*
