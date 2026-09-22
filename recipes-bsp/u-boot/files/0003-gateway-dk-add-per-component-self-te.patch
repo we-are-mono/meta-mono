@@ -66,7 +66,7 @@ Upstream-Status: Inappropriate [product-specific]
 Signed-off-by: Tomaz Zaman <tomaz@mono.si>
 ---
  board/mono/gateway_dk/setup/clock_gen.c       |  67 +++
- board/mono/gateway_dk/setup/cmd_otpmk.c       | 419 ++++++++++++++++++
+ board/mono/gateway_dk/setup/cmd_otpmk.c       | 421 ++++++++++++++++++
  board/mono/gateway_dk/setup/ddr_sanity.c      |  73 +++
  board/mono/gateway_dk/setup/fan_controller.c  |  89 ++++
  board/mono/gateway_dk/setup/led_controller.c  | 108 +++++
@@ -78,7 +78,7 @@ Signed-off-by: Tomaz Zaman <tomaz@mono.si>
  board/mono/gateway_dk/setup/temp_sensors.c    |  70 +++
  .../mono/gateway_dk/setup/typec_controller.c  |  49 ++
  board/mono/gateway_dk/setup/voltage_sensors.c |  97 ++++
- 13 files changed, 1361 insertions(+)
+ 13 files changed, 1363 insertions(+)
  create mode 100644 board/mono/gateway_dk/setup/clock_gen.c
  create mode 100644 board/mono/gateway_dk/setup/cmd_otpmk.c
  create mode 100644 board/mono/gateway_dk/setup/ddr_sanity.c
@@ -168,10 +168,10 @@ index 00000000000..836930d1dc1
 +}
 diff --git a/board/mono/gateway_dk/setup/cmd_otpmk.c b/board/mono/gateway_dk/setup/cmd_otpmk.c
 new file mode 100644
-index 00000000000..de6eac69da7
+index 00000000000..d0b8c8ec202
 --- /dev/null
 +++ b/board/mono/gateway_dk/setup/cmd_otpmk.c
-@@ -0,0 +1,419 @@
+@@ -0,0 +1,421 @@
 +// SPDX-License-Identifier: GPL-2.0+
 +/*
 + * Copyright 2025 Mono Technologies Inc.
@@ -531,9 +531,9 @@ index 00000000000..de6eac69da7
 +	ret = fuse_prog(0, OSPR0_WORD, otpmk_ospr0);
 +	if (ret) {
 +		/* The driver reports a PROGFB that ran and flagged an error the same way. */
-+		printf("otpmk: programming failed (err %d), and PROGFB may have run. Return\n", ret);
-+		printf("otpmk: TA_PROG_SFP to GND, power-cycle, and read the boot self-test's\n");
-+		printf("otpmk: Security fuses line before doing anything else.\n");
++		printf("otpmk: programming failed (err %d); PROGFB may have run.\n", ret);
++		printf("otpmk: Return TA_PROG_SFP to GND, power-cycle, and read the boot\n");
++		printf("otpmk: self-test's Security fuses line before doing anything else.\n");
 +		return CMD_RET_FAILURE;
 +	}
 +
@@ -544,9 +544,10 @@ index 00000000000..de6eac69da7
 +	printf("otpmk: PROGFB issued. Return TA_PROG_SFP to GND now, then power-cycle;\n");
 +	printf("otpmk: run nothing else first, and do not boot an OS from this session.\n");
 +	printf("otpmk: the boot self-test's Security fuses line is the verdict:\n");
-+	printf("otpmk:   'OTPMK set'            the key is burned\n");
-+	printf("otpmk:   'open, no fuses blown' nothing took -- was TA_PROG_SFP at 1.8 V?\n");
-+	printf("otpmk:   'OTPMK damaged'        the burn went wrong; that key is lost\n");
++	printf("otpmk:   'OTPMK set'                     the key is burned\n");
++	printf("otpmk:   'open, ...' or 'OTPMK blank'    nothing took -- was TA_PROG_SFP at 1.8 V?\n");
++	printf("otpmk:   'SRK hash set with blank OTPMK' the same, on a unit with an SRK hash\n");
++	printf("otpmk:   'OTPMK ... damaged'             the burn went wrong; that key is lost\n");
 +	printf("otpmk: the secure world uses this key only under secure boot (SecMon trusted).\n");
 +
 +	return CMD_RET_SUCCESS;
@@ -572,9 +573,10 @@ index 00000000000..de6eac69da7
 +	"One Time Programmable Master Key",
 +	"gen - draw 256 bits from the CAAM RNG, Hamming encode them, and\n"
 +	"    load the fuse mirror registers. Run it once per boot, with\n"
-+	"    TA_PROG_SFP at GND; a second gen in the same session is refused,\n"
-+	"    because it would read the fuse block, which the data sheet forbids\n"
-+	"    once the pin may be above GND -- power-cycle to start over. Refuses\n"
++	"    TA_PROG_SFP at GND; after a gen that loaded a key, another in the\n"
++	"    same session is refused, because it would read the fuse block,\n"
++	"    which the data sheet forbids once the pin may be above GND --\n"
++	"    power-cycle to start over. Refuses\n"
 +	"    if the OTPMK is already programmed, the fuse block is\n"
 +	"    write-protected or reports a Hamming error, SFPCR disables fuse\n"
 +	"    writes, SNVS is unreadable, or the mirrors set ITS with a blank SRK\n"

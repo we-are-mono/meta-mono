@@ -19,14 +19,14 @@ anything able to do so could set ITS on a unit with a blank SRK hash and
 brick it permanently with no recovery. Any Layerscape board making that
 same choice hits this.
 
-Also leave SFPCR alone when no clock is described. Without a clock
-framework the driver derived the fuse programming pulse width from
-gd->bus_clk / 4, which on LS1046A at a 600 MHz platform clock writes
-PPW = 1800 where the register resets to 2401 -- a shorter pulse than
-the silicon default, applied silently on the first fuse command,
-before the one burn that cannot be repeated. Neither the boot ROM nor
-TF-A's own fuse provisioning ever rewrite SFPCR; the reset value is
-what NXP programs fuses with.
+Also leave SFPCR alone when U-Boot has no clock framework (CONFIG_CLK
+unset, so the clock lookup returns -ENOSYS). There the driver derived
+the fuse programming pulse width from gd->bus_clk / 4, which on LS1046A
+at a 600 MHz platform clock writes PPW = 1800 where the register resets
+to 2401 -- a shorter pulse than the silicon default, applied silently
+on the first fuse command, before the one burn that cannot be repeated.
+Neither the boot ROM nor TF-A's own fuse provisioning ever rewrite
+SFPCR; the reset value is what NXP programs fuses with.
 
 Also drop the SVHESR read the driver made right before PROGFB. PROGFB
 runs with TA_PROG_SFP at 1.8 V, and the LS1046A data sheet (Table 6

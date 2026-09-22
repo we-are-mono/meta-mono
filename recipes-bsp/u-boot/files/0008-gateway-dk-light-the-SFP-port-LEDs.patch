@@ -146,7 +146,7 @@ index 976fba4de57..185bd0f1a74 100644
  obj-y += cmd_otpmk.o
 +obj-y += sfp_led.o
 diff --git a/board/mono/gateway_dk/setup/cmd_otpmk.c b/board/mono/gateway_dk/setup/cmd_otpmk.c
-index de6eac69da7..4e390c6db24 100644
+index d0b8c8ec202..6a8833c540d 100644
 --- a/board/mono/gateway_dk/setup/cmd_otpmk.c
 +++ b/board/mono/gateway_dk/setup/cmd_otpmk.c
 @@ -36,6 +36,8 @@
