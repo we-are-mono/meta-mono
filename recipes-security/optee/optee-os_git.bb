@@ -11,6 +11,7 @@ require conf/include/nxp-base.inc
 SRC_URI = "git://github.com/nxp-qoriq/optee_os;protocol=https;nobranch=1 \
            file://0001-plat-ls-refuse-to-program-the-RPMB-key-unless-the-bo.patch \
            file://0002-plat-ls-seed-core-ASLR-from-TF-A-s-SEC-RNG.patch \
+           file://0003-core-lpae-retry-ASLR-when-no-user-mapping-entry-rema.patch \
            "
 SRCREV = "${NXP_LF_SRCREV_OPTEE}"
 
@@ -95,7 +96,11 @@ OPTEE_LOG_LEVEL ?= "1"
 #
 # CFG_CORE_ASLR stays at its default, y. The core's map offset is seeded from
 # TF-A's SEC RNG by the second plat-ls patch; without it plat-ls had no seed
-# and the core sat at the same address on every boot.
+# and the core sat at the same address on every boot. The third patch, an
+# upstream backport, keeps a randomized layout from taking every 1GB slot TAs
+# can use: in a 32-bit VA space with the identity map in the top slot, a core
+# mapping that straddles 2GB would otherwise panic the boot in
+# set_user_va_idx(), for roughly one seed in thirty.
 #
 # CFG_JR_INDEX names the CAAM job ring OP-TEE takes, which the recovery
 # kernel's DTS disables (&sec_jr2). The CAAM driver forces it per platform, and

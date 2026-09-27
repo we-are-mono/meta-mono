@@ -1,0 +1,168 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Sungbae Yoo <sungbaey@nvidia.com>
+Date: Thu, 2 Jul 2026 13:25:25 +0000
+Subject: [PATCH] core: lpae: retry ASLR when no user mapping entry remains
+
+With LPAE, the user mapping must occupy an unused level 1 entry in the
+32-bit VA range [1GB, 4GB[. An identity mapping can consume one of these
+entries while a randomized core mapping crosses a 1GB boundary and
+consumes the other two. The mappings do not overlap, so init_mem_map()
+accepts the layout, but set_user_va_idx() later asserts because no entry
+remains for a user mapping.
+
+Add an architecture-specific check for each tentative ASLR memory map,
+including the pending identity mapping. Reject candidates that leave no
+room for a user mapping and retry with the next candidate. Non-LPAE
+configurations retain their existing behavior.
+
+Fixes: 2317a39482d9 ("core: lpae: search TAs VA base in the regions [1GB, 4GB[")
+Upstream-Status: Backport [05885944756e]
+
+Signed-off-by: Sungbae Yoo <sungbaey@nvidia.com>
+Reviewed-by: Jens Wiklander <jens.wiklander@oss.qualcomm.com>
+(cherry picked from commit 05885944756ef869a542489b56a1e927badc134b)
+---
+ core/arch/arm/include/mm/core_mmu_arch.h   | 13 +++++++
+ core/arch/arm/mm/core_mmu_lpae.c           | 41 +++++++++++++++++++++-
+ core/arch/riscv/include/mm/core_mmu_arch.h | 13 +++++++
+ core/mm/core_mmu.c                         |  3 ++
+ 4 files changed, 69 insertions(+), 1 deletion(-)
+
+diff --git a/core/arch/arm/include/mm/core_mmu_arch.h b/core/arch/arm/include/mm/core_mmu_arch.h
+index 0aff1a67d..ad6679d2f 100644
+--- a/core/arch/arm/include/mm/core_mmu_arch.h
++++ b/core/arch/arm/include/mm/core_mmu_arch.h
+@@ -209,6 +209,19 @@ static inline bool core_mmu_va_is_valid(vaddr_t va)
+ 	return va < BIT64(core_mmu_get_va_width());
+ }
+ 
++#ifdef CFG_WITH_LPAE
++bool arch_mem_map_allows_user_va(const struct memory_map *mem_map,
++				 vaddr_t id_map_start, vaddr_t id_map_end);
++#else
++static inline bool
++arch_mem_map_allows_user_va(const struct memory_map *mem_map __unused,
++			    vaddr_t id_map_start __unused,
++			    vaddr_t id_map_end __unused)
++{
++	return true;
++}
++#endif
++
+ static inline bool core_mmu_level_in_range(unsigned int level)
+ {
+ #if CORE_MMU_BASE_TABLE_LEVEL == 0
+diff --git a/core/arch/arm/mm/core_mmu_lpae.c b/core/arch/arm/mm/core_mmu_lpae.c
+index 0ff4c7a22..1047faabc 100644
+--- a/core/arch/arm/mm/core_mmu_lpae.c
++++ b/core/arch/arm/mm/core_mmu_lpae.c
+@@ -69,6 +69,7 @@
+ #include <kernel/linker.h>
+ #include <kernel/misc.h>
+ #include <kernel/panic.h>
++#include <kernel/tee_misc.h>
+ #include <kernel/thread.h>
+ #include <kernel/tlb_helpers.h>
+ #include <memtag.h>
+@@ -292,6 +293,13 @@ static l1_idx_t user_l1_table_idx[NUM_BASE_TABLES * CFG_TEE_CORE_NB_CORE];
+ #endif
+ #endif
+ 
++/*
++ * Level 1 entries at this index and above start outside the 32-bit VA space.
++ * Use it as the exclusive upper bound when selecting a slot for 32-bit TAs.
++ */
++#define ARM32_USER_VA_SLOT_LIMIT \
++	((UINT32_MAX >> L1_XLAT_ADDRESS_SHIFT) + 1)
++
+ /*
+  * TAs page table entry inside a level 1 page table.
+  *
+@@ -896,6 +904,37 @@ static void core_init_mmu_prtn_tee(struct mmu_partition *prtn,
+ 	}
+ }
+ 
++bool arch_mem_map_allows_user_va(const struct memory_map *mem_map,
++				 vaddr_t id_map_start, vaddr_t id_map_end)
++{
++	const size_t slot_size = BIT64(L1_XLAT_ADDRESS_SHIFT);
++	vaddr_t id_start = ROUNDDOWN(id_map_start, SMALL_PAGE_SIZE);
++	size_t id_size = ROUNDUP(id_map_end, SMALL_PAGE_SIZE) - id_start;
++	unsigned int slot = 0;
++	size_t n = 0;
++
++	/*
++	 * The user mapping must occupy an unused level 1 entry in the 32-bit
++	 * VA range [1GB, 4GB[. Account for the identity mapping too, since it
++	 * has not yet been added to @mem_map.
++	 */
++	for (slot = 1; slot < ARM32_USER_VA_SLOT_LIMIT; slot++) {
++		vaddr_t slot_base = (vaddr_t)slot * slot_size;
++		bool used = core_is_buffer_intersect(slot_base, slot_size,
++						     id_start, id_size);
++
++		for (n = 0; !used && n < mem_map->count; n++)
++			used = core_is_buffer_intersect(slot_base, slot_size,
++							mem_map->map[n].va,
++							mem_map->map[n].size);
++
++		if (!used)
++			return true;
++	}
++
++	return false;
++}
++
+ /*
+  * In order to support 32-bit TAs we will have to find
+  * a user VA base in the region [1GB, 4GB[.
+@@ -953,7 +992,7 @@ static void set_user_va_idx(struct mmu_partition *prtn)
+ 	 * Search level 1 table (i.e. 1GB mapping per entry) for
+ 	 * an empty entry in the range [1GB, 4GB[.
+ 	 */
+-	for (n = 1; n < 4; n++) {
++	for (n = 1; n < ARM32_USER_VA_SLOT_LIMIT; n++) {
+ 		if ((tbl[n] & DESC_ENTRY_TYPE_MASK) == INVALID_DESC) {
+ 			user_va_idx = n;
+ 			break;
+diff --git a/core/arch/riscv/include/mm/core_mmu_arch.h b/core/arch/riscv/include/mm/core_mmu_arch.h
+index 115fedb38..fe905de03 100644
+--- a/core/arch/riscv/include/mm/core_mmu_arch.h
++++ b/core/arch/riscv/include/mm/core_mmu_arch.h
+@@ -223,6 +223,19 @@ static inline bool core_mmu_va_is_valid(vaddr_t va)
+ #endif
+ }
+ 
++static inline bool
++arch_mem_map_allows_user_va(const struct memory_map *mem_map __unused,
++			    vaddr_t id_map_start __unused,
++			    vaddr_t id_map_end __unused)
++{
++	/*
++	 * RV32 TAs on an RV64 core aren't currently supported, so the user VA
++	 * isn't restricted to the 32-bit VA range. The final selector may use
++	 * any unused VPN[2] entry without an additional layout constraint.
++	 */
++	return true;
++}
++
+ static inline bool core_mmu_level_in_range(unsigned int level)
+ {
+ 	return level <= CORE_MMU_BASE_TABLE_LEVEL;
+diff --git a/core/mm/core_mmu.c b/core/mm/core_mmu.c
+index 8e2f81df3..5ac4dab92 100644
+--- a/core/mm/core_mmu.c
++++ b/core/mm/core_mmu.c
+@@ -1540,6 +1540,9 @@ static struct memory_map *init_mem_map(struct memory_map *mem_map,
+ 		for (n = 0; n < 3; n++) {
+ 			ba = arch_aslr_base_addr(start_addr, seed, n);
+ 			if (assign_mem_va(ba, mem_map) &&
++			    arch_mem_map_allows_user_va(mem_map,
++							id_map_start,
++							id_map_end) &&
+ 			    mem_map_add_id_map(mem_map, id_map_start,
+ 					       id_map_end)) {
+ 				offs = ba - start_addr;
+-- 
+2.47.3
+
