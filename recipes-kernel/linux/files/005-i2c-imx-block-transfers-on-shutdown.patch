@@ -1,0 +1,66 @@
+From: Tomaz Zaman <tomaz@mono.si>
+Date: Mon, 19 Oct 2026 10:53:18 +0200
+Subject: [PATCH] i2c: imx: block transfers once the system shuts down
+
+A reboot does not stop I2C traffic. Kernel threads and userspace keep
+issuing transfers through device_shutdown() until the remaining CPUs are
+stopped, and the reset can land while the controller is clocking a read.
+The addressed target is then left driving a 0 data bit on SDA with SCL
+released high, waiting for clock edges that never come. Targets without a
+reset pin, and with an SMBus timeout that only watches SCL, stay that way
+across every warm reset until power is removed. The bus is wedged for the
+next boot: the controller sees it busy and reports arbitration lost on the
+first START.
+
+On LS1046A this is not recoverable from the SoC side for IIC1, whose SCL
+has no GPIO alternate function for the nine-clock recovery. It has been
+seen on an EMC2302 fan controller and on SFP modules behind PCA9545 muxes.
+
+Add a shutdown callback that marks the adapter suspended, as the cadence
+and qcom-geni drivers do. The helper takes the root adapter lock, so a
+transfer in flight on another CPU completes first, and the core rejects
+every later transfer with -ESHUTDOWN. Transfers through mux children go
+through the parent adapter and are covered too.
+
+Upstream-Status: Pending
+Signed-off-by: Tomaz Zaman <tomaz@mono.si>
+---
+ drivers/i2c/busses/i2c-imx.c | 15 +++++++++++++++
+ 1 file changed, 15 insertions(+)
+
+diff --git a/drivers/i2c/busses/i2c-imx.c b/drivers/i2c/busses/i2c-imx.c
+index a2afcf2d8ae4..ea30d318eb3c 100644
+--- a/drivers/i2c/busses/i2c-imx.c
++++ b/drivers/i2c/busses/i2c-imx.c
+@@ -2072,6 +2072,20 @@ static void i2c_imx_remove(struct platform_device *pdev)
+ 	pm_runtime_disable(&pdev->dev);
+ }
+ 
++/*
++ * A warm reset that lands mid-read leaves the addressed target driving a 0
++ * data bit on SDA, waiting for SCL edges that never come. Targets without a
++ * reset pin or an SDA timeout keep the bus wedged until power is removed.
++ * Marking the adapter suspended takes the bus lock, so any in-flight
++ * transfer completes first, and the core rejects every later one.
++ */
++static void i2c_imx_shutdown(struct platform_device *pdev)
++{
++	struct imx_i2c_struct *i2c_imx = platform_get_drvdata(pdev);
++
++	i2c_mark_adapter_suspended(&i2c_imx->adapter);
++}
++
+ static int i2c_imx_runtime_suspend(struct device *dev)
+ {
+ 	struct imx_i2c_struct *i2c_imx = dev_get_drvdata(dev);
+@@ -2165,6 +2179,7 @@ static const struct dev_pm_ops i2c_imx_pm_ops = {
+ static struct platform_driver i2c_imx_driver = {
+ 	.probe = i2c_imx_probe,
+ 	.remove = i2c_imx_remove,
++	.shutdown = i2c_imx_shutdown,
+ 	.driver = {
+ 		.name = DRIVER_NAME,
+ 		.pm = pm_ptr(&i2c_imx_pm_ops),
+-- 
+2.47.3
+
