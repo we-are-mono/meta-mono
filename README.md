@@ -38,6 +38,10 @@ kas build
 
 This uses `.config.yaml` (the kas default) which builds both `recovery-image` (BusyBox initramfs) and `firmware-image` (NOR/eMMC flash images). Build artifacts are placed in `./dist/`.
 
+## Documentation
+
+Contributor documentation lives in [`docs/`](docs/README.md): boot model, recovery image, development workflow, hardware notes, OP-TEE and security fuses.
+
 ## Flashing
 
 See [Flashing Firmware](https://docs.mono.si/gateway-development-kit/flashing-firmware) for instructions.
@@ -75,7 +79,7 @@ All four BSP components track NXP Linux Factory upstream directly; our Gateway-D
 
 NXP uses Linux kernel minor version numbers for development of their firmware components (RCW, U-Boot, ATF) and Linux kernel. Their branches are prefixed with `lf-` and suffixed with `-y` (without patch numbers), e.g., `lf-6.18.y`. Stable releases are tagged with the full kernel version plus an internal SDK version, e.g., `lf-6.18.20-2.0.0`.
 
-We pin all four components to the same NXP LF tag (currently `lf-6.18.20-2.0.0`) via `conf/include/nxp-base.inc`, and carry our Gateway-DK additions as patches in the relevant `recipes-*/files/` directories. Bumping to a newer NXP LF release means editing one include file and refreshing any patches that no longer apply — see [`CLAUDE.md`](CLAUDE.md) for the procedure.
+We pin all four components to the same NXP LF tag (currently `lf-6.18.20-2.0.0`) via `conf/include/nxp-base.inc`, and carry our Gateway-DK additions as patches in the relevant `recipes-*/files/` directories. Bumping to a newer NXP LF release means editing one include file and refreshing any patches that no longer apply — see [docs/development.md](docs/development.md#nxp-linux-factory-base) for the procedure.
 
 Firmware images follow CalVer: `YYYY.MM.N` (e.g., `2026.03.1`), set via `FIRMWARE_VERSION` in `conf/machine/gateway-dk.conf`.
 
