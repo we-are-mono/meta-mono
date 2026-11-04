@@ -87,4 +87,4 @@ The EEPROM's WP line (`GPIO3_00`) shares a GPIO bank with the port LEDs. The GPI
 
 ## CAAM job rings
 
-OP-TEE takes CAAM job ring 2 (`CFG_JR_INDEX=2`) before Linux runs. The recovery DTS therefore disables `&sec_jr2`. Without that, the kernel logs "failed to flush job ring 2" on every boot. Any other kernel booted on this board needs the same line in its device tree.
+When it is built in, OP-TEE takes CAAM job ring 2 (`CFG_JR_INDEX=2`) before Linux runs. The recovery DTS therefore disables `&sec_jr2`. Without that, the kernel logs "failed to flush job ring 2" on every boot. With OP-TEE left out the ring sits unused, which costs nothing. Any other kernel booted on this board needs the same line in its device tree.

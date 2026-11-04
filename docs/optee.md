@@ -1,5 +1,7 @@
 # OP-TEE
 
+**OP-TEE is not in the images by default** while it awaits review: `ATF_OPTEE ?= "0"` in `recipes-bsp/atf/atf_git.bb` leaves BL31 without a secure payload. Set `ATF_OPTEE = "1"` (in `site.conf` or a kas override) to build it in. The rest of this page describes that configuration.
+
 OP-TEE is the secure-world OS (BL32). `recipes-security/optee/optee-os_git.bb` builds it from `nxp-qoriq/optee_os` at the same LF tag as the other NXP components (`NXP_LF_SRCREV_OPTEE`), and TF-A loads it through the `opteed` dispatcher. Both boot chains share the FIP, so the secure world is present whichever chain boots. The recipe's comments explain each build flag in detail. This page covers the parts you need before you change anything.
 
 ## Integration gotchas
