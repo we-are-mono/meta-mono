@@ -29,18 +29,105 @@ To move to a newer LF release:
 
 The board patches are written to apply across LF releases: they are additive board ports plus small Kconfig and Makefile changes, and fuzz absorbs context drift.
 
-## Changing a BSP patch
+## Changing patches
 
-**Never hand-edit a `.patch` file.** Hand edits leave stale metadata behind, such as wrong index hashes, and cause surprises at apply time. Instead:
+Every NXP-tracked recipe is an upstream git tree at a pinned SRCREV, plus a series of patches under its `files/` directory. To change that series, change commits in a git tree and regenerate the patches from them.
 
-1. Clone the upstream repo and check out the pinned `NXP_LF_SRCREV_*`.
-2. `git am` the layer's full series for that component.
-3. Amend or add commits in that tree.
-4. Regenerate the series. For U-Boot: `git format-patch --zero-commit -N <base>..`.
-5. Copy each regenerated patch over the layer file **keeping the existing file name**, since `SRC_URI` refers to it.
-6. Diff the other regenerated patches against the layer copies to confirm nothing else changed.
+**Never hand-edit a `.patch` file.** Hand edits leave stale metadata behind, such as wrong index hashes, and cause surprises at apply time.
 
-Every patch needs an `Upstream-Status:` line before `Signed-off-by:`, or `do_patch` fails QA. Put it in the commit message in your tree, so regenerating keeps it.
+These rules apply whichever workflow you use:
+
+- Every patch needs an `Upstream-Status:` line before `Signed-off-by:`, or `do_patch` fails QA. Put it in the commit message, so regenerating keeps it.
+- Keep each existing patch's file name, because `SRC_URI` refers to it.
+- A new patch gets the next free number in its series and goes at the end of `SRC_URI`.
+- Commit only the patches whose content actually changed.
+
+| Recipe | Repo (`github.com/nxp-qoriq/`) | SRCREV | Patches |
+|---|---|---|---|
+| `u-boot` | `u-boot` | `NXP_LF_SRCREV_UBOOT` | `recipes-bsp/u-boot/files/` |
+| `atf` | `atf` | `NXP_LF_SRCREV_ATF` | `recipes-bsp/atf/files/` |
+| `rcw` | `rcw` | `NXP_LF_SRCREV_RCW` | `recipes-bsp/rcw/files/` |
+| `optee-os` | `optee_os` | `NXP_LF_SRCREV_OPTEE` | `recipes-security/optee/files/` |
+| `linux-mono` | `linux` | `NXP_LF_SRCREV_LINUX` | `recipes-kernel/linux/files/` |
+
+### Option A: plain git
+
+This works for every recipe. These steps use U-Boot as the example; change the variables for the other recipes.
+
+1. Check out the pinned commit and apply the layer's series:
+
+   ```
+   LAYER=/path/to/meta-mono
+   SRCREV=$(sed -n 's/^NXP_LF_SRCREV_UBOOT *= *"\(.*\)"/\1/p' $LAYER/conf/include/nxp-base.inc)
+   git clone https://github.com/nxp-qoriq/u-boot.git && cd u-boot
+   git checkout -b work $SRCREV
+   git am $LAYER/recipes-bsp/u-boot/files/*.patch
+   ```
+
+   `git am` warns about trailing whitespace in some existing patches. Ignore the warnings.
+
+2. Make your change:
+   - to amend an existing patch, `git commit --fixup=<commit>` and then `git rebase -i --autosquash $SRCREV`;
+   - to add a patch, commit on top.
+
+3. Regenerate the series:
+
+   ```
+   git format-patch --zero-commit -N -o ../out $SRCREV..
+   ```
+
+   `--zero-commit` writes `From 0000…` instead of each commit's SHA, so a rebase doesn't touch the patches after the one you edited. `-N` writes `[PATCH]` with no `n/m` numbering.
+
+4. Copy the results back. `format-patch` names files after the full subject, while the layer keeps shorter names, so match them by position:
+
+   ```
+   paste -d' ' <(ls $LAYER/recipes-bsp/u-boot/files/*.patch) <(ls ../out/*.patch) |
+       while read dst src; do cmp -s "$src" "$dst" || cp "$src" "$dst"; done
+   ```
+
+   A new patch is the extra file at the end of `../out`. Copy it in under the next number and add it to `SRC_URI`.
+
+5. Check the result: `git -C $LAYER diff --stat` should list only the patches you meant to change.
+
+Without any change, this round trip gives back byte-identical files for the U-Boot series. If your git version differs, the `-- ` signature line at the end of each patch differs too, which is another reason to copy only the patches whose content changed.
+
+**Kernel patches** are independent backports and fixes rather than one series, so export the one commit you changed with `git format-patch -1 --stdout <commit>`. [backporting.md](backporting.md) walks through a complete example.
+
+### Option B: devtool
+
+`devtool` works under kas for `u-boot`, `atf`, `rcw` and `optee-os`. **Don't use it for `linux-mono`.** `kernel-yocto` applies the patches itself, so devtool can't find the start of the series, and `devtool update-recipe linux-mono` deletes every patch from the recipe. Use option A for the kernel.
+
+```
+kas shell                                   # opens a shell in build/
+devtool modify u-boot                       # tree in workspace/sources/u-boot, one commit per patch
+cd workspace/sources/u-boot
+# ... amend commits (fixup + autosquash, as above) or commit on top ...
+cd -
+devtool update-recipe u-boot                # rewrites the changed patches in place
+devtool reset u-boot                        # atf and rcw need: devtool reset -n <recipe>
+```
+
+While a recipe is in the workspace, `kas build` builds it from `workspace/sources/`. Run `devtool reset` before you build anything you mean to ship. For `atf` and `rcw`, plain `devtool reset` fails because the source tree's `make clean` doesn't work outside the recipe's environment. `-n` skips that step.
+
+`update-recipe` keeps existing file names, but it differs from the layer's conventions in three ways. Clean up before committing:
+
+1. It writes each commit's real SHA into the `From` line, for the patch you edited and every patch after it. Restore the zero SHA:
+
+   ```
+   sed -i '1s/^From [0-9a-f]\{40\} /From 0000000000000000000000000000000000000000 /' \
+       ../recipes-bsp/u-boot/files/*.patch
+   ```
+
+2. It drops the `-- ` signature footer. After the `sed`, any patch whose only remaining change is the missing footer can be restored with `git checkout`.
+3. A new commit becomes `0001-<subject>.patch` at the end of `SRC_URI`. Rename it to the next number in the series and update `SRC_URI` to match.
+
+### Checking that the patches apply
+
+```
+kas shell -c 'bitbake -c patch -f u-boot'
+```
+
+Then build and check the artifact, as described below.
 
 ## Verify the artifact, not just the build
 
